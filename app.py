@@ -143,7 +143,7 @@ def index():
             session['historial'].append({"role": "user", "content": pregunta})
 
             palabras_clave_productos = [
-                "producto", "sostenible", "comprar", "oferta", "precio", "tienen", "quiere", "mostrar",
+                "producto", "sostenible", "comprar", "oferta", "precio", "tienen", "quiero", "mostrar",
                 "muestreme", "alternativa", "necesito", "quiero", "recomiendame", "recomiendeme",
                 "recomendar", "busco", "venden", "opciones"
             ]
@@ -156,8 +156,8 @@ def index():
 
             palabras_clave_emprende = [
                 "emprender", "vender", "vender con ustedes", "colaborar", 
-                "vender productos", "sumarse", "postular", "emprendimiento", 
-                "ofrecer productos", "emprendedores", "quiero sumarme"
+                "vender productos", "sumarse", "postular", "emprendimiento","vendo",
+                "ofrecer productos", "emprendedores", "quiero sumarme" ,"trabajar", "trabajar con ustedes"
             ]
 
             if any(palabra in pregunta.lower() for palabra in palabras_clave_productos):
