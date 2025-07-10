@@ -96,17 +96,28 @@ def index():
         pregunta = request.form['pregunta'].strip()
         if pregunta:
             session['historial'].append({"role": "user", "content": pregunta})
-            palabras_clave = ["producto", "sostenible", "comprar", "oferta", "precio", "tienen", "quiere", "mostrar","muestreme", "alternativa","necesito", "quiero", "recomiendame","recomiendeme", "recomendar", "busco", "venden","quiero", "opciones"]
 
-            if any(palabra in pregunta.lower() for palabra in palabras_clave):
+            palabras_clave_productos = [
+                "producto", "sostenible", "comprar", "oferta", "precio", "tienen", "quiere", "mostrar",
+                "muestreme", "alternativa", "necesito", "quiero", "recomiendame", "recomiendeme",
+                "recomendar", "busco", "venden", "opciones"
+            ]
+
+            palabras_clave_ejecutivo = [
+                "ejecutivo", "humano", "persona", "agente", "alguien", "representante",
+                "necesito ayuda real", "quiero hablar con", "quiero contacto", "quiero atención",
+                "quiero que me llamen", "me llame alguien", "contacto humano", "hablar con alguien"
+            ]
+
+            if any(palabra in pregunta.lower() for palabra in palabras_clave_productos):
                 productos_mostrar = buscar_productos_por_embedding(pregunta)
                 respuesta = "Aquí tienes algunas alternativas que podrían interesarte:"
-         elif any(palabra in pregunta.lower() for palabra in [
-    "ejecutivo", "humano", "persona", "agente", "alguien", "representante", 
-    "necesito ayuda real", "quiero hablar con", "quiero contacto", "quiero atención", 
-    "quiero que me llamen", "me llame alguien", "contacto humano", "hablar con alguien"
-]):
-    respuesta = "¡Por supuesto! Un ejecutivo humano de nuestro equipo puede ayudarte. Por favor, déjanos tu número de teléfono y tu consulta, y te contactaremos pronto."
+
+            elif any(palabra in pregunta.lower() for palabra in palabras_clave_ejecutivo):
+                respuesta = (
+                    "¡Por supuesto! Un ejecutivo humano de nuestro equipo puede ayudarte. "
+                    "Por favor, déjanos tu número de teléfono y tu consulta, y te contactaremos pronto."
+                )
 
             else:
                 mensajes = [
