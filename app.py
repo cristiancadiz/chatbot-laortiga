@@ -12,7 +12,7 @@ app.secret_key = "clave-super-secreta"
 # --- CONFIGURACIÓN API ---
 JUMPSELLER_LOGIN = "0f2a0a0976af739c8618cfb5e1680dda"
 JUMPSELLER_AUTHTOKEN = "f837ba232aa21630109b290370c5ada7ca19025010331b2c59"
-client = OpenAI()  # Cliente de la nueva API
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 TIENDA_URL = "https://laortiga.cl"
 
 # --- FUNCIONES UTILES ---
