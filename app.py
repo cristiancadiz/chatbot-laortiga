@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, session
+from flask import Flask, render_template_string, request, session, send_from_directory
 import requests
 import re
 import numpy as np
@@ -14,7 +14,7 @@ JUMPSELLER_LOGIN = "0f2a0a0976af739c8618cfb5e1680dda"
 JUMPSELLER_AUTHTOKEN = "f837ba232aa21630109b290370c5ada7ca19025010331b2c59"
 TIENDA_URL = "https://laortiga.cl"
 
-# --- CLIENTE OPENAI NUEVO (>=1.0.0) ---
+# --- CLIENTE OPENAI NUEVO ---
 client = openai.OpenAI()
 
 # --- TEXTO DE EMPRENDE ---
@@ -125,6 +125,7 @@ def guardar_historial_en_archivo(historial):
             rol = "Tú" if m['role'] == 'user' else "Bot"
             f.write(f"{rol}: {m['content']}\n\n")
 
+# --- CHAT PRINCIPAL ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if 'historial' not in session:
@@ -144,7 +145,7 @@ def index():
 
             palabras_clave_productos = [
                 "producto", "sostenible", "comprar", "oferta", "precio", "tienen", "quiero", "mostrar",
-                "muestreme", "alternativa", "necesito", "necesito", "recomiendame", "recomiendeme",
+                "muestreme", "alternativa", "necesito", "recomiendame", "recomiendeme",
                 "recomendar", "busco", "venden", "opciones"
             ]
 
@@ -156,8 +157,8 @@ def index():
 
             palabras_clave_emprende = [
                 "emprender", "vender", "vender con ustedes", "colaborar", 
-                "vender productos", "sumarse", "postular", "emprendimiento","vendo",
-                "ofrecer productos", "emprendedores", "quiero sumarme" ,"trabajar", "trabajar con ustedes"
+                "vender productos", "sumarse", "postular", "emprendimiento", "vendo",
+                "ofrecer productos", "emprendedores", "quiero sumarme", "trabajar", "trabajar con ustedes"
             ]
 
             if any(palabra in pregunta.lower() for palabra in palabras_clave_productos):
@@ -201,6 +202,21 @@ def index():
             guardar_historial_en_archivo(session['historial'])
 
     return render_template_string(TEMPLATE, respuesta=respuesta, productos=productos_mostrar, historial=session.get('historial', []))
+
+# --- RUTA EXTRA: Ver conversaciones guardadas ---
+@app.route('/conversaciones')
+def listar_conversaciones():
+    carpeta = "conversaciones_guardadas"
+    if not os.path.exists(carpeta):
+        return "No hay conversaciones guardadas aún."
+    
+    archivos = sorted(os.listdir(carpeta))
+    enlaces = [f'<li><a href="/conversaciones/{nombre}">{nombre}</a></li>' for nombre in archivos]
+    return f"<h2>Conversaciones guardadas</h2><ul>{''.join(enlaces)}</ul>"
+
+@app.route('/conversaciones/<nombre>')
+def ver_conversacion(nombre):
+    return send_from_directory("conversaciones_guardadas", nombre)
 
 # --- HTML embebido ---
 TEMPLATE = '''
