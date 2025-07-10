@@ -101,8 +101,13 @@ def index():
             if any(palabra in pregunta.lower() for palabra in palabras_clave):
                 productos_mostrar = buscar_productos_por_embedding(pregunta)
                 respuesta = "Aquí tienes algunas alternativas que podrían interesarte:"
-            elif "ejecutivo" in pregunta.lower() or "contacto" in pregunta.lower():
-                respuesta = "Para poder ayudarte mejor, por favor déjanos tu número de teléfono y tu consulta."
+         elif any(palabra in pregunta.lower() for palabra in [
+    "ejecutivo", "humano", "persona", "agente", "alguien", "representante", 
+    "necesito ayuda real", "quiero hablar con", "quiero contacto", "quiero atención", 
+    "quiero que me llamen", "me llame alguien", "contacto humano", "hablar con alguien"
+]):
+    respuesta = "¡Por supuesto! Un ejecutivo humano de nuestro equipo puede ayudarte. Por favor, déjanos tu número de teléfono y tu consulta, y te contactaremos pronto."
+
             else:
                 mensajes = [
                     {"role": "system", "content": (
