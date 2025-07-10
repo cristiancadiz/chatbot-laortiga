@@ -144,7 +144,7 @@ def index():
 
             palabras_clave_productos = [
                 "producto", "sostenible", "comprar", "oferta", "precio", "tienen", "quiero", "mostrar",
-                "muestreme", "alternativa", "necesito", "quiero", "recomiendame", "recomiendeme",
+                "muestreme", "alternativa", "necesito", "necesito", "recomiendame", "recomiendeme",
                 "recomendar", "busco", "venden", "opciones"
             ]
 
