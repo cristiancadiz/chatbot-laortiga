@@ -128,9 +128,167 @@ def index():
 
 # --- HTML embebido ---
 TEMPLATE = '''
-<!-- HTML completo igual que antes -->
-'''
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Chatbot La Ortiga</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { margin: 0; font-family: 'Segoe UI', sans-serif; background: #f0f0f0; }
+        #chat-container {
+            position: fixed;
+            bottom: 80px;
+            right: 20px;
+            width: 360px;
+            height: 520px;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            z-index: 9999;
+        }
+        #chat-header {
+            background: #4CAF50;
+            color: white;
+            padding: 14px;
+            font-size: 18px;
+            font-weight: bold;
+            text-align: center;
+        }
+        #chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+            background: #f9f9f9;
+        }
+        .msg {
+            margin: 10px 0;
+            padding: 10px 14px;
+            border-radius: 18px;
+            max-width: 80%;
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+        .msg.user { background: #dcf8c6; align-self: flex-end; }
+        .msg.bot { background: #eee; align-self: flex-start; }
+        #chat-input-form {
+            display: flex;
+            border-top: 1px solid #ddd;
+            background: #fff;
+        }
+        #chat-input {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            outline: none;
+            font-size: 14px;
+        }
+        #chat-send {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 0 16px;
+            font-weight: bold;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        .producto {
+            display: flex;
+            margin: 8px 0;
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .producto img {
+            width: 80px;
+            height: 80px;
+            object-fit: cover;
+        }
+        .producto-info {
+            padding: 8px;
+            font-size: 13px;
+        }
+        .producto-info h4 {
+            margin: 0 0 5px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .producto-info a {
+            color: #4CAF50;
+            text-decoration: none;
+            font-size: 12px;
+        }
+        #chat-toggle-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: #4CAF50;
+            color: white;
+            font-size: 28px;
+            border: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            cursor: pointer;
+            z-index: 10000;
+        }
+    </style>
+</head>
+<body>
+    <button id="chat-toggle-btn">💬</button>
+    <div id="chat-container" style="display:none;">
+        <div id="chat-header">Asistente La Ortiga</div>
+        <div id="chat-messages">
+            {% for m in historial %}
+                <div class="msg {% if m.role == 'user' %}user{% else %}bot{% endif %}">{{ m.content | safe }}</div>
+            {% endfor %}
+            {% for p in productos %}
+                <div class="producto">
+                    <img src="{{ p.imagen }}" alt="{{ p.nombre }}">
+                    <div class="producto-info">
+                        <h4>{{ p.nombre }}</h4>
+                        <p>${{ '{:,.0f}'.format(p.precio|float).replace(',', '.') }}</p>
+                        <a href="{{ p.url }}" target="_blank">Ver producto 🔗</a>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+        <form id="chat-input-form" method="POST">
+            <input type="text" id="chat-input" name="pregunta" placeholder="Escribe tu pregunta..." autocomplete="off" required />
+            <button id="chat-send">Enviar</button>
+        </form>
+    </div>
 
+    <script>
+        const toggleBtn = document.getElementById('chat-toggle-btn');
+        const chatBox = document.getElementById('chat-container');
+        const chatMessages = document.getElementById('chat-messages');
+        const input = document.getElementById('chat-input');
+
+        toggleBtn.onclick = () => {
+            chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
+            scrollToBottom();
+            input.focus();
+        };
+
+        function scrollToBottom() {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        window.onload = () => {
+            chatBox.style.display = 'flex';
+            scrollToBottom();
+            input.focus();
+        };
+    </script>
+</body>
+</html>
+'''
 if __name__ == '__main__':
     from os import environ
     app.run(host='0.0.0.0', port=int(environ.get('PORT', 5000)))
