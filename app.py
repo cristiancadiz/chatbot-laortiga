@@ -4,7 +4,7 @@ import re
 import numpy as np
 import os
 from datetime import datetime
-from openai import OpenAI
+import openai
 
 app = Flask(__name__)
 app.secret_key = "clave-super-secreta"
@@ -12,8 +12,51 @@ app.secret_key = "clave-super-secreta"
 # --- CONFIGURACIÓN API ---
 JUMPSELLER_LOGIN = "0f2a0a0976af739c8618cfb5e1680dda"
 JUMPSELLER_AUTHTOKEN = "f837ba232aa21630109b290370c5ada7ca19025010331b2c59"
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai.api_key = os.getenv("OPENAI_API_KEY")
 TIENDA_URL = "https://laortiga.cl"
+
+# --- TEXTO DE EMPRENDE ---
+EMPRENDE_INFO = """
+🌱 ¡Súmate al Buscador Verde de Chile!
+
+¿Tienes un emprendimiento con impacto ambiental? En LaOrtiga.cl conectamos a emprendedores como tú con personas que buscan alternativas conscientes y sostenibles en todo Chile.
+
+Puedes mostrar lo que haces, vender sin intermediarios o distribuir tus productos a nivel nacional, según el plan que elijas:
+
+🪴 Plan Promociona — $4.990 mensual  
+✅ Aparece en el Buscador Verde y en Google.  
+✅ Enlace a tus redes o contacto directo.  
+
+🛍️ Plan Comercializa — $14.990 mensual  
+✅ Publicación de productos y servicios.  
+✅ Difusión en buscadores, redes sociales y Google Shopping.  
+✅ Comisión por venta: 10%.  
+
+🚚 Plan Distribuye — $39.990 mensual  
+✅ Almacenamiento en nuestra bodega.  
+✅ Despachos diarios desde LaOrtiga.cl.  
+✅ Mayor visibilidad.  
+✅ Comisión por venta: 30%.  
+
+🎯 Requisitos:  
+- Emprendimientos chilenos (formalizados o no).  
+- Productos o servicios con impacto ambiental positivo.  
+- Disposición a promover la economía circular.  
+
+📢 Buscamos emprendimientos de:  
+- Reparación (ropa, muebles, electrónicos).  
+- Reciclaje y gestión de residuos.  
+- Cosmética natural, textiles reutilizados, higiene sin plástico.  
+- Servicios para empresas conscientes.  
+
+📍 ¿Qué obtienes?  
+✅ Visibilidad en Google y redes sociales.  
+✅ Acompañamiento y capacitación.  
+✅ Participación en campañas.  
+✅ Red colaborativa de emprendedores verdes.
+
+📬 Postula en: https://laortiga.cl/emprende o escribe a emprende@laortiga.cl
+"""
 
 # --- FUNCIONES UTILES ---
 def limpiar_html(texto):
@@ -41,7 +84,7 @@ def cargar_productos_con_embeddings():
             permalink = prod.get("permalink")
             descripcion = limpiar_html(prod.get("description"))
             imagen = prod.get("main_image", {}).get("url", "") or (prod.get("images", [{}])[0].get("url", "") if prod.get("images") else "")
-            embedding = client.embeddings.create(
+            embedding = openai.Embedding.create(
                 model="text-embedding-ada-002",
                 input=descripcion
             ).data[0].embedding
@@ -64,7 +107,7 @@ TODOS_LOS_PRODUCTOS = cargar_productos_con_embeddings()
 print("✅ Productos cargados:", len(TODOS_LOS_PRODUCTOS))
 
 def buscar_productos_por_embedding(pregunta, top_n=3):
-    embedding_pregunta = client.embeddings.create(
+    embedding_pregunta = openai.Embedding.create(
         model="text-embedding-ada-002",
         input=pregunta
     ).data[0].embedding
@@ -109,6 +152,12 @@ def index():
                 "quiero que me llamen", "me llame alguien", "contacto humano", "hablar con alguien"
             ]
 
+            palabras_clave_emprende = [
+                "emprender", "vender", "vender con ustedes", "colaborar", 
+                "vender productos", "sumarse", "postular", "emprendimiento", 
+                "ofrecer productos", "emprendedores", "quiero sumarme"
+            ]
+
             if any(palabra in pregunta.lower() for palabra in palabras_clave_productos):
                 productos_mostrar = buscar_productos_por_embedding(pregunta)
                 respuesta = "Aquí tienes algunas alternativas que podrían interesarte:"
@@ -119,17 +168,26 @@ def index():
                     "Por favor, déjanos tu número de teléfono y tu consulta, y te contactaremos pronto."
                 )
 
+            elif any(palabra in pregunta.lower() for palabra in palabras_clave_emprende):
+                respuesta = (
+                    f"¡Qué buena noticia que quieras emprender con nosotros! 🙌<br><br>"
+                    f"{EMPRENDE_INFO.strip().replace('\n', '<br>')}<br><br>"
+                    f'<a href="https://laortiga.cl/emprende" target="_blank" '
+                    f'style="display:inline-block;margin-top:10px;padding:8px 12px;'
+                    f'background:#4CAF50;color:white;text-decoration:none;border-radius:8px;">'
+                    f'👉 Ir a la página para emprender</a>'
+                )
+
             else:
                 mensajes = [
                     {"role": "system", "content": (
                         "Eres un asistente para una tienda ecológica online chilena llamada La Ortiga. "
                         "Tu único objetivo es ayudar a los usuarios con información sobre productos sostenibles, ecológicos, orgánicos y naturales. "
-                        "No respondas preguntas que no estén relacionadas con compras, productos, precios o temas de la tienda. "
-                        "Si el usuario pregunta algo fuera de ese contexto, responde amablemente que solo puedes ayudar con temas de productos ecológicos y sostenibles."
+                        "No respondas preguntas que no estén relacionadas con compras, productos, precios o temas de la tienda."
                     )}
                 ] + [{"role": m["role"], "content": m["content"]} for m in session['historial'][-10:]]
 
-                completion = client.chat.completions.create(
+                completion = openai.ChatCompletion.create(
                     model="gpt-3.5-turbo",
                     messages=mensajes,
                     max_tokens=150,
@@ -141,6 +199,7 @@ def index():
             guardar_historial_en_archivo(session['historial'])
 
     return render_template_string(TEMPLATE, respuesta=respuesta, productos=productos_mostrar, historial=session.get('historial', []))
+
 
 # --- HTML embebido ---
 TEMPLATE = '''
