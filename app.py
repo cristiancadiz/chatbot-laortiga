@@ -12,8 +12,10 @@ app.secret_key = "clave-super-secreta"
 # --- CONFIGURACIÓN API ---
 JUMPSELLER_LOGIN = "0f2a0a0976af739c8618cfb5e1680dda"
 JUMPSELLER_AUTHTOKEN = "f837ba232aa21630109b290370c5ada7ca19025010331b2c59"
-openai.api_key = os.getenv("OPENAI_API_KEY")
 TIENDA_URL = "https://laortiga.cl"
+
+# --- CLIENTE OPENAI NUEVO (>=1.0.0) ---
+client = openai.OpenAI()
 
 # --- TEXTO DE EMPRENDE ---
 EMPRENDE_INFO = """
@@ -84,7 +86,7 @@ def cargar_productos_con_embeddings():
             permalink = prod.get("permalink")
             descripcion = limpiar_html(prod.get("description"))
             imagen = prod.get("main_image", {}).get("url", "") or (prod.get("images", [{}])[0].get("url", "") if prod.get("images") else "")
-            embedding = openai.Embedding.create(
+            embedding = client.embeddings.create(
                 model="text-embedding-ada-002",
                 input=descripcion
             ).data[0].embedding
@@ -107,7 +109,7 @@ TODOS_LOS_PRODUCTOS = cargar_productos_con_embeddings()
 print("✅ Productos cargados:", len(TODOS_LOS_PRODUCTOS))
 
 def buscar_productos_por_embedding(pregunta, top_n=3):
-    embedding_pregunta = openai.Embedding.create(
+    embedding_pregunta = client.embeddings.create(
         model="text-embedding-ada-002",
         input=pregunta
     ).data[0].embedding
@@ -187,7 +189,7 @@ def index():
                     )}
                 ] + [{"role": m["role"], "content": m["content"]} for m in session['historial'][-10:]]
 
-                completion = openai.ChatCompletion.create(
+                completion = client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=mensajes,
                     max_tokens=150,
@@ -199,7 +201,6 @@ def index():
             guardar_historial_en_archivo(session['historial'])
 
     return render_template_string(TEMPLATE, respuesta=respuesta, productos=productos_mostrar, historial=session.get('historial', []))
-
 
 # --- HTML embebido ---
 TEMPLATE = '''
