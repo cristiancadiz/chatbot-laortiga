@@ -325,7 +325,7 @@ TEMPLATE = '''
         <div id="chat-header">
             <img src="https://cdn-icons-png.flaticon.com/512/194/194938.png" alt="Asistente">
             <div>
-                <div class="name">Capitán Ortiga</div>
+                <div class="name">Capitán Planeta</div>
                 <small style="font-size:12px;">Disponible ahora</small>
             </div>
         </div>
