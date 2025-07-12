@@ -163,81 +163,172 @@ def ver_conversacion(nombre):
     return send_from_directory("conversaciones_guardadas", nombre)
 
 # --- HTML TEMPLATE EMBEBIDO ---
-TEMPLATE = '''<!DOCTYPE html>
+TEMPLATE = '''
+<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Chatbot La Ortiga</title>
+    <title>Asistente La Ortiga</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <style>
-        body { margin: 0; font-family: 'Segoe UI', sans-serif; background: #f0f0f0; }
+        body {
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+            background: #f3f4f6;
+        }
+
         #chat-container {
-            position: fixed; bottom: 90px; right: 20px;
-            width: 360px; height: 520px; background: #fff;
-            border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-            display: flex; flex-direction: column; overflow: hidden;
+            position: fixed;
+            bottom: 90px;
+            right: 20px;
+            width: 370px;
+            height: 540px;
+            background: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            z-index: 9999;
         }
+
         #chat-header {
-            background: #4CAF50; color: white;
-            padding: 14px; font-size: 17px; font-weight: bold;
-            text-align: center;
+            display: flex;
+            align-items: center;
+            background: #4CAF50;
+            padding: 16px;
+            color: white;
         }
+
+        #chat-header img {
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            margin-right: 12px;
+            border: 2px solid white;
+        }
+
+        #chat-header .name {
+            font-weight: bold;
+            font-size: 16px;
+        }
+
         #chat-messages {
-            flex: 1; overflow-y: auto; padding: 10px;
-            background: #fefefe;
+            flex: 1;
+            padding: 14px;
+            overflow-y: auto;
+            background: #f9fafb;
         }
+
         .msg {
-            margin: 8px 0; padding: 10px 14px;
-            border-radius: 18px; max-width: 85%;
-            font-size: 14px; line-height: 1.5;
+            padding: 12px 16px;
+            margin: 8px 0;
+            max-width: 80%;
+            border-radius: 20px;
+            font-size: 14px;
+            line-height: 1.4;
+            word-break: break-word;
         }
-        .msg.user { background: #DCF8C6; align-self: flex-end; }
-        .msg.bot { background: #F1F0F0; align-self: flex-start; }
-        #chat-input-form {
-            display: flex; padding: 8px; border-top: 1px solid #ddd;
+
+        .msg.user {
+            align-self: flex-end;
+            background-color: #DCF8C6;
+            border-bottom-right-radius: 4px;
         }
-        #chat-input {
-            flex: 1; padding: 10px; border: 1px solid #ccc;
-            border-radius: 8px; font-size: 14px;
+
+        .msg.bot {
+            align-self: flex-start;
+            background-color: #ffffff;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.05);
         }
-        #chat-send {
-            background: #4CAF50; color: white;
-            border: none; padding: 0 14px;
-            font-weight: bold; font-size: 16px;
-            cursor: pointer; border-radius: 8px;
-            margin-left: 8px;
-        }
+
         .producto {
-            display: flex; background: white;
-            border-radius: 10px; margin: 10px 0;
-            box-shadow: 0 1px 5px rgba(0,0,0,0.1);
+            display: flex;
+            margin: 12px 0;
+            background: #fff;
+            border-radius: 14px;
+            overflow: hidden;
+            box-shadow: 0 1px 5px rgba(0,0,0,0.08);
         }
+
         .producto img {
-            width: 80px; height: 80px; object-fit: cover;
+            width: 80px;
+            height: 80px;
+            object-fit: cover;
         }
+
         .producto-info {
-            padding: 8px; font-size: 13px;
+            padding: 10px;
+            font-size: 13px;
         }
+
         .producto-info h4 {
-            margin: 0 0 5px; font-size: 14px;
+            margin: 0 0 4px;
+            font-size: 14px;
+            font-weight: bold;
         }
+
         .producto-info a {
-            color: #4CAF50; text-decoration: none; font-size: 13px;
+            color: #4CAF50;
+            font-size: 12px;
+            text-decoration: none;
         }
+
+        #chat-input-form {
+            display: flex;
+            padding: 12px;
+            border-top: 1px solid #e0e0e0;
+            background: #fff;
+        }
+
+        #chat-input {
+            flex: 1;
+            padding: 10px 14px;
+            border-radius: 12px;
+            border: 1px solid #ccc;
+            font-size: 14px;
+        }
+
+        #chat-send {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 0 16px;
+            margin-left: 10px;
+            font-size: 18px;
+            border-radius: 12px;
+            cursor: pointer;
+        }
+
         #chat-toggle-btn {
-            position: fixed; bottom: 20px; right: 20px;
-            width: 60px; height: 60px; border-radius: 50%;
-            background: #4CAF50; color: white;
-            font-size: 28px; border: none;
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: #4CAF50;
+            color: white;
+            font-size: 28px;
+            border: none;
             box-shadow: 0 4px 12px rgba(0,0,0,0.3);
             cursor: pointer;
+            z-index: 10000;
         }
     </style>
 </head>
 <body>
     <button id="chat-toggle-btn">💬</button>
     <div id="chat-container" style="display:none;">
-        <div id="chat-header">Asistente La Ortiga</div>
+        <div id="chat-header">
+            <img src="https://cdn-icons-png.flaticon.com/512/194/194938.png" alt="Asistente">
+            <div>
+                <div class="name">Capitán Ortiga</div>
+                <small style="font-size:12px;">Disponible ahora</small>
+            </div>
+        </div>
         <div id="chat-messages">
             {% for m in historial %}
                 <div class="msg {% if m.role == 'user' %}user{% else %}bot{% endif %}">{{ m.content | safe }}</div>
@@ -254,8 +345,8 @@ TEMPLATE = '''<!DOCTYPE html>
             {% endfor %}
         </div>
         <form id="chat-input-form" method="POST">
-            <input type="text" id="chat-input" name="pregunta" placeholder="Escribe aquí tu mensaje..." autocomplete="off" required />
-            <button id="chat-send">Enviar</button>
+            <input type="text" id="chat-input" name="pregunta" placeholder="Escribe tu mensaje..." autocomplete="off" required />
+            <button id="chat-send">➤</button>
         </form>
     </div>
     <script>
@@ -263,13 +354,16 @@ TEMPLATE = '''<!DOCTYPE html>
         const chatBox = document.getElementById('chat-container');
         const chatMessages = document.getElementById('chat-messages');
         const input = document.getElementById('chat-input');
+
         toggleBtn.onclick = () => {
             chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
             scrollToBottom(); input.focus();
         };
+
         function scrollToBottom() {
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
+
         window.onload = () => {
             chatBox.style.display = 'flex';
             scrollToBottom();
