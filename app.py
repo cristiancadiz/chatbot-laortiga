@@ -3,11 +3,12 @@ import requests
 import re
 import numpy as np
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import openai
 
 app = Flask(__name__)
 app.secret_key = "clave-super-secreta"
+app.permanent_session_lifetime = timedelta(days=30)  # Sesiones persistentes por 30 días
 
 # --- CONFIGURACIÓN API ----
 JUMPSELLER_LOGIN = "0f2a0a0976af739c8618cfb5e1680dda"
@@ -18,47 +19,7 @@ TIENDA_URL = "https://laortiga.cl"
 client = openai.OpenAI()
 
 # --- TEXTO DE EMPRENDE ---
-EMPRENDE_INFO = """
-🌱 ¡Súmate al Buscador Verde de Chile!
-
-¿Tienes un emprendimiento con impacto ambiental? En LaOrtiga.cl conectamos a emprendedores como tú con personas que buscan alternativas conscientes y sostenibles en todo Chile.
-
-Puedes mostrar lo que haces, vender sin intermediarios o distribuir tus productos a nivel nacional, según el plan que elijas:
-
-🪴 Plan Promociona — $4.990 mensual  
-✅ Aparece en el Buscador Verde y en Google.  
-✅ Enlace a tus redes o contacto directo.  
-
-🛍️ Plan Comercializa — $14.990 mensual  
-✅ Publicación de productos y servicios.  
-✅ Difusión en buscadores, redes sociales y Google Shopping.  
-✅ Comisión por venta: 10%.  
-
-🚚 Plan Distribuye — $39.990 mensual  
-✅ Almacenamiento en nuestra bodega.  
-✅ Despachos diarios desde LaOrtiga.cl.  
-✅ Mayor visibilidad.  
-✅ Comisión por venta: 30%.  
-
-🎯 Requisitos:  
-- Emprendimientos chilenos (formalizados o no).  
-- Productos o servicios con impacto ambiental positivo.  
-- Disposición a promover la economía circular.  
-
-📢 Buscamos emprendimientos de:  
-- Reparación (ropa, muebles, electrónicos).  
-- Reciclaje y gestión de residuos.  
-- Cosmética natural, textiles reutilizados, higiene sin plástico.  
-- Servicios para empresas conscientes.  
-
-📍 ¿Qué obtienes?  
-✅ Visibilidad en Google y redes sociales.  
-✅ Acompañamiento y capacitación.  
-✅ Participación en campañas.  
-✅ Red colaborativa de emprendedores verdes.
-
-📬 Postula en: https://laortiga.cl/emprende o escribe a emprende@laortiga.cl
-"""
+EMPRENDE_INFO = """... (sin cambios) ..."""
 
 # --- FUNCIONES UTILES ---
 def limpiar_html(texto):
@@ -73,8 +34,13 @@ def cargar_productos_con_embeddings():
     page = 1
     while True:
         url = f"https://api.jumpseller.com/v1/products.json?login={JUMPSELLER_LOGIN}&authtoken={JUMPSELLER_AUTHTOKEN}&page={page}&per_page=50"
-        resp = requests.get(url)
-        data = resp.json()
+        try:
+            resp = requests.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            print(f"❌ Error al cargar productos: {e}")
+            break
         if not data:
             break
         for item in data:
@@ -128,12 +94,13 @@ def guardar_historial_en_archivo(historial):
 # --- CHAT PRINCIPAL ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    session.permanent = True
+
     if 'historial' not in session:
         session['historial'] = [{
             "role": "assistant",
             "content": "¡Hola! 👋 Bienvenido a LaOrtiga.cl, la vitrina verde de Chile 🌱. ¿En qué puedo ayudarte hoy?"
         }]
-        guardar_historial_en_archivo(session['historial'])
 
     productos_mostrar = []
     respuesta = ""
@@ -143,52 +110,24 @@ def index():
         if pregunta:
             session['historial'].append({"role": "user", "content": pregunta})
 
-            palabras_clave_productos = [
-                "producto", "sostenible", "comprar", "oferta", "precio", "tienen", "quiero", "mostrar",
-                "muestreme", "alternativa", "necesito", "recomiendame", "recomiendeme",
-                "recomendar", "busco", "venden", "opciones"
-            ]
-
-            palabras_clave_ejecutivo = [
-                "ejecutivo", "humano", "persona", "agente", "alguien", "representante",
-                "necesito ayuda real", "quiero hablar con", "quiero contacto", "quiero atención",
-                "quiero que me llamen", "me llame alguien", "contacto humano", "hablar con alguien"
-            ]
-
-            palabras_clave_emprende = [
-                "emprender", "vender", "vender con ustedes", "colaborar",
-                "vender productos", "sumarse", "postular", "emprendimiento", "vendo",
-                "ofrecer productos", "emprendedores", "quiero sumarme", "trabajar", "trabajar con ustedes"
-            ]
+            palabras_clave_productos = [ ... ]
+            palabras_clave_ejecutivo = [ ... ]
+            palabras_clave_emprende = [ ... ]
 
             if any(palabra in pregunta.lower() for palabra in palabras_clave_productos):
                 productos_mostrar = buscar_productos_por_embedding(pregunta)
                 respuesta = "Aquí tienes algunas alternativas que podrían interesarte:"
 
             elif any(palabra in pregunta.lower() for palabra in palabras_clave_ejecutivo):
-                respuesta = (
-                    "¡Por supuesto! Un ejecutivo humano de nuestro equipo puede ayudarte. "
-                    "Por favor, déjanos tu número de teléfono y tu consulta, y te contactaremos pronto."
-                )
+                respuesta = "¡Por supuesto!... (respuesta ejecutivo)..."
 
             elif any(palabra in pregunta.lower() for palabra in palabras_clave_emprende):
-                respuesta = (
-                    f"¡Qué buena noticia que quieras emprender con nosotros! 🙌<br><br>"
-                    f"{EMPRENDE_INFO.strip().replace('\n', '<br>')}<br><br>"
-                    f'<a href="https://laortiga.cl/emprende" target="_blank" '
-                    f'style="display:inline-block;margin-top:10px;padding:8px 12px;'
-                    f'background:#4CAF50;color:white;text-decoration:none;border-radius:8px;">'
-                    f'👉 Ir a la página para emprender</a>'
-                )
+                respuesta = f"...(respuesta emprende con HTML)..."
 
             else:
                 mensajes = [
-                    {"role": "system", "content": (
-                        "Eres un asistente para una tienda ecológica online chilena llamada La Ortiga. "
-                        "Tu único objetivo es ayudar a los usuarios con información sobre productos sostenibles, ecológicos, orgánicos y naturales. "
-                        "No respondas preguntas que no estén relacionadas con compras, productos, precios o temas de la tienda."
-                    )}
-                ] + [{"role": m["role"], "content": m["content"]} for m in session['historial'][-10:]]
+                    {"role": "system", "content": "...(instrucciones del sistema)..."}
+                ] + session['historial'][-10:]
 
                 completion = client.chat.completions.create(
                     model="gpt-3.5-turbo",
@@ -198,18 +137,17 @@ def index():
                 )
                 respuesta = completion.choices[0].message.content.strip()
 
-            session['historial'].append({"role": "assistant", "content": respuesta})
-            guardar_historial_en_archivo(session['historial'])
+            if respuesta:
+                session['historial'].append({"role": "assistant", "content": respuesta})
+                guardar_historial_en_archivo(session['historial'])
 
     return render_template_string(TEMPLATE, respuesta=respuesta, productos=productos_mostrar, historial=session.get('historial', []))
 
-# --- RUTA EXTRA: Ver conversaciones guardadas ---
 @app.route('/conversaciones')
 def listar_conversaciones():
     carpeta = "conversaciones_guardadas"
     if not os.path.exists(carpeta):
         return "No hay conversaciones guardadas aún."
-   
     archivos = sorted(os.listdir(carpeta))
     enlaces = [f'<li><a href="/conversaciones/{nombre}">{nombre}</a></li>' for nombre in archivos]
     return f"<h2>Conversaciones guardadas</h2><ul>{''.join(enlaces)}</ul>"
@@ -218,169 +156,9 @@ def listar_conversaciones():
 def ver_conversacion(nombre):
     return send_from_directory("conversaciones_guardadas", nombre)
 
-# --- HTML embebido ---
-TEMPLATE = '''
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <title>Chatbot La Ortiga</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body { margin: 0; font-family: 'Segoe UI', sans-serif; background: #f0f0f0; }
-        #chat-container {
-            position: fixed;
-            bottom: 80px;
-            right: 20px;
-            width: 360px;
-            height: 520px;
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            z-index: 9999;
-        }
-        #chat-header {
-            background: #4CAF50;
-            color: white;
-            padding: 14px;
-            font-size: 18px;
-            font-weight: bold;
-            text-align: center;
-        }
-        #chat-messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 10px;
-            background: #f9f9f9;
-        }
-        .msg {
-            margin: 10px 0;
-            padding: 10px 14px;
-            border-radius: 18px;
-            max-width: 80%;
-            line-height: 1.4;
-            word-wrap: break-word;
-        }
-        .msg.user { background: #dcf8c6; align-self: flex-end; }
-        .msg.bot { background: #eee; align-self: flex-start; }
-        #chat-input-form {
-            display: flex;
-            border-top: 1px solid #ddd;
-            background: #fff;
-        }
-        #chat-input {
-            flex: 1;
-            padding: 12px;
-            border: none;
-            outline: none;
-            font-size: 14px;
-        }
-        #chat-send {
-            background: #4CAF50;
-            color: white;
-            border: none;
-            padding: 0 16px;
-            font-weight: bold;
-            font-size: 16px;
-            cursor: pointer;
-        }
-        .producto {
-            display: flex;
-            margin: 8px 0;
-            background: #fff;
-            border-radius: 10px;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-        .producto img {
-            width: 80px;
-            height: 80px;
-            object-fit: cover;
-        }
-        .producto-info {
-            padding: 8px;
-            font-size: 13px;
-        }
-        .producto-info h4 {
-            margin: 0 0 5px;
-            font-size: 14px;
-            font-weight: bold;
-        }
-        .producto-info a {
-            color: #4CAF50;
-            text-decoration: none;
-            font-size: 12px;
-        }
-        #chat-toggle-btn {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 60px;
-            height: 60px;
-            border-radius: 50%;
-            background: #4CAF50;
-            color: white;
-            font-size: 28px;
-            border: none;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            cursor: pointer;
-            z-index: 10000;
-        }
-    </style>
-</head>
-<body>
-    <button id="chat-toggle-btn">💬</button>
-    <div id="chat-container" style="display:none;">
-        <div id="chat-header">Asistente La Ortiga</div>
-        <div id="chat-messages">
-            {% for m in historial %}
-                <div class="msg {% if m.role == 'user' %}user{% else %}bot{% endif %}">{{ m.content | safe }}</div>
-            {% endfor %}
-            {% for p in productos %}
-                <div class="producto">
-                    <img src="{{ p.imagen }}" alt="{{ p.nombre }}">
-                    <div class="producto-info">
-                        <h4>{{ p.nombre }}</h4>
-                        <p>${{ '{:,.0f}'.format(p.precio|float).replace(',', '.') }}</p>
-                        <a href="{{ p.url }}" target="_blank">Ver producto 🔗</a>
-                    </div>
-                </div>
-            {% endfor %}
-        </div>
-        <form id="chat-input-form" method="POST">
-            <input type="text" id="chat-input" name="pregunta" placeholder="Escribe tu pregunta..." autocomplete="off" required />
-            <button id="chat-send">Enviar</button>
-        </form>
-    </div>
+# --- TEMPLATE HTML embebido ---
+TEMPLATE = '''...(igual al tuyo)...'''
 
-    <script>
-        const toggleBtn = document.getElementById('chat-toggle-btn');
-        const chatBox = document.getElementById('chat-container');
-        const chatMessages = document.getElementById('chat-messages');
-        const input = document.getElementById('chat-input');
-
-        toggleBtn.onclick = () => {
-            chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
-            scrollToBottom();
-            input.focus();
-        };
-
-        function scrollToBottom() {
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-        }
-
-        window.onload = () => {
-            chatBox.style.display = 'flex';
-            scrollToBottom();
-            input.focus();
-        };
-    </script>
-</body>
-</html>
-'''
 if __name__ == '__main__':
     from os import environ
     app.run(host='0.0.0.0', port=int(environ.get('PORT', 5000)))
