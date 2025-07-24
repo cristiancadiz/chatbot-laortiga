@@ -372,6 +372,31 @@ TEMPLATE = '''
 </body>
 </html>
 '''
+@app.route('/callback')
+def callback():
+    code = request.args.get('code')
+    if not code:
+        return "No se recibió ningún código de autorización."
+
+    client_id = '1119722890766868'         # Cambia aquí por tu Client ID real
+    client_secret = 'TOTaaK3tQAyP3Xj1x63T759D2E9wXIAN' # Cambia aquí por tu Client Secret real
+    redirect_uri = 'https://chatbot-laortiga-9.onrender.com/callback'
+
+    data = {
+        'grant_type': 'authorization_code',
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'code': code,
+        'redirect_uri': redirect_uri
+    }
+
+    response = requests.post("https://api.mercadolibre.com/oauth/token", data=data)
+    if response.status_code == 200:
+        token_info = response.json()
+        # Aquí podrías guardar token_info en base de datos o archivo si quieres
+        return f"Access token recibido:<br><pre>{token_info}</pre>"
+    else:
+        return f"Error al obtener token:<br><pre>{response.text}</pre>"
 
 # --- EJECUCIÓN LOCAL ---
 if __name__ == '__main__':
