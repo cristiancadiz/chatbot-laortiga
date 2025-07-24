@@ -378,7 +378,7 @@ def callback():
     if not code:
         return "No se recibió ningún código de autorización."
 
-    client_id = '1119722890766868'         # Cambia aquí por tu Client ID real
+    client_id = '8079103740430101'         # Cambia aquí por tu Client ID real
     client_secret = 'TOTaaK3tQAyP3Xj1x63T759D2E9wXIAN' # Cambia aquí por tu Client Secret real
     redirect_uri = 'https://chatbot-laortiga-9.onrender.com/callback'
 
