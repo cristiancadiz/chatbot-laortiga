@@ -3,48 +3,54 @@ from flask import Flask, redirect, url_for, session, request, render_template_st
 from google.oauth2 import id_token
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport import requests as grequests
-import google.oauth2.credentials
-import googleapiclient.discovery
-from datetime import timedelta, datetime
+from datetime import timedelta
 import openai
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv()  # Carga variables de entorno .env
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'clave-super-secreta')
 app.permanent_session_lifetime = timedelta(days=30)
 
+# Config OAuth Google
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-openai.api_key = OPENAI_API_KEY
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"  # SOLO para desarrollo HTTP
+
+# Config OpenAI
+openai.api_key = os.getenv('OPENAI_API_KEY')
+client = openai.OpenAI()
 
 REDIRECT_URI = "https://chatbot-laortiga-9.onrender.com/callback"
 
-def crear_flow():
-    return Flow.from_client_config(
-        {
-            "web": {
-                "client_id": GOOGLE_CLIENT_ID,
-                "client_secret": GOOGLE_CLIENT_SECRET,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [REDIRECT_URI]
-            }
-        },
-        scopes=[
-            "openid",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "https://www.googleapis.com/auth/userinfo.profile",
-            "https://www.googleapis.com/auth/calendar.events"
-        ],
-        redirect_uri=REDIRECT_URI
-    )
+flow = Flow.from_client_config(
+    {
+        "web": {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [REDIRECT_URI],
+            "scopes": [
+                "openid",
+                "https://www.googleapis.com/auth/userinfo.email",
+                "https://www.googleapis.com/auth/userinfo.profile"
+            ]
+        }
+    },
+    scopes=[
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile"
+    ],
+    redirect_uri=REDIRECT_URI
+)
 
 def guardar_historial_en_archivo(historial):
     carpeta = "conversaciones_guardadas"
     os.makedirs(carpeta, exist_ok=True)
+    from datetime import datetime
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     ruta = f"{carpeta}/chat_{timestamp}.txt"
     with open(ruta, "w", encoding="utf-8") as f:
@@ -60,15 +66,13 @@ def home():
 
 @app.route('/login')
 def login():
-    flow = crear_flow()
-    auth_url, state = flow.authorization_url(include_granted_scopes='true')
+    authorization_url, state = flow.authorization_url(include_granted_scopes='true')
     session['state'] = state
-    return redirect(auth_url)
+    return redirect(authorization_url)
 
 @app.route('/callback')
 def callback():
-    state = session.get('state')
-    flow = crear_flow()
+    state = session['state']
     flow.fetch_token(authorization_response=request.url)
 
     if not flow.credentials:
@@ -87,15 +91,8 @@ def callback():
         return "Token inválido", 400
 
     session['google_id'] = idinfo.get("sub")
+    session['email'] = idinfo.get("email")
     session['name'] = idinfo.get("name")
-    session['credentials'] = {
-        'token': credentials.token,
-        'refresh_token': credentials.refresh_token,
-        'token_uri': credentials.token_uri,
-        'client_id': credentials.client_id,
-        'client_secret': credentials.client_secret,
-        'scopes': credentials.scopes
-    }
     session.permanent = True
     session['historial'] = [{
         "role": "assistant",
@@ -120,50 +117,36 @@ def chat():
         }]
 
     respuesta = ""
+
     if request.method == 'POST':
         pregunta = request.form['pregunta'].strip()
-        session['historial'].append({"role": "user", "content": pregunta})
+        if pregunta:
+            session['historial'].append({"role": "user", "content": pregunta})
 
-        # Si detecta intención de agendar
-        if "agendar" in pregunta.lower():
-            creds = google.oauth2.credentials.Credentials(**session['credentials'])
-            service = googleapiclient.discovery.build('calendar', 'v3', credentials=creds)
-            # Para ejemplo: evento mañana a las 15:00 por 1 hora
-            tz = "America/Santiago"
-            start_dt = datetime.now().replace(hour=15, minute=0, second=0, microsecond=0)
-            end_dt = start_dt + timedelta(hours=1)
-            event = {
-                'summary': pregunta,
-                'start': {'dateTime': start_dt.isoformat(), 'timeZone': tz},
-                'end': {'dateTime': end_dt.isoformat(), 'timeZone': tz}
-            }
-            new_event = service.events().insert(calendarId='primary', body=event).execute()
-            enlace = new_event.get('htmlLink')
-            respuesta = f"✅ Evento creado: <a href='{enlace}' target='_blank'>Ver en Google Calendar</a>"
-        else:
             mensajes = [
-                {"role": "system", "content": "Eres un asistente de LaOrtiga.cl. Responde preguntas sobre sostenibilidad o emprendimiento verde."}
+                {"role": "system", "content": "Eres un asistente conversacional de LaOrtiga.cl. Habla de forma amable, cercana y profesional. Solo responde preguntas sobre sostenibilidad, productos ecológicos o emprendimiento verde."}
             ] + session['historial'][-10:]
-            completion = openai.ChatCompletion.create(
+
+            completion = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=mensajes,
                 max_tokens=200,
                 temperature=0.7
             )
             respuesta = completion.choices[0].message.content.strip()
-
-        session['historial'].append({"role": "assistant", "content": respuesta})
-        guardar_historial_en_archivo(session['historial'])
+            session['historial'].append({"role": "assistant", "content": respuesta})
+            guardar_historial_en_archivo(session['historial'])
 
     return render_template_string(TEMPLATE, historial=session['historial'], user_name=session.get('name'))
 
-TEMPLATE = '''<!DOCTYPE html>
+TEMPLATE = '''
+<!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8" />
+    <meta charset="UTF-8">
     <title>Asistente La Ortiga</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <style>
         body {
             margin: 0;
@@ -272,7 +255,7 @@ TEMPLATE = '''<!DOCTYPE html>
     <button id="chat-toggle-btn">💬</button>
     <div id="chat-container" style="display:flex;">
         <div id="chat-header">
-            <img src="https://cdn-icons-png.flaticon.com/512/194/194938.png" alt="Asistente" />
+            <img src="https://cdn-icons-png.flaticon.com/512/194/194938.png" alt="Asistente">
             <div>
                 <div class="name">Capitán Planeta</div>
                 <small style="font-size:12px;">Conectado como {{ user_name }}</small>
@@ -320,4 +303,3 @@ TEMPLATE = '''<!DOCTYPE html>
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
-
