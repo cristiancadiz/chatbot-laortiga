@@ -63,34 +63,38 @@ def guardar_historial_en_archivo(historial):
             rol = "Tú" if m['role'] == 'user' else "Bot"
             f.write(f"{rol}: {m['content']}\n\n")
 
-import pytz
+
 
 def crear_evento_google_calendar(session, fecha_hora):
+    import pytz  # Asegúrate de tener instalado pytz
+    timezone = pytz.timezone("America/Santiago")
+
     if 'credentials' not in session:
         return "No tengo permisos para acceder a tu calendario."
 
-    # Parseamos la fecha con dateparser
-    parsed_dt = dateparser.parse(
+    creds = Credentials(**session['credentials'])
+    service = build('calendar', 'v3', credentials=creds)
+
+    # Parsear la fecha y hora
+    inicio = dateparser.parse(
         fecha_hora,
         settings={
             "PREFER_DATES_FROM": "future",
             "TIMEZONE": "America/Santiago",
-            "RETURN_AS_TIMEZONE_AWARE": False,
-            "RELATIVE_BASE": datetime.now(pytz.timezone("America/Santiago"))
+            "RETURN_AS_TIMEZONE_AWARE": False
         }
     )
 
-    if not parsed_dt:
+    if not inicio:
         return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
 
-    # Forzamos que parsed_dt sea en Chile
-    tz = pytz.timezone("America/Santiago")
-    inicio = tz.localize(parsed_dt)
+    # Asegurar que la hora esté en el huso horario correcto
+    if inicio.tzinfo is None:
+        inicio = timezone.localize(inicio)
+    else:
+        inicio = inicio.astimezone(timezone)
 
     fin = inicio + timedelta(minutes=30)
-
-    creds = Credentials(**session['credentials'])
-    service = build('calendar', 'v3', credentials=creds)
 
     evento = {
         'summary': 'Consulta con LaOrtiga.cl',
@@ -101,6 +105,7 @@ def crear_evento_google_calendar(session, fecha_hora):
 
     evento = service.events().insert(calendarId='primary', body=evento).execute()
     return f"✅ Evento creado: <a href=\"{evento.get('htmlLink')}\" target=\"_blank\">Ver en tu calendario</a>"
+
 
 
 @app.route('/')
@@ -373,6 +378,7 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
