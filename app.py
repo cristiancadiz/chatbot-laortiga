@@ -67,7 +67,7 @@ def guardar_historial_en_archivo(historial):
 
 def crear_evento_google_calendar(session, fecha_hora):
     import pytz
-    timezone = pytz.timezone("America/Santiago")
+    from datetime import timezone
 
     if 'credentials' not in session:
         return "No tengo permisos para acceder a tu calendario."
@@ -75,25 +75,29 @@ def crear_evento_google_calendar(session, fecha_hora):
     creds = Credentials(**session['credentials'])
     service = build('calendar', 'v3', credentials=creds)
 
-    inicio_naive = dateparser.parse(fecha_hora, settings={"PREFER_DATES_FROM": "future", "RETURN_AS_TIMEZONE_AWARE": False})
+    timezone_santiago = pytz.timezone("America/Santiago")
 
+    inicio_naive = dateparser.parse(fecha_hora, settings={"PREFER_DATES_FROM": "future", "RETURN_AS_TIMEZONE_AWARE": False})
     if not inicio_naive:
         return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
 
-    # Convierte naive datetime a aware con tz local
-    inicio_local = timezone.localize(inicio_naive)
+    # Marca la hora como local de Santiago (sin info de zona horaria)
+    inicio_local = timezone_santiago.localize(inicio_naive)
 
-    fin_local = inicio_local + timedelta(minutes=30)
+    # Convierte la hora local a UTC para enviar a Google Calendar
+    inicio_utc = inicio_local.astimezone(pytz.utc)
+    fin_utc = inicio_utc + timedelta(minutes=30)
 
     evento = {
         'summary': 'Consulta con LaOrtiga.cl',
         'description': 'Reserva automatizada con Capitán Planeta 🌱',
-        'start': {'dateTime': inicio_local.isoformat(), 'timeZone': 'America/Santiago'},
-        'end': {'dateTime': fin_local.isoformat(), 'timeZone': 'America/Santiago'},
+        'start': {'dateTime': inicio_utc.isoformat(), 'timeZone': 'UTC'},
+        'end': {'dateTime': fin_utc.isoformat(), 'timeZone': 'UTC'},
     }
 
     evento = service.events().insert(calendarId='primary', body=evento).execute()
     return f"✅ Evento creado: <a href=\"{evento.get('htmlLink')}\" target=\"_blank\">Ver en tu calendario</a>"
+
 
 
 
@@ -367,6 +371,7 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
