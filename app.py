@@ -9,6 +9,7 @@ from datetime import timedelta, datetime
 import openai
 from dotenv import load_dotenv
 import dateparser
+import pytz  
 
 load_dotenv()
 
@@ -69,21 +70,14 @@ def crear_evento_google_calendar(session, fecha_hora):
     creds = Credentials(**session['credentials'])
     service = build('calendar', 'v3', credentials=creds)
 
+    # Usa timezone explícito
     tz = pytz.timezone("America/Santiago")
-    ahora = datetime.now(tz)
-
-    inicio = dateparser.parse(
-        fecha_hora,
-        settings={
-            "PREFER_DATES_FROM": "future",
-            "RELATIVE_BASE": ahora,
-            "TIMEZONE": "America/Santiago",
-            "RETURN_AS_TIMEZONE_AWARE": True
-        }
-    )
-
+    inicio = dateparser.parse(fecha_hora, settings={"PREFER_DATES_FROM": "future"})
     if not inicio:
         return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
+
+    if inicio.tzinfo is None:
+        inicio = tz.localize(inicio)
 
     fin = inicio + timedelta(minutes=30)
 
@@ -368,4 +362,5 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
