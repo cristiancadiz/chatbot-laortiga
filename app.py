@@ -63,6 +63,7 @@ def guardar_historial_en_archivo(historial):
             f.write(f"{rol}: {m['content']}\n\n")
 
 def crear_evento_google_calendar(session, fecha_hora):
+    print("Credenciales en sesión:", session.get('credentials'))
     if 'credentials' not in session:
         return "No tengo permisos para acceder a tu calendario."
 
@@ -93,7 +94,11 @@ def home():
 
 @app.route('/login')
 def login():
-    authorization_url, state = flow.authorization_url(include_granted_scopes='true', access_type='offline')
+    authorization_url, state = flow.authorization_url(
+        include_granted_scopes='true',
+        access_type='offline',
+        prompt='consent'  # Forzar a Google a pedir permiso siempre
+    )
     session['state'] = state
     return redirect(authorization_url)
 
