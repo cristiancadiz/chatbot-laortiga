@@ -69,7 +69,19 @@ def crear_evento_google_calendar(session, fecha_hora):
     creds = Credentials(**session['credentials'])
     service = build('calendar', 'v3', credentials=creds)
 
-    inicio = dateparser.parse(fecha_hora, settings={"PREFER_DATES_FROM": "future", "TIMEZONE": "America/Santiago", "RETURN_AS_TIMEZONE_AWARE": False})
+    tz = pytz.timezone("America/Santiago")
+    ahora = datetime.now(tz)
+
+    inicio = dateparser.parse(
+        fecha_hora,
+        settings={
+            "PREFER_DATES_FROM": "future",
+            "RELATIVE_BASE": ahora,
+            "TIMEZONE": "America/Santiago",
+            "RETURN_AS_TIMEZONE_AWARE": True
+        }
+    )
+
     if not inicio:
         return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
 
@@ -84,6 +96,7 @@ def crear_evento_google_calendar(session, fecha_hora):
 
     evento = service.events().insert(calendarId='primary', body=evento).execute()
     return f"✅ Evento creado: <a href=\"{evento.get('htmlLink')}\" target=\"_blank\">Ver en tu calendario</a>"
+
 
 @app.route('/')
 def home():
@@ -355,3 +368,4 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
