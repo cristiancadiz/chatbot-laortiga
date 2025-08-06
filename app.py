@@ -29,7 +29,8 @@ if not OPENAI_API_KEY:
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-REDIRECT_URI = "https://chatbot-laortiga-9.onrender.com/callback"
+# 🔁 NUEVA URL REDIRECT_URI
+REDIRECT_URI = "https://chatbot-laortiga-olyg.onrender.com/callback"
 
 SCOPES = [
     "openid",
@@ -64,7 +65,6 @@ def guardar_historial_en_archivo(historial):
             f.write(f"{rol}: {m['content']}\n\n")
 
 
-
 def crear_evento_google_calendar(session, fecha_hora):
     if 'credentials' not in session:
         return "No tengo permisos para acceder a tu calendario."
@@ -72,7 +72,6 @@ def crear_evento_google_calendar(session, fecha_hora):
     creds = Credentials(**session['credentials'])
     service = build('calendar', 'v3', credentials=creds)
 
-    # Analiza la fecha/hora con zona horaria incluida
     inicio = dateparser.parse(
         fecha_hora,
         settings={
@@ -106,10 +105,8 @@ def crear_evento_google_calendar(session, fecha_hora):
     return f"✅ Evento creado: <a href=\"{evento.get('htmlLink')}\" target=\"_blank\">Ver en tu calendario</a>"
 
 
-
 @app.route('/')
 def home():
-    # Usuario puede chatear sin loguearse con Google
     if 'historial' not in session:
         session['historial'] = [{
             "role": "assistant",
@@ -122,7 +119,7 @@ def login():
     authorization_url, state = flow.authorization_url(
         include_granted_scopes='true',
         access_type='offline',
-        prompt='consent'  # fuerza a Google a pedir consentimiento y dar refresh_token
+        prompt='consent'
     )
     session['state'] = state
     return redirect(authorization_url)
@@ -146,7 +143,6 @@ def callback():
     }
 
     request_session = grequests.Request()
-
     try:
         idinfo = id_token.verify_oauth2_token(
             credentials._id_token,
@@ -182,22 +178,18 @@ def chat():
         if pregunta:
             session['historial'].append({"role": "user", "content": pregunta})
 
-            # Detectar intención de agendar
             if any(p in pregunta.lower() for p in ['agendar', 'reserva', 'cita', 'calendar']):
                 if 'credentials' not in session:
-                    # Pide login solo si no está autenticado
                     respuesta = "Para agendar necesito que te autentiques con Google Calendar. Por favor, <a href='/login'>inicia sesión aquí</a>."
                 else:
                     respuesta = "¿Para qué día y hora quieres agendar? (por ejemplo: 'mañana a las 10')"
 
-            # Si ya estaba en modo agendar y responde con fecha y hora
             elif ('credentials' in session and
                   any(p in session['historial'][-2]['content'].lower() for p in ['agendar', 'reserva', 'cita']) and
                   dateparser.parse(pregunta)):
                 respuesta = crear_evento_google_calendar(session, pregunta)
 
             else:
-                # Llamada normal a OpenAI
                 mensajes = [
                     {"role": "system", "content": "Eres un asistente conversacional de LaOrtiga.cl. Habla de forma amable, cercana y profesional. Solo responde preguntas sobre sostenibilidad, productos ecológicos o emprendimiento verde."}
                 ] + session['historial'][-10:]
@@ -224,7 +216,6 @@ TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet" />
     <style>
-        /* tu CSS va aquí */
         body {
             font-family: 'Inter', sans-serif;
             background: #f4f9f4;
@@ -377,17 +368,3 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
