@@ -1,11 +1,12 @@
-Flask==2.3.2
+httpx==0.24.0
 openai==1.0.0
+Flask==2.3.2
+requests
+numpy
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
-google-api-python-client
-requests
 requests-oauthlib
 python-dotenv
-numpy
+google-api-python-client
 
