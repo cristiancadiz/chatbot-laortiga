@@ -1,75 +1,53 @@
 import os
-from flask import Flask, redirect, url_for, session, request, render_template_string
-from google.oauth2 import id_token
-from google_auth_oauthlib.flow import Flow
-from google.auth.transport import requests as grequests
+from flask import Flask, request, render_template_string, session
+from flask_socketio import SocketIO, emit
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
-from datetime import timedelta, datetime
-import openai
-from dotenv import load_dotenv
+from datetime import datetime, timedelta
 import dateparser
-import pytz  
-
-load_dotenv()
+import pytz
+import json
 
 app = Flask(__name__)
-app.secret_key = os.getenv('app.secret_key')
-if not app.secret_key:
-    raise Exception("La variable de entorno SECRET_KEY no está configurada.")
+app.secret_key = os.getenv('APP_SECRET_KEY', 'supersecretkey')
 app.permanent_session_lifetime = timedelta(days=30)
+socketio = SocketIO(app)
 
-GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
-GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+# ⚡ Configuración de Google Service Account
+SERVICE_ACCOUNT_FILE = 'service_account.json'
+SCOPES = ['https://www.googleapis.com/auth/calendar']
+CALENDAR_ID = os.getenv('GOOGLE_CALENDAR_ID')
 
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-if not OPENAI_API_KEY:
-    raise Exception("La variable de entorno OPENAI_API_KEY no está configurada.")
-
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
-
-REDIRECT_URI = "https://chatbot-laortiga-olyg.onrender.com/callback"
-
-SCOPES = [
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-    "https://www.googleapis.com/auth/calendar.events"
-]
-
-flow = Flow.from_client_config(
-    {
-        "web": {
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [REDIRECT_URI],
-            "scopes": SCOPES
-        }
-    },
-    scopes=SCOPES,
-    redirect_uri=REDIRECT_URI
+credentials = service_account.Credentials.from_service_account_file(
+    SERVICE_ACCOUNT_FILE, scopes=SCOPES
 )
+service = build('calendar', 'v3', credentials=credentials)
 
-def guardar_historial_en_archivo(historial):
-    carpeta = "conversaciones_guardadas"
-    os.makedirs(carpeta, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    ruta = f"{carpeta}/chat_{timestamp}.txt"
-    with open(ruta, "w", encoding="utf-8", errors="ignore") as f:
-        for m in historial:
-            rol = "Tú" if m['role'] == 'user' else "Bot"
-            f.write(f"{rol}: {m['content']}\n\n")
+# Carpeta y archivo para historial de reservas
+HISTORIAL_DIR = 'conversaciones_guardadas'
+os.makedirs(HISTORIAL_DIR, exist_ok=True)
+HISTORIAL_FILE = os.path.join(HISTORIAL_DIR, 'historial_reservas.json')
 
-def crear_evento_google_calendar(session, fecha_hora, correo_invitado):
-    if 'credentials' not in session:
-        return "No tengo permisos para acceder a tu calendario."
+# Inicializar historial de reservas
+if not os.path.exists(HISTORIAL_FILE):
+    with open(HISTORIAL_FILE, 'w', encoding='utf-8') as f:
+        json.dump([], f)
 
-    creds = Credentials(**session['credentials'])
-    service = build('calendar', 'v3', credentials=creds)
+def guardar_reserva(fecha_hora, email_invitado, link):
+    with open(HISTORIAL_FILE, 'r+', encoding='utf-8') as f:
+        reservas = json.load(f)
+        reservas.append({
+            'fecha_hora': fecha_hora,
+            'email_invitado': email_invitado,
+            'link': link
+        })
+        f.seek(0)
+        json.dump(reservas, f, indent=2)
+        f.truncate()
+    # Emitir evento a todos los clientes conectados
+    socketio.emit('nueva_reserva', {'fecha_hora': fecha_hora, 'email_invitado': email_invitado, 'link': link}, broadcast=True)
 
+def crear_evento(fecha_hora, email_invitado):
     inicio = dateparser.parse(
         fecha_hora,
         settings={
@@ -82,179 +60,120 @@ def crear_evento_google_calendar(session, fecha_hora, correo_invitado):
     )
 
     if not inicio:
-        return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
+        return None, "⚠️ No pude entender la fecha y hora."
 
     fin = inicio + timedelta(minutes=30)
 
     evento = {
-        'summary': 'Consulta con LaOrtiga.cl',
-        'description': 'Reserva automatizada con Capitán Planeta 🌱',
-        'start': {
-            'dateTime': inicio.isoformat(),
-            'timeZone': 'America/Santiago'
-        },
-        'end': {
-            'dateTime': fin.isoformat(),
-            'timeZone': 'America/Santiago'
-        },
-        'attendees': [{'email': correo_invitado}]
+        'summary': 'Reserva LaOrtiga.cl 🌱',
+        'description': 'Reserva automatizada con Capitán Planeta',
+        'start': {'dateTime': inicio.isoformat(), 'timeZone': 'America/Santiago'},
+        'end': {'dateTime': fin.isoformat(), 'timeZone': 'America/Santiago'},
+        'attendees': [{'email': email_invitado}],
+        'reminders': {'useDefault': True},
     }
 
-    evento = service.events().insert(calendarId='primary', body=evento, sendUpdates='all').execute()
-    return f"✅ Evento creado: <a href=\"{evento.get('htmlLink')}\" target=\"_blank\">Ver en tu calendario</a>"
+    evento = service.events().insert(
+        calendarId=CALENDAR_ID, body=evento, sendUpdates='all'
+    ).execute()
+
+    return evento.get('htmlLink'), f"✅ Evento creado: <a href='{evento.get('htmlLink')}' target='_blank'>Ver en calendario</a>"
 
 @app.route('/')
 def home():
-    if 'historial' not in session:
-        session['historial'] = [{
-            "role": "assistant",
-            "content": "¡Hola! 👋 Bienvenido a LaOrtiga.cl 🌱. ¿En qué puedo ayudarte hoy?"
-        }]
-    return redirect(url_for('chat'))
+    session['step'] = 'inicio'
+    session['fecha_hora'] = None
+    session['email_invitado'] = None
+    session['respuesta'] = "¡Hola! 👋 Bienvenido a LaOrtiga.cl 🌱. ¿Quieres agendar una reserva?"
+    session['historial'] = [{"role": "assistant", "content": session['respuesta']}]
+    return render_template_string(TEMPLATE, respuesta=session['historial'][-1]['content'])
 
-@app.route('/login')
-def login():
-    authorization_url, state = flow.authorization_url(
-        include_granted_scopes='true',
-        access_type='offline',
-        prompt='consent'
-    )
-    session['state'] = state
-    return redirect(authorization_url)
-
-@app.route('/callback')
-def callback():
-    state = session.get('state')
-    flow.fetch_token(authorization_response=request.url)
-
-    if not flow.credentials:
-        return "No se pudo autenticar con Google.", 400
-
-    credentials = flow.credentials
-    session['credentials'] = {
-        'token': credentials.token,
-        'refresh_token': credentials.refresh_token,
-        'token_uri': credentials.token_uri,
-        'client_id': credentials.client_id,
-        'client_secret': credentials.client_secret,
-        'scopes': credentials.scopes
-    }
-
-    request_session = grequests.Request()
-    try:
-        idinfo = id_token.verify_oauth2_token(
-            credentials._id_token,
-            request_session,
-            GOOGLE_CLIENT_ID
-        )
-    except ValueError:
-        return "Token inválido", 400
-
-    session['google_id'] = idinfo.get("sub")
-    session['email'] = idinfo.get("email")
-    session['name'] = idinfo.get("name")
-    session.permanent = True
-    return redirect(url_for('chat'))
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('home'))
-
-@app.route('/chat', methods=['GET', 'POST'])
+@app.route('/chat', methods=['POST'])
 def chat():
-    if 'historial' not in session:
-        session['historial'] = [{
-            "role": "assistant",
-            "content": "¡Hola! 👋 Bienvenido a LaOrtiga.cl 🌱. ¿En qué puedo ayudarte hoy?"
-        }]
-
+    texto = request.form.get('mensaje').strip()
+    session['historial'].append({"role": "user", "content": texto})
     respuesta = ""
 
-    if request.method == 'POST':
-        pregunta = request.form['pregunta'].strip()
-        if pregunta:
-            session['historial'].append({"role": "user", "content": pregunta})
+    if session['step'] == 'inicio':
+        session['step'] = 'fecha_hora'
+        respuesta = "Perfecto. ¿Para qué día y hora quieres agendar? (ej: 'mañana a las 12')"
 
-            # Detecta intención de agendar
-            if any(p in pregunta.lower() for p in ['agendar', 'reserva', 'cita', 'calendar']):
-                if 'credentials' not in session:
-                    respuesta = "Para agendar necesito que te autentiques con Google Calendar. Por favor, <a href='/login'>inicia sesión aquí</a>."
-                else:
-                    session['esperando_fecha'] = True
-                    respuesta = "¿Para qué día y hora quieres agendar? (ej: 'mañana a las 10')"
+    elif session['step'] == 'fecha_hora':
+        session['fecha_hora'] = texto
+        session['step'] = 'correo'
+        respuesta = "Genial. ¿Cuál es el correo electrónico del invitado?"
 
-            # Usuario entrega fecha/hora
-            elif session.get('esperando_fecha'):
-                session['fecha_hora'] = pregunta
-                session['esperando_fecha'] = False
-                session['esperando_correo'] = True
-                respuesta = "Perfecto. ¿Cuál es tu correo electrónico para enviarte la invitación?"
+    elif session['step'] == 'correo':
+        session['email_invitado'] = texto
+        link, mensaje = crear_evento(session['fecha_hora'], session['email_invitado'])
+        respuesta = mensaje if link else "⚠️ Error al crear el evento. " + mensaje
+        if link:
+            guardar_reserva(session['fecha_hora'], session['email_invitado'], link)
+        session['step'] = 'inicio'
 
-            # Usuario entrega correo
-            elif session.get('esperando_correo'):
-                correo = pregunta
-                fecha_hora = session.get('fecha_hora')
-                respuesta = crear_evento_google_calendar(session, fecha_hora, correo)
-                session.pop('fecha_hora', None)
-                session.pop('esperando_correo', None)
+    session['historial'].append({"role": "assistant", "content": respuesta})
+    return respuesta
 
-            # Respuesta normal con OpenAI
-            else:
-                mensajes = [
-                    {"role": "system", "content": "Eres un asistente conversacional de LaOrtiga.cl. Habla de forma amable, cercana y profesional. Solo responde preguntas sobre sostenibilidad, productos ecológicos o emprendimiento verde."}
-                ] + session['historial'][-10:]
-
-                completion = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=mensajes,
-                    max_tokens=200,
-                    temperature=0.7
-                )
-                respuesta = completion.choices[0].message.content.strip()
-
-            session['historial'].append({"role": "assistant", "content": respuesta})
-            guardar_historial_en_archivo(session['historial'])
-
-    return render_template_string(TEMPLATE, historial=session['historial'], user_name=session.get('name'))
+@app.route('/get_reservas')
+def get_reservas():
+    with open(HISTORIAL_FILE, 'r', encoding='utf-8') as f:
+        reservas = json.load(f)
+    return json.dumps(reservas)
 
 TEMPLATE = """
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="UTF-8" />
-<title>Asistente La Ortiga</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta charset="UTF-8">
+<title>Chat Reserva LaOrtiga.cl</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js" integrity="sha512-XC1PrYxgI+FAYDK9HT+Jxw5jWfS/j+RGEhf4MuzcGzQ2jtkxA0rpiLCbgvhLO6jF+Zem/YvQMQz0FkYxLQuO7w==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
-body { font-family: Arial,sans-serif; background:#f4f9f4; margin:0; padding:0; }
-#chat-container { width:350px; max-height:500px; position:fixed; bottom:20px; right:20px; background:white; display:flex; flex-direction:column; border-radius:10px; box-shadow:0 0 12px rgba(0,0,0,0.1); }
-#chat-messages { flex-grow:1; padding:10px; overflow-y:auto; background:#eaf3ea; }
-.msg { margin-bottom:10px; padding:8px 12px; border-radius:20px; max-width:80%; word-wrap:break-word; }
-.bot { background:#2c7a2c; color:white; align-self:flex-start; }
-.user { background:#a3d1a3; color:#000; align-self:flex-end; }
-#chat-input-form { display:flex; border-top:1px solid #ccc; }
-#chat-input { flex-grow:1; border:none; padding:10px; font-size:1rem; border-bottom-left-radius:10px; }
-#chat-send { border:none; background:#2c7a2c; color:white; padding:0 20px; cursor:pointer; font-size:1.2rem; border-bottom-right-radius:10px; }
+body { font-family: Arial; padding: 20px; background: #f4f9f4; }
+#chat { max-width: 500px; margin: auto; background: white; padding: 20px; border-radius: 10px; }
+input, button { padding: 8px; margin: 5px 0; width: 100%; }
+button { background: #2c7a2c; color: white; border: none; cursor: pointer; }
+.bot { background: #2c7a2c; color: white; padding: 10px; border-radius: 10px; margin-bottom: 10px; }
+.user { background: #a3d1a3; color: black; padding: 10px; border-radius: 10px; margin-bottom: 10px; text-align:right;}
+h3 { margin-top: 30px; }
 </style>
 </head>
 <body>
-<div id="chat-container">
-<div id="chat-messages">
-{% for m in historial %}
-<div class="msg {% if m.role == 'user' %}user{% else %}bot{% endif %}">{{ m.content | safe }}</div>
-{% endfor %}
+<div id="chat">
+    <div class="bot" id="respuesta">{{ respuesta|safe }}</div>
+    <form id="formulario" method="POST">
+        <input type="text" name="mensaje" placeholder="Escribe tu respuesta..." required>
+        <button type="submit">Enviar</button>
+    </form>
+    <h3>Historial de reservas (actualizado en tiempo real):</h3>
+    <ul id="reservas_list"></ul>
 </div>
-<form id="chat-input-form" method="POST">
-<input type="text" id="chat-input" name="pregunta" placeholder="Escribe tu mensaje..." autocomplete="off" required />
-<button id="chat-send">➤</button>
-</form>
-</div>
+
 <script>
-const chatMessages=document.getElementById('chat-messages');
-const input=document.getElementById('chat-input');
-document.getElementById('chat-input-form').onsubmit=function(){scrollToBottom();};
-function scrollToBottom(){chatMessages.scrollTop=chatMessages.scrollHeight;}
-window.onload=scrollToBottom;
+const socket = io();
+const reservasList = document.getElementById('reservas_list');
+
+// Cargar historial inicial
+fetch('/get_reservas').then(r => r.json()).then(reservas => {
+    reservas.forEach(r => {
+        reservasList.innerHTML += `<li>${r.fecha_hora} - ${r.email_invitado} - <a href="${r.link}" target="_blank">Ver evento</a></li>`;
+    });
+});
+
+// Escuchar nuevas reservas
+socket.on('nueva_reserva', function(r) {
+    reservasList.innerHTML += `<li>${r.fecha_hora} - ${r.email_invitado} - <a href="${r.link}" target="_blank">Ver evento</a></li>`;
+});
+
+// Enviar chat sin recargar
+const form = document.getElementById('formulario');
+form.onsubmit = async (e) => {
+    e.preventDefault();
+    const formData = new FormData(form);
+    const res = await fetch('/chat', {method:'POST', body: formData});
+    const respuesta = await res.text();
+    document.getElementById('respuesta').innerHTML = respuesta;
+    form.reset();
+};
 </script>
 </body>
 </html>
@@ -262,4 +181,4 @@ window.onload=scrollToBottom;
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    socketio.run(app, host='0.0.0.0', port=port, debug=True)
