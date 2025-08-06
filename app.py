@@ -67,7 +67,6 @@ def guardar_historial_en_archivo(historial):
 
 def crear_evento_google_calendar(session, fecha_hora):
     import pytz
-    from dateutil import tz
     timezone = pytz.timezone("America/Santiago")
 
     if 'credentials' not in session:
@@ -76,30 +75,26 @@ def crear_evento_google_calendar(session, fecha_hora):
     creds = Credentials(**session['credentials'])
     service = build('calendar', 'v3', credentials=creds)
 
-    # Parsear la fecha/hora sin info de zona horaria
     inicio_naive = dateparser.parse(fecha_hora, settings={"PREFER_DATES_FROM": "future", "RETURN_AS_TIMEZONE_AWARE": False})
 
     if not inicio_naive:
         return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
 
-    # Convertir naive datetime a timezone-aware usando dateutil.tz
-    local_tz = tz.gettz("America/Santiago")
-    inicio_aware = inicio_naive.replace(tzinfo=local_tz)
+    # Convierte naive datetime a aware con tz local
+    inicio_local = timezone.localize(inicio_naive)
 
-    # Ajustar a UTC para que Google Calendar no aplique doble conversión
-    inicio_utc = inicio_aware.astimezone(tz.UTC)
-
-    fin_utc = inicio_utc + timedelta(minutes=30)
+    fin_local = inicio_local + timedelta(minutes=30)
 
     evento = {
         'summary': 'Consulta con LaOrtiga.cl',
         'description': 'Reserva automatizada con Capitán Planeta 🌱',
-        'start': {'dateTime': inicio_utc.isoformat()},
-        'end': {'dateTime': fin_utc.isoformat()},
+        'start': {'dateTime': inicio_local.isoformat(), 'timeZone': 'America/Santiago'},
+        'end': {'dateTime': fin_local.isoformat(), 'timeZone': 'America/Santiago'},
     }
 
     evento = service.events().insert(calendarId='primary', body=evento).execute()
     return f"✅ Evento creado: <a href=\"{evento.get('htmlLink')}\" target=\"_blank\">Ver en tu calendario</a>"
+
 
 
 @app.route('/')
@@ -372,6 +367,7 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
