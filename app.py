@@ -97,10 +97,11 @@ def login():
     authorization_url, state = flow.authorization_url(
         include_granted_scopes='true',
         access_type='offline',
-        prompt='consent'  # Forzar a Google a pedir permiso siempre
+        prompt='consent'  # fuerza a Google a pedir consentimiento y dar refresh_token
     )
     session['state'] = state
     return redirect(authorization_url)
+
 
 @app.route('/callback')
 def callback():
@@ -119,6 +120,7 @@ def callback():
         'client_secret': credentials.client_secret,
         'scopes': credentials.scopes
     }
+    print("Credenciales guardadas en sesión:", session['credentials'])  # <-- imprime credenciales para debug
 
     request_session = grequests.Request()
 
@@ -159,15 +161,17 @@ def chat():
 
     respuesta = ""
 
-    if request.method == 'POST':
-        pregunta = request.form['pregunta'].strip()
-        if pregunta:
-            session['historial'].append({"role": "user", "content": pregunta})
+if request.method == 'POST':
+    pregunta = request.form['pregunta'].strip()
+    if pregunta:
+        session['historial'].append({"role": "user", "content": pregunta})
 
-            if any(p in pregunta.lower() for p in ['agendar', 'reserva', 'cita', 'calendar']):
-                respuesta = "¿Para qué día y hora quieres agendar? (por ejemplo: 'mañana a las 10')"
-            elif any(p in session['historial'][-2]['content'].lower() for p in ['agendar', 'reserva', 'cita']) and dateparser.parse(pregunta):
-                respuesta = crear_evento_google_calendar(session, pregunta)
+        print("Sesión en /chat:", dict(session))  # <-- para ver qué contiene la sesión
+
+        if any(p in pregunta.lower() for p in ['agendar', 'reserva', 'cita', 'calendar']):
+            respuesta = "¿Para qué día y hora quieres agendar? (por ejemplo: 'mañana a las 10')"
+        elif any(p in session['historial'][-2]['content'].lower() for p in ['agendar', 'reserva', 'cita']) and dateparser.parse(pregunta):
+            respuesta = crear_evento_google_calendar(session, pregunta)
             else:
                 mensajes = [
                     {"role": "system", "content": "Eres un asistente conversacional de LaOrtiga.cl. Habla de forma amable, cercana y profesional. Solo responde preguntas sobre sostenibilidad, productos ecológicos o emprendimiento verde."}
@@ -257,3 +261,4 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
