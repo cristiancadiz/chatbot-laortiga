@@ -74,21 +74,22 @@ def crear_evento_google_calendar(session, fecha_hora):
 
     timezone_santiago = pytz.timezone("America/Santiago")
 
-    # Analiza la fecha/hora sin zona horaria
-    inicio_naive = dateparser.parse(
-        fecha_hora,
-        settings={
-            "PREFER_DATES_FROM": "future",
-            "RETURN_AS_TIMEZONE_AWARE": False
-        }
-    )
+    # Analiza la fecha/hora con zona horaria incluida
+inicio = dateparser.parse(
+    fecha_hora,
+    settings={
+        "PREFER_DATES_FROM": "future",
+        "RETURN_AS_TIMEZONE_AWARE": True,
+        "TIMEZONE": "America/Santiago",
+        "TO_TIMEZONE": "America/Santiago",
+        "RELATIVE_BASE": datetime.now(pytz.timezone("America/Santiago"))
+    }
+)
 
-    if not inicio_naive:
-        return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
+if not inicio:
+    return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
 
-    # Localiza la hora a horario Santiago
-    inicio_local = timezone_santiago.localize(inicio_naive)
-    fin_local = inicio_local + timedelta(minutes=30)
+fin = inicio + timedelta(minutes=30)
 
     evento = {
         'summary': 'Consulta con LaOrtiga.cl',
@@ -379,6 +380,7 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
