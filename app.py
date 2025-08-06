@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()  # Carga variables de entorno .env
 
 app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY')
+app.secret_key = os.getenv('app.secret_key')
 if not app.secret_key:
     raise Exception("La variable de entorno SECRET_KEY no está configurada.")
 app.permanent_session_lifetime = timedelta(days=30)
@@ -216,4 +216,5 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
