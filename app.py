@@ -66,7 +66,7 @@ def guardar_historial_en_archivo(historial):
 
 
 def crear_evento_google_calendar(session, fecha_hora):
-    import pytz  # Asegúrate de tener instalado pytz
+    import pytz
     timezone = pytz.timezone("America/Santiago")
 
     if 'credentials' not in session:
@@ -75,24 +75,14 @@ def crear_evento_google_calendar(session, fecha_hora):
     creds = Credentials(**session['credentials'])
     service = build('calendar', 'v3', credentials=creds)
 
-    # Parsear la fecha y hora
-    inicio = dateparser.parse(
-        fecha_hora,
-        settings={
-            "PREFER_DATES_FROM": "future",
-            "TIMEZONE": "America/Santiago",
-            "RETURN_AS_TIMEZONE_AWARE": False
-        }
-    )
+    # Parsear la fecha y hora sin timezone (naive)
+    inicio_naive = dateparser.parse(fecha_hora, settings={"PREFER_DATES_FROM": "future", "RETURN_AS_TIMEZONE_AWARE": False})
 
-    if not inicio:
+    if not inicio_naive:
         return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
 
-    # Asegurar que la hora esté en el huso horario correcto
-    if inicio.tzinfo is None:
-        inicio = timezone.localize(inicio)
-    else:
-        inicio = inicio.astimezone(timezone)
+    # Localizar datetime en America/Santiago, corrigiendo DST
+    inicio = timezone.localize(inicio_naive, is_dst=None)
 
     fin = inicio + timedelta(minutes=30)
 
@@ -105,7 +95,6 @@ def crear_evento_google_calendar(session, fecha_hora):
 
     evento = service.events().insert(calendarId='primary', body=evento).execute()
     return f"✅ Evento creado: <a href=\"{evento.get('htmlLink')}\" target=\"_blank\">Ver en tu calendario</a>"
-
 
 
 @app.route('/')
@@ -378,6 +367,7 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
