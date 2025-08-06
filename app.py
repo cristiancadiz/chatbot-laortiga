@@ -87,8 +87,12 @@ def crear_evento_google_calendar(session, fecha_hora):
 
 @app.route('/')
 def home():
-    if 'google_id' not in session:
-        return redirect(url_for('login'))
+    # Usuario puede chatear sin loguearse con Google
+    if 'historial' not in session:
+        session['historial'] = [{
+            "role": "assistant",
+            "content": "¡Hola! 👋 Bienvenido a LaOrtiga.cl, la vitrina verde de Chile 🌱. ¿En qué puedo ayudarte hoy?"
+        }]
     return redirect(url_for('chat'))
 
 @app.route('/login')
@@ -134,22 +138,15 @@ def callback():
     session['email'] = idinfo.get("email")
     session['name'] = idinfo.get("name")
     session.permanent = True
-    session['historial'] = [{
-        "role": "assistant",
-        "content": f"Hola {session['name']}! 👋 Bienvenido a LaOrtiga.cl, la vitrina verde de Chile 🌱. ¿En qué puedo ayudarte hoy?"
-    }]
     return redirect(url_for('chat'))
 
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect(url_for('login'))
+    return redirect(url_for('home'))
 
 @app.route('/chat', methods=['GET', 'POST'])
 def chat():
-    if 'google_id' not in session:
-        return redirect(url_for('login'))
-
     if 'historial' not in session:
         session['historial'] = [{
             "role": "assistant",
@@ -163,13 +160,22 @@ def chat():
         if pregunta:
             session['historial'].append({"role": "user", "content": pregunta})
 
+            # Detectar intención de agendar
             if any(p in pregunta.lower() for p in ['agendar', 'reserva', 'cita', 'calendar']):
-                respuesta = "¿Para qué día y hora quieres agendar? (por ejemplo: 'mañana a las 10')"
-            elif (len(session['historial']) > 1 and
+                if 'credentials' not in session:
+                    # Pide login solo si no está autenticado
+                    respuesta = "Para agendar necesito que te autentiques con Google Calendar. Por favor, <a href='/login'>inicia sesión aquí</a>."
+                else:
+                    respuesta = "¿Para qué día y hora quieres agendar? (por ejemplo: 'mañana a las 10')"
+
+            # Si ya estaba en modo agendar y responde con fecha y hora
+            elif ('credentials' in session and
                   any(p in session['historial'][-2]['content'].lower() for p in ['agendar', 'reserva', 'cita']) and
                   dateparser.parse(pregunta)):
                 respuesta = crear_evento_google_calendar(session, pregunta)
+
             else:
+                # Llamada normal a OpenAI
                 mensajes = [
                     {"role": "system", "content": "Eres un asistente conversacional de LaOrtiga.cl. Habla de forma amable, cercana y profesional. Solo responde preguntas sobre sostenibilidad, productos ecológicos o emprendimiento verde."}
                 ] + session['historial'][-10:]
@@ -196,111 +202,108 @@ TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet" />
     <style>
+        /* tu CSS va aquí */
         body {
             font-family: 'Inter', sans-serif;
-            margin: 0; padding: 0;
-            background: #f4f7f9;
-            color: #333;
+            background: #f4f9f4;
+            margin: 0;
+            padding: 0;
         }
         #chat-toggle-btn {
             position: fixed;
             bottom: 20px;
             right: 20px;
-            font-size: 28px;
-            background: #4caf50;
+            font-size: 2rem;
+            background: #2c7a2c;
             color: white;
             border: none;
             border-radius: 50%;
-            width: 56px;
-            height: 56px;
+            width: 60px;
+            height: 60px;
             cursor: pointer;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
         }
         #chat-container {
             position: fixed;
             bottom: 90px;
             right: 20px;
-            width: 320px;
-            max-height: 480px;
+            width: 350px;
+            max-height: 500px;
             background: white;
             border-radius: 10px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+            box-shadow: 0 0 12px rgba(0,0,0,0.1);
+            display: flex;
             flex-direction: column;
-            display: none;
         }
         #chat-header {
-            background: #4caf50;
-            color: white;
-            padding: 12px 16px;
-            border-top-left-radius: 10px;
-            border-top-right-radius: 10px;
             display: flex;
             align-items: center;
-            gap: 10px;
+            padding: 10px;
+            background: #2c7a2c;
+            color: white;
+            border-top-left-radius: 10px;
+            border-top-right-radius: 10px;
         }
         #chat-header img {
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            margin-right: 10px;
         }
         .name {
             font-weight: 600;
-            font-size: 16px;
         }
         #chat-messages {
-            flex: 1;
+            flex-grow: 1;
+            padding: 10px;
             overflow-y: auto;
-            padding: 12px 16px;
-            background: #e8f5e9;
+            background: #eaf3ea;
         }
         .msg {
-            margin-bottom: 12px;
+            margin-bottom: 10px;
             padding: 8px 12px;
-            border-radius: 18px;
+            border-radius: 20px;
             max-width: 80%;
             word-wrap: break-word;
         }
-        .msg.bot {
-            background: #a5d6a7;
+        .bot {
+            background: #2c7a2c;
+            color: white;
             align-self: flex-start;
         }
-        .msg.user {
-            background: #4caf50;
-            color: white;
+        .user {
+            background: #a3d1a3;
+            color: #000;
             align-self: flex-end;
         }
         #chat-input-form {
             display: flex;
-            padding: 10px 16px;
-            border-top: 1px solid #ddd;
+            border-top: 1px solid #ccc;
         }
         #chat-input {
-            flex: 1;
-            padding: 8px 12px;
-            border-radius: 20px;
-            border: 1px solid #ccc;
-            font-size: 14px;
+            flex-grow: 1;
+            border: none;
+            padding: 10px;
+            font-size: 1rem;
+            border-bottom-left-radius: 10px;
         }
         #chat-send {
-            background: #4caf50;
-            color: white;
             border: none;
-            padding: 0 16px;
-            margin-left: 8px;
-            border-radius: 20px;
+            background: #2c7a2c;
+            color: white;
+            padding: 0 20px;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 1.2rem;
+            border-bottom-right-radius: 10px;
         }
     </style>
 </head>
 <body>
     <button id="chat-toggle-btn">💬</button>
-    <div id="chat-container" style="display:flex; flex-direction: column;">
+    <div id="chat-container" style="display:flex;">
         <div id="chat-header">
             <img src="https://cdn-icons-png.flaticon.com/512/194/194938.png" alt="Asistente" />
             <div>
                 <div class="name">Capitán Planeta</div>
-                <small style="font-size:12px;">Conectado como {{ user_name }}</small>
+                <small style="font-size:12px;">Conectado como {{ user_name or 'Invitado' }}</small>
             </div>
         </div>
         <div id="chat-messages">
