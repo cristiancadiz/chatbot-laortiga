@@ -1,139 +1,142 @@
 import os
-import re
-from datetime import datetime
-from flask import Flask, redirect, url_for, session, request, render_template_string
-from google.oauth2 import id_token
-from google_auth_oauthlib.flow import Flow
-import google.auth.transport.requests
-import requests
+from flask import Flask, request, session, render_template_string
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from datetime import timedelta, datetime
+import openai
+from dotenv import load_dotenv
+import dateparser
+import pytz  
+
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "supersecret")
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+app.secret_key = os.getenv('app.secret_key')
+app.permanent_session_lifetime = timedelta(days=30)
 
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+# Variables de entorno
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+if not OPENAI_API_KEY:
+    raise Exception("La variable de entorno OPENAI_API_KEY no está configurada.")
 
-flow = Flow.from_client_config(
-    {
-        "web": {
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [
-                "http://localhost:5000/callback",
-                "https://TU-APP-NOMBRE.onrender.com/callback"
-            ],
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
+
+GOOGLE_CALENDAR_TOKEN = os.getenv('GOOGLE_CALENDAR_TOKEN')  # Token fijo
+GOOGLE_CALENDAR_REFRESH_TOKEN = os.getenv('GOOGLE_CALENDAR_REFRESH_TOKEN')
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
+GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
+
+FIXED_EMAIL = "tu-correo@gmail.com"  # Correo que se usará para agendar
+
+def guardar_historial_en_archivo(historial):
+    carpeta = "conversaciones_guardadas"
+    os.makedirs(carpeta, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    ruta = f"{carpeta}/chat_{timestamp}.txt"
+    with open(ruta, "w", encoding="utf-8", errors="ignore") as f:
+        for m in historial:
+            rol = "Tú" if m['role'] == 'user' else "Bot"
+            f.write(f"{rol}: {m['content']}\n\n")
+
+def crear_evento_google_calendar(fecha_hora):
+    creds = Credentials(
+        token=GOOGLE_CALENDAR_TOKEN,
+        refresh_token=GOOGLE_CALENDAR_REFRESH_TOKEN,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        scopes=["https://www.googleapis.com/auth/calendar.events"]
+    )
+    service = build('calendar', 'v3', credentials=creds)
+
+    inicio = dateparser.parse(
+        fecha_hora,
+        settings={
+            "PREFER_DATES_FROM": "future",
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "TIMEZONE": "America/Santiago",
+            "TO_TIMEZONE": "America/Santiago",
+            "RELATIVE_BASE": datetime.now(pytz.timezone("America/Santiago"))
         }
-    },
-    scopes=["https://www.googleapis.com/auth/calendar",
-            "openid",
-            "https://www.googleapis.com/auth/userinfo.email"]
-)
-flow.redirect_uri = "https://TU-APP-NOMBRE.onrender.com/callback"
+    )
+    if not inicio:
+        return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
 
-HTML_TEMPLATE = """
+    fin = inicio + timedelta(minutes=30)
+
+    evento = {
+        'summary': 'Consulta con LaOrtiga.cl',
+        'description': 'Reserva automatizada 🌱',
+        'start': {'dateTime': inicio.isoformat(), 'timeZone': 'America/Santiago'},
+        'end': {'dateTime': fin.isoformat(), 'timeZone': 'America/Santiago'},
+        'attendees': [{'email': FIXED_EMAIL}],
+    }
+
+    evento = service.events().insert(calendarId='primary', body=evento).execute()
+    return f"✅ Evento creado: <a href=\"{evento.get('htmlLink')}\" target=\"_blank\">Ver en tu calendario</a>"
+
+@app.route('/', methods=['GET', 'POST'])
+def chat():
+    if 'historial' not in session:
+        session['historial'] = [{
+            "role": "assistant",
+            "content": "¡Hola! 👋 Bienvenido a LaOrtiga.cl 🌱. ¿En qué puedo ayudarte hoy?"
+        }]
+
+    respuesta = ""
+
+    if request.method == 'POST':
+        pregunta = request.form['pregunta'].strip()
+        if pregunta:
+            session['historial'].append({"role": "user", "content": pregunta})
+
+            # Detectar intención de agendar
+            if any(p in pregunta.lower() for p in ['agendar', 'reserva', 'cita', 'calendar']):
+                respuesta = "¿Para qué día y hora quieres agendar? (por ejemplo: 'mañana a las 10')"
+            # Si responde con fecha/hora
+            elif dateparser.parse(pregunta):
+                respuesta = crear_evento_google_calendar(pregunta)
+            else:
+                # Llamada normal a OpenAI
+                mensajes = [
+                    {"role": "system", "content": "Eres un asistente conversacional de LaOrtiga.cl. Habla de forma amable, cercana y profesional. Solo responde preguntas sobre sostenibilidad, productos ecológicos o emprendimiento verde."}
+                ] + session['historial'][-10:]
+
+                completion = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=mensajes,
+                    max_tokens=200,
+                    temperature=0.7
+                )
+                respuesta = completion.choices[0].message.content.strip()
+
+            session['historial'].append({"role": "assistant", "content": respuesta})
+            guardar_historial_en_archivo(session['historial'])
+
+    return render_template_string(TEMPLATE, historial=session['historial'])
+
+TEMPLATE = """
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
-    <title>La Ortiga 🌱</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; }
-        h2 { color: #2E7D32; }
-        input[type=text] { width: 300px; padding: 5px; margin: 5px 0; }
-        input[type=submit] { padding: 5px 10px; background-color: #2E7D32; color: white; border: none; cursor: pointer; }
-        input[type=submit]:hover { background-color: #1B5E20; }
-        p { margin-top: 15px; font-weight: bold; }
-    </style>
+    <meta charset="UTF-8" />
+    <title>Asistente La Ortiga</title>
 </head>
 <body>
-    <h2>Hola{{ ' ' + name if name else '' }}! 🌱</h2>
-    {% if not credentials %}
-        <a href="{{ url_for('login') }}">Iniciar sesión con Google</a>
-    {% else %}
-        <form method="POST" action="{{ url_for('index') }}">
-            <label>Escribe la fecha y hora y correo del invitado:</label><br>
-            <input type="text" name="mensaje" placeholder="YYYY-MM-DD HH:MM correo@ejemplo.com"><br>
-            <input type="submit" value="Agendar">
-        </form>
-        {% if respuesta %}
-            <p>{{ respuesta }}</p>
-        {% endif %}
-    {% endif %}
+    <h2>Asistente La Ortiga 🌱</h2>
+    <div id="chat">
+        {% for m in historial %}
+            <div><strong>{{ 'Tú' if m.role=='user' else 'Bot' }}:</strong> {{ m.content | safe }}</div>
+        {% endfor %}
+    </div>
+    <form method="POST">
+        <input type="text" name="pregunta" placeholder="Escribe tu mensaje..." required>
+        <button>Enviar</button>
+    </form>
 </body>
 </html>
 """
 
-@app.route("/", methods=["GET", "POST"])
-def index():
-    credentials = session.get("credentials")
-    name = session.get("user_name")
-    respuesta = None
-    if request.method == "POST" and credentials:
-        mensaje = request.form["mensaje"]
-        respuesta = procesar_mensaje(mensaje, credentials)
-    return render_template_string(HTML_TEMPLATE, credentials=credentials, name=name, respuesta=respuesta)
-
-@app.route("/login")
-def login():
-    authorization_url, state = flow.authorization_url(access_type="offline", include_granted_scopes="true")
-    session["state"] = state
-    return redirect(authorization_url)
-
-@app.route("/callback")
-def callback():
-    flow.fetch_token(authorization_response=request.url)
-    credentials = flow.credentials
-    session["credentials"] = {
-        "token": credentials.token,
-        "refresh_token": credentials.refresh_token,
-        "token_uri": credentials.token_uri,
-        "client_id": credentials.client_id,
-        "client_secret": credentials.client_secret,
-        "scopes": credentials.scopes,
-    }
-
-    request_session = requests.session()
-    token_request = google.auth.transport.requests.Request(session=request_session)
-    id_info = id_token.verify_oauth2_token(credentials.id_token, token_request, GOOGLE_CLIENT_ID)
-    session["user_name"] = id_info.get("name")
-    return redirect(url_for("index"))
-
-def procesar_mensaje(mensaje, credentials_dict):
-    mensaje = mensaje.strip()
-    pattern = r"^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s+(\S+@\S+\.\S+)$"
-    match = re.match(pattern, mensaje)
-
-    if not match:
-        return "Formato incorrecto. Usa 'YYYY-MM-DD HH:MM correo@ejemplo.com'"
-
-    fecha, hora, correo = match.groups()
-    try:
-        inicio = datetime.strptime(f"{fecha} {hora}", "%Y-%m-%d %H:%M")
-        fin = inicio.replace(hour=inicio.hour + 1)
-    except ValueError:
-        return "Fecha u hora inválida."
-
-    from google.oauth2.credentials import Credentials
-    creds = Credentials(**credentials_dict)
-
-    from googleapiclient.discovery import build
-    service = build("calendar", "v3", credentials=creds)
-
-    evento = {
-        "summary": "Cita en La Ortiga 🌱",
-        "description": "Sesión agendada automáticamente",
-        "start": {"dateTime": inicio.isoformat(), "timeZone": "America/Santiago"},
-        "end": {"dateTime": fin.isoformat(), "timeZone": "America/Santiago"},
-        "attendees": [{"email": correo}],
-    }
-
-    try:
-        service.events().insert(calendarId="primary", body=evento, sendUpdates="all").execute()
-        return f"Cita agendada para {correo} el {fecha} a las {hora} hrs ✅"
-    except Exception as e:
-        return f"Error al agendar: {e}"
-
-# Para Render: usar gunicorn
-# gunicorn app:app --bind 0.0.0.0:$PORT
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
