@@ -23,6 +23,9 @@ openai.api_key = os.getenv('OPENAI_API_KEY')
 
 client = openai.OpenAI()
 
+# Cambia aquí el redirect_uri si quieres para evitar conflictos
+REDIRECT_URI = "https://chatbot-laortiga-9.onrender.com/callback1"
+
 flow = Flow.from_client_config(
     {
         "web": {
@@ -30,15 +33,14 @@ flow = Flow.from_client_config(
             "client_secret": GOOGLE_CLIENT_SECRET,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [ "http://localhost:5000/callback" ],
+            "redirect_uris": [REDIRECT_URI],
             "scopes": ["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"]
         }
     },
     scopes=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"],
-    redirect_uri="http://localhost:5000/callback"
+    redirect_uri=REDIRECT_URI
 )
 
-# Guardar historial de chat (como tienes)
 def guardar_historial_en_archivo(historial):
     carpeta = "conversaciones_guardadas"
     os.makedirs(carpeta, exist_ok=True)
@@ -62,7 +64,7 @@ def login():
     session['state'] = state
     return redirect(authorization_url)
 
-@app.route('/callback')
+@app.route('/callback1')
 def callback():
     state = session['state']
     flow.fetch_token(authorization_response=request.url)
@@ -292,10 +294,6 @@ TEMPLATE = '''
 </html>
 '''
 
-import os
-
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
-
-
