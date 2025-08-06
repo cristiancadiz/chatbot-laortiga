@@ -93,8 +93,9 @@ def callback():
     return redirect(url_for("index"))
 
 def procesar_mensaje(mensaje, credentials_dict):
-    pattern = r"^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) ([\w\.-]+@[\w\.-]+)$"
-    match = re.match(pattern, mensaje.strip())
+    mensaje = mensaje.strip()
+    pattern = r"^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s+(\S+@\S+\.\S+)$"
+    match = re.match(pattern, mensaje)
 
     if not match:
         return "Formato incorrecto. Usa 'YYYY-MM-DD HH:MM correo@ejemplo.com'"
