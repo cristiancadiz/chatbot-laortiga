@@ -63,7 +63,6 @@ def guardar_historial_en_archivo(historial):
             f.write(f"{rol}: {m['content']}\n\n")
 
 def crear_evento_google_calendar(session, fecha_hora):
-    print("Credenciales en sesión:", session.get('credentials'))
     if 'credentials' not in session:
         return "No tengo permisos para acceder a tu calendario."
 
@@ -102,7 +101,6 @@ def login():
     session['state'] = state
     return redirect(authorization_url)
 
-
 @app.route('/callback')
 def callback():
     state = session.get('state')
@@ -120,7 +118,6 @@ def callback():
         'client_secret': credentials.client_secret,
         'scopes': credentials.scopes
     }
-    print("Credenciales guardadas en sesión:", session['credentials'])  # <-- imprime credenciales para debug
 
     request_session = grequests.Request()
 
@@ -161,17 +158,17 @@ def chat():
 
     respuesta = ""
 
-if request.method == 'POST':
-    pregunta = request.form['pregunta'].strip()
-    if pregunta:
-        session['historial'].append({"role": "user", "content": pregunta})
+    if request.method == 'POST':
+        pregunta = request.form['pregunta'].strip()
+        if pregunta:
+            session['historial'].append({"role": "user", "content": pregunta})
 
-        print("Sesión en /chat:", dict(session))  # <-- para ver qué contiene la sesión
-
-        if any(p in pregunta.lower() for p in ['agendar', 'reserva', 'cita', 'calendar']):
-            respuesta = "¿Para qué día y hora quieres agendar? (por ejemplo: 'mañana a las 10')"
-        elif any(p in session['historial'][-2]['content'].lower() for p in ['agendar', 'reserva', 'cita']) and dateparser.parse(pregunta):
-            respuesta = crear_evento_google_calendar(session, pregunta)
+            if any(p in pregunta.lower() for p in ['agendar', 'reserva', 'cita', 'calendar']):
+                respuesta = "¿Para qué día y hora quieres agendar? (por ejemplo: 'mañana a las 10')"
+            elif (len(session['historial']) > 1 and
+                  any(p in session['historial'][-2]['content'].lower() for p in ['agendar', 'reserva', 'cita']) and
+                  dateparser.parse(pregunta)):
+                respuesta = crear_evento_google_calendar(session, pregunta)
             else:
                 mensajes = [
                     {"role": "system", "content": "Eres un asistente conversacional de LaOrtiga.cl. Habla de forma amable, cercana y profesional. Solo responde preguntas sobre sostenibilidad, productos ecológicos o emprendimiento verde."}
@@ -199,12 +196,106 @@ TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet" />
     <style>
-        /* tu CSS va aquí */
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0; padding: 0;
+            background: #f4f7f9;
+            color: #333;
+        }
+        #chat-toggle-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            font-size: 28px;
+            background: #4caf50;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 56px;
+            height: 56px;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
+        #chat-container {
+            position: fixed;
+            bottom: 90px;
+            right: 20px;
+            width: 320px;
+            max-height: 480px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+            flex-direction: column;
+            display: none;
+        }
+        #chat-header {
+            background: #4caf50;
+            color: white;
+            padding: 12px 16px;
+            border-top-left-radius: 10px;
+            border-top-right-radius: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        #chat-header img {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+        }
+        .name {
+            font-weight: 600;
+            font-size: 16px;
+        }
+        #chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 16px;
+            background: #e8f5e9;
+        }
+        .msg {
+            margin-bottom: 12px;
+            padding: 8px 12px;
+            border-radius: 18px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+        .msg.bot {
+            background: #a5d6a7;
+            align-self: flex-start;
+        }
+        .msg.user {
+            background: #4caf50;
+            color: white;
+            align-self: flex-end;
+        }
+        #chat-input-form {
+            display: flex;
+            padding: 10px 16px;
+            border-top: 1px solid #ddd;
+        }
+        #chat-input {
+            flex: 1;
+            padding: 8px 12px;
+            border-radius: 20px;
+            border: 1px solid #ccc;
+            font-size: 14px;
+        }
+        #chat-send {
+            background: #4caf50;
+            color: white;
+            border: none;
+            padding: 0 16px;
+            margin-left: 8px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 16px;
+        }
     </style>
 </head>
 <body>
     <button id="chat-toggle-btn">💬</button>
-    <div id="chat-container" style="display:flex;">
+    <div id="chat-container" style="display:flex; flex-direction: column;">
         <div id="chat-header">
             <img src="https://cdn-icons-png.flaticon.com/512/194/194938.png" alt="Asistente" />
             <div>
@@ -261,4 +352,3 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
-
