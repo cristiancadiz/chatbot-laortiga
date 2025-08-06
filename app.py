@@ -72,41 +72,38 @@ def crear_evento_google_calendar(session, fecha_hora):
     creds = Credentials(**session['credentials'])
     service = build('calendar', 'v3', credentials=creds)
 
-    timezone_santiago = pytz.timezone("America/Santiago")
-
     # Analiza la fecha/hora con zona horaria incluida
-inicio = dateparser.parse(
-    fecha_hora,
-    settings={
-        "PREFER_DATES_FROM": "future",
-        "RETURN_AS_TIMEZONE_AWARE": True,
-        "TIMEZONE": "America/Santiago",
-        "TO_TIMEZONE": "America/Santiago",
-        "RELATIVE_BASE": datetime.now(pytz.timezone("America/Santiago"))
-    }
-)
+    inicio = dateparser.parse(
+        fecha_hora,
+        settings={
+            "PREFER_DATES_FROM": "future",
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "TIMEZONE": "America/Santiago",
+            "TO_TIMEZONE": "America/Santiago",
+            "RELATIVE_BASE": datetime.now(pytz.timezone("America/Santiago"))
+        }
+    )
 
-if not inicio:
-    return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
+    if not inicio:
+        return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
 
-fin = inicio + timedelta(minutes=30)
+    fin = inicio + timedelta(minutes=30)
 
     evento = {
         'summary': 'Consulta con LaOrtiga.cl',
         'description': 'Reserva automatizada con Capitán Planeta 🌱',
         'start': {
-            'dateTime': inicio_local.isoformat(),
+            'dateTime': inicio.isoformat(),
             'timeZone': 'America/Santiago'
         },
         'end': {
-            'dateTime': fin_local.isoformat(),
+            'dateTime': fin.isoformat(),
             'timeZone': 'America/Santiago'
         },
     }
 
     evento = service.events().insert(calendarId='primary', body=evento).execute()
     return f"✅ Evento creado: <a href=\"{evento.get('htmlLink')}\" target=\"_blank\">Ver en tu calendario</a>"
-
 
 
 
@@ -380,6 +377,7 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
