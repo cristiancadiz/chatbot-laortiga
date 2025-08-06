@@ -1,135 +1,130 @@
 import os
-from flask import Flask, request, render_template_string, jsonify
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from datetime import datetime, timedelta
-import pytz
+import re
+from datetime import datetime
+from flask import Flask, redirect, url_for, session, request, render_template_string
+from google.oauth2 import id_token
+from google_auth_oauthlib.flow import Flow
+import google.auth.transport.requests
+import requests
 
-# Configuración de Flask
 app = Flask(__name__)
-app.secret_key = os.environ.get("app.secret_key", "default_secret")
+app.secret_key = os.environ.get("SECRET_KEY", "supersecret")
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
-# Google Calendar: configuración con cuenta de servicio
-SERVICE_ACCOUNT_INFO = {
-    "type": "service_account",
-    "project_id": os.environ.get("GOOGLE_PROJECT_ID"),
-    "private_key_id": os.environ.get("GOOGLE_PRIVATE_KEY_ID"),
-    "private_key": os.environ.get("GOOGLE_PRIVATE_KEY").replace("\\n", "\n"),
-    "client_email": os.environ.get("GOOGLE_CLIENT_EMAIL"),
-    "client_id": os.environ.get("GOOGLE_CLIENT_ID_SERVICE"),
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_x509_cert_url": os.environ.get("GOOGLE_CLIENT_X509_CERT_URL")
-}
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 
-SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
-credentials = service_account.Credentials.from_service_account_info(
-    SERVICE_ACCOUNT_INFO, scopes=SCOPES
+flow = Flow.from_client_config(
+    {
+        "web": {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": ["http://localhost:5000/callback", "https://tu-app-en-render.onrender.com/callback"],
+        }
+    },
+    scopes=["https://www.googleapis.com/auth/calendar", "openid", "https://www.googleapis.com/auth/userinfo.email"]
 )
-CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID")
+flow.redirect_uri = "https://tu-app-en-render.onrender.com/callback"
 
-service = build("calendar", "v3", credentials=credentials)
-
-# HTML template del chat
-CHAT_TEMPLATE = """
-<!doctype html>
-<html lang="es">
-  <head>
-    <meta charset="utf-8">
-    <title>Chatbot LaOrtiga</title>
-    <style>
-      body { font-family: Arial; margin: 50px; }
-      .chat { max-width: 600px; margin: auto; }
-      .message { margin-bottom: 10px; }
-      .user { color: blue; }
-      .bot { color: green; }
-    </style>
-  </head>
-  <body>
-    <div class="chat">
-      <h2>Chatbot LaOrtiga.cl 🌱</h2>
-      <div id="messages"></div>
-      <input type="text" id="user_input" placeholder="Escribe tu mensaje..." style="width:80%;">
-      <button onclick="sendMessage()">Enviar</button>
-    </div>
-    <script>
-      function appendMessage(sender, text){
-        const messages = document.getElementById("messages");
-        const div = document.createElement("div");
-        div.className = "message " + sender;
-        div.innerText = text;
-        messages.appendChild(div);
-      }
-
-      function sendMessage(){
-        const input = document.getElementById("user_input");
-        const text = input.value;
-        if(!text) return;
-        appendMessage("user", text);
-        input.value = "";
-        fetch("/chat", {
-          method:"POST",
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({message:text})
-        })
-        .then(response => response.json())
-        .then(data => {
-          appendMessage("bot", data.reply);
-        });
-      }
-    </script>
-  </body>
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>La Ortiga 🌱</title>
+</head>
+<body>
+    <h2>Hola{{ ' ' + name if name else '' }}! 🌱</h2>
+    {% if not credentials %}
+        <a href="{{ url_for('login') }}">Iniciar sesión con Google</a>
+    {% else %}
+        <form method="POST" action="{{ url_for('index') }}">
+            <label>Escribe la fecha y hora y correo del invitado:</label><br>
+            <input type="text" name="mensaje" placeholder="YYYY-MM-DD HH:MM correo@ejemplo.com"><br>
+            <input type="submit" value="Agendar">
+        </form>
+        {% if respuesta %}
+            <p>{{ respuesta }}</p>
+        {% endif %}
+    {% endif %}
+</body>
 </html>
 """
 
-# Función para crear evento en Google Calendar
-def crear_evento(fecha_hora_str, invitado_email):
-    try:
-        tz = pytz.timezone("America/Santiago")
-        fecha_hora = datetime.strptime(fecha_hora_str, "%Y-%m-%d %H:%M")
-        fecha_hora = tz.localize(fecha_hora)
-        evento = {
-            "summary": "Cita LaOrtiga.cl",
-            "start": {"dateTime": fecha_hora.isoformat()},
-            "end": {"dateTime": (fecha_hora + timedelta(hours=1)).isoformat()},
-            "attendees": [{"email": invitado_email}],
-            "reminders": {"useDefault": True},
-        }
-        service.events().insert(calendarId=CALENDAR_ID, body=evento, sendUpdates="all").execute()
-        return True, "Invitación enviada correctamente a " + invitado_email
-    except Exception as e:
-        return False, f"Error al crear el evento: {str(e)}"
-
-# Ruta principal
 @app.route("/")
 def index():
-    return render_template_string(CHAT_TEMPLATE)
+    credentials = session.get("credentials")
+    name = session.get("user_name")
+    return render_template_string(HTML_TEMPLATE, credentials=credentials, name=name, respuesta=None)
 
-# Ruta para chat
-@app.route("/chat", methods=["POST"])
-def chat():
-    data = request.get_json()
-    user_msg = data.get("message", "").lower()
-    reply = ""
+@app.route("/", methods=["POST"])
+def handle_post():
+    credentials = session.get("credentials")
+    name = session.get("user_name")
+    mensaje = request.form["mensaje"]
+    respuesta = procesar_mensaje(mensaje, credentials)
+    return render_template_string(HTML_TEMPLATE, credentials=credentials, name=name, respuesta=respuesta)
 
-    # Manejo de agendamiento simple
-    if "agendar" in user_msg or "hora" in user_msg:
-        reply = "Por favor indica la fecha y hora en formato YYYY-MM-DD HH:MM (ej: 2025-08-07 12:00)"
-    elif "@" in user_msg and "2025" in user_msg:
-        # Supone que el usuario envía "YYYY-MM-DD HH:MM correo@ejemplo.com"
-        try:
-            fecha_hora_str, invitado_email = user_msg.split()
-            ok, mensaje = crear_evento(fecha_hora_str, invitado_email)
-            reply = mensaje
-        except:
-            reply = "Formato incorrecto. Usa 'YYYY-MM-DD HH:MM correo@ejemplo.com'"
-    else:
-        reply = "Hola! 🌱 ¿Deseas agendar una cita? Escribe la fecha, hora y correo del invitado."
+@app.route("/login")
+def login():
+    authorization_url, state = flow.authorization_url(access_type="offline", include_granted_scopes="true")
+    session["state"] = state
+    return redirect(authorization_url)
 
-    return jsonify({"reply": reply})
+@app.route("/callback")
+def callback():
+    flow.fetch_token(authorization_response=request.url)
+    credentials = flow.credentials
+    session["credentials"] = {
+        "token": credentials.token,
+        "refresh_token": credentials.refresh_token,
+        "token_uri": credentials.token_uri,
+        "client_id": credentials.client_id,
+        "client_secret": credentials.client_secret,
+        "scopes": credentials.scopes,
+    }
 
-# Ejecutar Flask
+    request_session = requests.session()
+    token_request = google.auth.transport.requests.Request(session=request_session)
+    id_info = id_token.verify_oauth2_token(credentials.id_token, token_request, GOOGLE_CLIENT_ID)
+
+    session["user_name"] = id_info.get("name")
+    return redirect(url_for("index"))
+
+def procesar_mensaje(mensaje, credentials_dict):
+    pattern = r"^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) ([\w\.-]+@[\w\.-]+)$"
+    match = re.match(pattern, mensaje.strip())
+
+    if not match:
+        return "Formato incorrecto. Usa 'YYYY-MM-DD HH:MM correo@ejemplo.com'"
+
+    fecha, hora, correo = match.groups()
+    try:
+        inicio = datetime.strptime(f"{fecha} {hora}", "%Y-%m-%d %H:%M")
+        fin = inicio.replace(hour=inicio.hour + 1)
+    except ValueError:
+        return "Fecha u hora inválida."
+
+    from google.oauth2.credentials import Credentials
+    creds = Credentials(**credentials_dict)
+
+    from googleapiclient.discovery import build
+    service = build("calendar", "v3", credentials=creds)
+
+    evento = {
+        "summary": "Cita en La Ortiga 🌱",
+        "description": "Sesión agendada automáticamente",
+        "start": {"dateTime": inicio.isoformat(), "timeZone": "America/Santiago"},
+        "end": {"dateTime": fin.isoformat(), "timeZone": "America/Santiago"},
+        "attendees": [{"email": correo}],
+    }
+
+    try:
+        service.events().insert(calendarId="primary", body=evento, sendUpdates="all").execute()
+        return f"Cita agendada para {correo} el {fecha} a las {hora} hrs ✅"
+    except Exception as e:
+        return f"Error al agendar: {e}"
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(debug=True)
