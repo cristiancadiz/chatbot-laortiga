@@ -84,15 +84,15 @@ def crear_evento_google_calendar(session, fecha_hora):
     # Marca la hora como local de Santiago (sin info de zona horaria)
     inicio_local = timezone_santiago.localize(inicio_naive)
 
-# Define hora de inicio y fin directamente en horario local
-inicio_local = timezone_santiago.localize(inicio_naive)
-fin_local = inicio_local + timedelta(minutes=30)
+# Convierte la hora local a UTC para enviar a Google Calendar
+inicio_utc = inicio_local.astimezone(pytz.utc)
+fin_utc = inicio_utc + timedelta(minutes=30)
 
 evento = {
     'summary': 'Consulta con LaOrtiga.cl',
     'description': 'Reserva automatizada con Capitán Planeta 🌱',
-    'start': {'dateTime': inicio_local.isoformat(), 'timeZone': 'America/Santiago'},
-    'end': {'dateTime': fin_local.isoformat(), 'timeZone': 'America/Santiago'},
+    'start': {'dateTime': inicio_utc.isoformat(), 'timeZone': 'UTC'},
+    'end': {'dateTime': fin_utc.isoformat(), 'timeZone': 'UTC'},
 }
 
     evento = service.events().insert(calendarId='primary', body=evento).execute()
@@ -371,6 +371,7 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
