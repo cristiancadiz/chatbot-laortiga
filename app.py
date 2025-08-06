@@ -7,39 +7,36 @@ from datetime import timedelta
 import openai
 from dotenv import load_dotenv
 
-load_dotenv()  # Carga variables de .env
+load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'clave-super-secreta')
 app.permanent_session_lifetime = timedelta(days=30)
 
-# Config OAuth
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"  # Solo para desarrollo HTTP
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
-# Config OpenAI
 openai.api_key = os.getenv('OPENAI_API_KEY')
-
 client = openai.OpenAI()
 
-# Cambia aquí el redirect_uri si quieres para evitar conflictos
-REDIRECT_URI = "https://chatbot-laortiga-9.onrender.com/callback1"
+REDIRECT_URI = "https://chatbot-laortiga-9.onrender.com/callback"
 
-flow = Flow.from_client_config(
-    {
-        "web": {
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [REDIRECT_URI],
-            "scopes": ["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"]
-        }
-    },
-    scopes=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"],
-    redirect_uri=REDIRECT_URI
-)
+def crear_flow():
+    return Flow.from_client_config(
+        {
+            "web": {
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [REDIRECT_URI],
+                "scopes": ["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"]
+            }
+        },
+        scopes=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"],
+        redirect_uri=REDIRECT_URI
+    )
 
 def guardar_historial_en_archivo(historial):
     carpeta = "conversaciones_guardadas"
@@ -60,13 +57,15 @@ def home():
 
 @app.route('/login')
 def login():
+    flow = crear_flow()
     authorization_url, state = flow.authorization_url(include_granted_scopes='true')
     session['state'] = state
     return redirect(authorization_url)
 
-@app.route('/callback1')
+@app.route('/callback')
 def callback():
-    state = session['state']
+    state = session.get('state')
+    flow = crear_flow()
     flow.fetch_token(authorization_response=request.url)
 
     if not flow.credentials:
@@ -142,106 +141,58 @@ TEMPLATE = '''
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <style>
-        body {
-            margin: 0;
-            font-family: 'Inter', sans-serif;
-            background: #f3f4f6;
-        }
+        body { margin: 0; font-family: 'Inter', sans-serif; background: #f3f4f6; }
         #chat-container {
-            position: fixed;
-            bottom: 90px;
-            right: 20px;
-            width: 370px;
-            height: 540px;
-            background: #ffffff;
-            border-radius: 20px;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            z-index: 9999;
+            position: fixed; bottom: 90px; right: 20px;
+            width: 370px; height: 540px; background: #fff;
+            border-radius: 20px; box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+            display: flex; flex-direction: column; overflow: hidden; z-index: 9999;
         }
         #chat-header {
-            display: flex;
-            align-items: center;
-            background: #4CAF50;
-            padding: 16px;
-            color: white;
+            display: flex; align-items: center; background: #4CAF50;
+            padding: 16px; color: white;
         }
         #chat-header img {
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            margin-right: 12px;
-            border: 2px solid white;
+            border-radius: 50%; width: 40px; height: 40px;
+            margin-right: 12px; border: 2px solid white;
         }
-        #chat-header .name {
-            font-weight: bold;
-            font-size: 16px;
-        }
+        #chat-header .name { font-weight: bold; font-size: 16px; }
         #chat-messages {
-            flex: 1;
-            padding: 14px;
-            overflow-y: auto;
-            background: #f9fafb;
+            flex: 1; padding: 14px; overflow-y: auto; background: #f9fafb;
         }
         .msg {
-            padding: 12px 16px;
-            margin: 8px 0;
-            max-width: 80%;
-            border-radius: 20px;
-            font-size: 14px;
-            line-height: 1.4;
+            padding: 12px 16px; margin: 8px 0; max-width: 80%;
+            border-radius: 20px; font-size: 14px; line-height: 1.4;
             word-break: break-word;
         }
         .msg.user {
-            align-self: flex-end;
-            background-color: #DCF8C6;
-            border-bottom-right-radius: 4px;
+            align-self: flex-end; background-color: #DCF8C6; border-bottom-right-radius: 4px;
         }
         .msg.bot {
-            align-self: flex-start;
-            background-color: #ffffff;
+            align-self: flex-start; background-color: #fff;
             border-bottom-left-radius: 4px;
             box-shadow: 0 1px 4px rgba(0,0,0,0.05);
         }
         #chat-input-form {
-            display: flex;
-            padding: 12px;
-            border-top: 1px solid #e0e0e0;
-            background: #fff;
+            display: flex; padding: 12px;
+            border-top: 1px solid #e0e0e0; background: #fff;
         }
         #chat-input {
-            flex: 1;
-            padding: 10px 14px;
-            border-radius: 12px;
-            border: 1px solid #ccc;
+            flex: 1; padding: 10px 14px;
+            border-radius: 12px; border: 1px solid #ccc;
             font-size: 14px;
         }
         #chat-send {
-            background: #4CAF50;
-            color: white;
-            border: none;
-            padding: 0 16px;
-            margin-left: 10px;
-            font-size: 18px;
-            border-radius: 12px;
-            cursor: pointer;
+            background: #4CAF50; color: white; border: none;
+            padding: 0 16px; margin-left: 10px;
+            font-size: 18px; border-radius: 12px; cursor: pointer;
         }
         #chat-toggle-btn {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 60px;
-            height: 60px;
-            border-radius: 50%;
-            background: #4CAF50;
-            color: white;
-            font-size: 28px;
-            border: none;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            cursor: pointer;
-            z-index: 10000;
+            position: fixed; bottom: 20px; right: 20px;
+            width: 60px; height: 60px; border-radius: 50%;
+            background: #4CAF50; color: white; font-size: 28px;
+            border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            cursor: pointer; z-index: 10000;
         }
     </style>
 </head>
