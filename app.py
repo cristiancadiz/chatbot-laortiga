@@ -3,7 +3,7 @@ from googleapiclient.discovery import build
 from google.oauth2 import service_account
 
 # Ruta correcta al archivo de credenciales
-SERVICE_ACCOUNT_FILE = '/opt/render/project/src/service-account-file.json'
+SERVICE_ACCOUNT_FILE = 'chatbot-laortiga/service_account.json'
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
 # Autenticación con las credenciales de la cuenta de servicio
