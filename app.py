@@ -252,4 +252,6 @@ TEMPLATE = """
     </script>
 </body>
 </html>
+"""  # <-- Aquí está el cierre de la triple comilla
+
 
