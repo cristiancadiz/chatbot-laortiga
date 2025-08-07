@@ -13,25 +13,39 @@ credentials = service_account.Credentials.from_service_account_info(service_acco
 # Crear el servicio de Google Calendar
 service = build('calendar', 'v3', credentials=credentials)
 
+# Template HTML en el mismo archivo
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crear Evento en Google Calendar</title>
+</head>
+<body>
+    <h1>Crear un evento en Google Calendar</h1>
+    <form action="/create_event" method="post">
+        <label for="summary">Título del evento:</label><br>
+        <input type="text" id="summary" name="summary" required><br><br>
+
+        <label for="start_datetime">Fecha y hora de inicio (YYYY-MM-DD HH:MM):</label><br>
+        <input type="text" id="start_datetime" name="start_datetime" required><br><br>
+
+        <label for="end_datetime">Fecha y hora de fin (YYYY-MM-DD HH:MM):</label><br>
+        <input type="text" id="end_datetime" name="end_datetime" required><br><br>
+
+        <label for="attendee_email">Correo electrónico del asistente:</label><br>
+        <input type="email" id="attendee_email" name="attendee_email" required><br><br>
+
+        <input type="submit" value="Crear Evento">
+    </form>
+</body>
+</html>
+'''
+
 @app.route('/')
 def home():
-    return '''
-        <form action="/create_event" method="post">
-            <label for="summary">Título del evento:</label><br>
-            <input type="text" id="summary" name="summary" required><br><br>
-
-            <label for="start_datetime">Fecha y hora de inicio (YYYY-MM-DD HH:MM):</label><br>
-            <input type="text" id="start_datetime" name="start_datetime" required><br><br>
-
-            <label for="end_datetime">Fecha y hora de fin (YYYY-MM-DD HH:MM):</label><br>
-            <input type="text" id="end_datetime" name="end_datetime" required><br><br>
-
-            <label for="attendee_email">Correo electrónico del asistente:</label><br>
-            <input type="email" id="attendee_email" name="attendee_email" required><br><br>
-
-            <input type="submit" value="Crear Evento">
-        </form>
-    '''
+    return render_template_string(HTML_TEMPLATE)
 
 @app.route('/create_event', methods=['POST'])
 def create_event():
