@@ -1,189 +1,153 @@
 import os
 import json
-from flask import Flask, request, render_template_string
-from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-import dateparser
-from datetime import timedelta
-import pytz
+from googleapiclient.errors import HttpError
+from google.oauth2.credentials import Credentials
+from flask import Flask, jsonify, render_template_string
 
 app = Flask(__name__)
-app.secret_key = os.getenv('APP_SECRET_KEY', 'clave_secreta_para_testing')
 
+# El alcance de la API que vas a usar (Google Calendar)
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 
-# Ruta temporal para guardar token.json
-TOKEN_PATH = 'token.json'
+# Función para obtener las credenciales de Google desde la variable de entorno
+def get_credentials_from_env():
+    """Obtiene las credenciales de Google desde la variable de entorno GOOGLE_TOKEN_JSON"""
+    token_data = os.getenv('GOOGLE_TOKEN_JSON')
+    
+    if not token_data:
+        raise ValueError("La variable de entorno 'GOOGLE_TOKEN_JSON' no está configurada correctamente.")
+    
+    # Convertimos el token JSON que está en formato string en un diccionario
+    creds_dict = json.loads(token_data)
 
-def guardar_token_desde_env():
-    token_json_str = os.getenv('GOOGLE_TOKEN_JSON')
-    if not token_json_str:
-        raise Exception("La variable de entorno GOOGLE_TOKEN_JSON no está configurada.")
-    # Guarda el contenido en token.json
-    with open(TOKEN_PATH, 'w') as f:
-        f.write(token_json_str)
+    # Crear el objeto de credenciales a partir de los datos JSON
+    creds = Credentials.from_authorized_user_info(creds_dict)
+    
+    return creds
 
-def crear_evento_tu_calendario(fecha_hora, nombre_usuario, email_usuario=None):
-    # Asegura que token.json existe
-    if not os.path.exists(TOKEN_PATH):
-        guardar_token_desde_env()
+# Función para crear el servicio de la API de Google Calendar
+def build_calendar_service(creds):
+    """Construye el servicio de Google Calendar"""
+    try:
+        service = build('calendar', 'v3', credentials=creds)
+        return service
+    except HttpError as error:
+        print(f'Error al construir el servicio de Google Calendar: {error}')
+        return None
 
-    creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
-    service = build('calendar', 'v3', credentials=creds)
+# Ruta principal para renderizar la página de inicio (HTML template)
+@app.route('/')
+def index():
+    return render_template_string('''
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Chatbot Calendar Events</title>
+            <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+            <style>
+                body {
+                    background-color: #f5f5f5;
+                    padding: 50px;
+                }
+                .container {
+                    background-color: #fff;
+                    border-radius: 10px;
+                    padding: 30px;
+                    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+                }
+                h1 {
+                    color: #007bff;
+                }
+                .card {
+                    margin-top: 20px;
+                }
+            </style>
+        </head>
+        <body>
 
-    inicio = dateparser.parse(fecha_hora, settings={
-        "PREFER_DATES_FROM": "future",
-        "RETURN_AS_TIMEZONE_AWARE": True,
-        "TIMEZONE": "America/Santiago",
-        "TO_TIMEZONE": "America/Santiago"
-    })
+            <div class="container">
+                <h1 class="text-center">Bienvenido al Chatbot de Eventos de Google Calendar</h1>
+                <p class="text-center">A continuación se listan los próximos eventos en tu calendario de Google:</p>
 
-    if not inicio:
-        return None, "⚠️ No pude entender la fecha y hora. Usa algo como 'mañana a las 10am'."
+                <div id="events-container">
+                    <!-- Los eventos se mostrarán aquí -->
+                </div>
 
-    fin = inicio + timedelta(minutes=30)
+                <div class="text-center">
+                    <button class="btn btn-primary" onclick="fetchEvents()">Obtener Eventos</button>
+                </div>
+            </div>
 
-    evento = {
-        'summary': f'Cita con {nombre_usuario}',
-        'description': 'Reserva automática desde el sitio web',
-        'start': {
-            'dateTime': inicio.isoformat(),
-            'timeZone': 'America/Santiago',
-        },
-        'end': {
-            'dateTime': fin.isoformat(),
-            'timeZone': 'America/Santiago',
-        },
-    }
+            <script>
+                function fetchEvents() {
+                    fetch('/events')
+                        .then(response => response.json())
+                        .then(data => {
+                            let eventsContainer = document.getElementById('events-container');
+                            eventsContainer.innerHTML = '';  // Limpiar cualquier evento anterior
 
-    if email_usuario:
-        evento['attendees'] = [{'email': email_usuario}]
+                            if (data.error) {
+                                eventsContainer.innerHTML = `<p class="text-danger">${data.error}</p>`;
+                            } else if (data.message) {
+                                eventsContainer.innerHTML = `<p class="text-info">${data.message}</p>`;
+                            } else {
+                                let eventsList = '<ul class="list-group">';
+                                data.forEach(event => {
+                                    eventsList += `
+                                        <li class="list-group-item">
+                                            <strong>${event.summary}</strong><br>
+                                            ${new Date(event.start.dateTime || event.start.date).toLocaleString()}<br>
+                                            <a href="${event.htmlLink}" target="_blank">Ver en Google Calendar</a>
+                                        </li>
+                                    `;
+                                });
+                                eventsList += '</ul>';
+                                eventsContainer.innerHTML = eventsList;
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error al obtener eventos:', error);
+                            document.getElementById('events-container').innerHTML = `<p class="text-danger">Hubo un problema al obtener los eventos.</p>`;
+                        });
+                }
+            </script>
 
-    creado = service.events().insert(calendarId='primary', body=evento).execute()
-    return creado.get('htmlLink'), None
+        </body>
+        </html>
+    ''')
 
+# Función para listar los próximos eventos en el calendario
+@app.route('/events', methods=['GET'])
+def get_events():
+    try:
+        # Obtener las credenciales desde la variable de entorno
+        creds = get_credentials_from_env()
 
-@app.route('/', methods=['GET', 'POST'])
-def home():
-    mensaje = ""
-    if request.method == 'POST':
-        nombre = request.form.get('nombre', '').strip()
-        fecha = request.form.get('fecha', '').strip()
-        email = request.form.get('email', '').strip() or None
+        # Construir el servicio de la API de Google Calendar
+        service = build_calendar_service(creds)
 
-        if not nombre or not fecha:
-            mensaje = "Por favor completa tu nombre y la fecha/hora de la cita."
-        else:
-            link, error = crear_evento_tu_calendario(fecha, nombre, email)
-            if error:
-                mensaje = error
-            else:
-                mensaje = f"✅ ¡Tu cita fue agendada con éxito! Puedes verla <a href='{link}' target='_blank'>aquí</a>. Te contactaremos pronto."
+        if not service:
+            return jsonify({'error': 'No se pudo construir el servicio de Google Calendar.'}), 500
 
-    return render_template_string(TEMPLATE, mensaje=mensaje)
+        # Obtener los próximos eventos en el calendario
+        events_result = service.events().list(calendarId='primary', timeMin='2025-08-01T00:00:00Z', maxResults=10, singleEvents=True, orderBy='startTime').execute()
+        events = events_result.get('items', [])
 
+        # Si no hay eventos
+        if not events:
+            return jsonify({'message': 'No se encontraron eventos.'}), 200
 
-TEMPLATE = """
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8" />
-    <title>Agendar Cita - LaOrtiga.cl</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f4f9f4;
-            padding: 20px;
-            max-width: 400px;
-            margin: auto;
-        }
-        h1 {
-            color: #2c7a2c;
-            text-align: center;
-        }
-        form {
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-        }
-        label {
-            display: block;
-            margin-top: 15px;
-            font-weight: bold;
-        }
-        input[type="text"],
-        input[type="email"] {
-            width: 100%;
-            padding: 8px;
-            margin-top: 5px;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-            box-sizing: border-box;
-        }
-        button {
-            margin-top: 20px;
-            width: 100%;
-            padding: 10px;
-            background: #2c7a2c;
-            border: none;
-            color: white;
-            font-size: 1.1rem;
-            border-radius: 6px;
-            cursor: pointer;
-        }
-        button:hover {
-            background: #246d24;
-        }
-        .mensaje {
-            margin-top: 20px;
-            padding: 15px;
-            background: #dff0d8;
-            border: 1px solid #d0e9c6;
-            color: #3c763d;
-            border-radius: 6px;
-        }
-        .error {
-            background: #f2dede;
-            border-color: #ebcccc;
-            color: #a94442;
-        }
-        a {
-            color: #2c7a2c;
-            text-decoration: none;
-            font-weight: bold;
-        }
-        a:hover {
-            text-decoration: underline;
-        }
-    </style>
-</head>
-<body>
-    <h1>Agendar una Cita</h1>
-    <form method="POST">
-        <label for="nombre">Tu Nombre:</label>
-        <input type="text" id="nombre" name="nombre" placeholder="Ej: Juan Pérez" required />
+        # Devolver los eventos en formato JSON
+        return jsonify(events), 200
 
-        <label for="fecha">Fecha y Hora de la Cita:</label>
-        <input type="text" id="fecha" name="fecha" placeholder="Ej: mañana a las 10am" required />
+    except Exception as e:
+        print(f'Error: {e}')
+        return jsonify({'error': str(e)}), 500
 
-        <label for="email">Correo Electrónico (opcional):</label>
-        <input type="email" id="email" name="email" placeholder="Ej: correo@ejemplo.com" />
-
-        <button type="submit">Agendar</button>
-    </form>
-
-    {% if mensaje %}
-        <div class="mensaje">{{ mensaje | safe }}</div>
-    {% endif %}
-</body>
-</html>
-"""
 
 if __name__ == '__main__':
-    # Guarda token.json la primera vez que arranca la app
-    guardar_token_desde_env()
-
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    # Ejecutar la app de Flask
+    app.run(debug=True, host='0.0.0.0', port=5000)
