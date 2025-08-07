@@ -18,7 +18,7 @@ if not app.secret_key:
 app.permanent_session_lifetime = timedelta(days=30)
 
 # Ruta del archivo de la cuenta de servicio
-SERVICE_ACCOUNT_FILE = 'path_to_your_service_account_credentials.json'
+SERVICE_ACCOUNT_FILE = 'service_account.json'
 
 # Define los alcances necesarios
 SCOPES = ['https://www.googleapis.com/auth/gmail.send']
@@ -252,3 +252,4 @@ TEMPLATE = """
     </script>
 </body>
 </html>
+
