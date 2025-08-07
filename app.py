@@ -12,7 +12,7 @@ CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 REDIRECT_URI = "https://chatbot-laortiga-3-zvsx.onrender.com/oauth2callback"  # cambia por tu URL en render + /oauth2callback
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 
-# Template HTML embebido
+# Template HTML embebido0
 HTML_TEMPLATE = """
 <!doctype html>
 <title>Crear Evento Google Calendar</title>
@@ -162,3 +162,4 @@ def logout():
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0')
+
