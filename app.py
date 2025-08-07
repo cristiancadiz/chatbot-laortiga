@@ -1,8 +1,15 @@
 import os
-from flask import Flask, session, request, render_template_string, redirect, url_for
-import openai
+from flask import Flask, redirect, url_for, session, request, render_template_string
+from google.oauth2 import id_token
+from google_auth_oauthlib.flow import Flow
+from google.auth.transport import requests as grequests
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
 from datetime import timedelta, datetime
+import openai
 from dotenv import load_dotenv
+import dateparser
+import pytz  
 
 load_dotenv()
 
@@ -12,13 +19,40 @@ if not app.secret_key:
     raise Exception("La variable de entorno SECRET_KEY no está configurada.")
 app.permanent_session_lifetime = timedelta(days=30)
 
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
+GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
     raise Exception("La variable de entorno OPENAI_API_KEY no está configurada.")
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-# Establecer un valor por defecto para los mensajes de bienvenida
+REDIRECT_URI = "https://chatbot-laortiga-9.onrender.com/callback"
+
+SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/calendar.events"
+]
+
+flow = Flow.from_client_config(
+    {
+        "web": {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [REDIRECT_URI],
+            "scopes": SCOPES
+        }
+    },
+    scopes=SCOPES,
+    redirect_uri=REDIRECT_URI
+)
+
 def guardar_historial_en_archivo(historial):
     carpeta = "conversaciones_guardadas"
     os.makedirs(carpeta, exist_ok=True)
@@ -29,15 +63,109 @@ def guardar_historial_en_archivo(historial):
             rol = "Tú" if m['role'] == 'user' else "Bot"
             f.write(f"{rol}: {m['content']}\n\n")
 
+
+
+def crear_evento_google_calendar(session, fecha_hora):
+    if 'credentials' not in session:
+        return "No tengo permisos para acceder a tu calendario."
+
+    creds = Credentials(**session['credentials'])
+    service = build('calendar', 'v3', credentials=creds)
+
+    # Analiza la fecha/hora con zona horaria incluida
+    inicio = dateparser.parse(
+        fecha_hora,
+        settings={
+            "PREFER_DATES_FROM": "future",
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "TIMEZONE": "America/Santiago",
+            "TO_TIMEZONE": "America/Santiago",
+            "RELATIVE_BASE": datetime.now(pytz.timezone("America/Santiago"))
+        }
+    )
+
+    if not inicio:
+        return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
+
+    fin = inicio + timedelta(minutes=30)
+
+    evento = {
+        'summary': 'Consulta con LaOrtiga.cl',
+        'description': 'Reserva automatizada con Capitán Planeta 🌱',
+        'start': {
+            'dateTime': inicio.isoformat(),
+            'timeZone': 'America/Santiago'
+        },
+        'end': {
+            'dateTime': fin.isoformat(),
+            'timeZone': 'America/Santiago'
+        },
+    }
+
+    evento = service.events().insert(calendarId='primary', body=evento).execute()
+    return f"✅ Evento creado: <a href=\"{evento.get('htmlLink')}\" target=\"_blank\">Ver en tu calendario</a>"
+
+
+
 @app.route('/')
 def home():
-    # Usuario puede chatear sin loguearse
+    # Usuario puede chatear sin loguearse con Google
     if 'historial' not in session:
         session['historial'] = [{
             "role": "assistant",
             "content": "¡Hola! 👋 Bienvenido a LaOrtiga.cl, la vitrina verde de Chile 🌱. ¿En qué puedo ayudarte hoy?"
         }]
     return redirect(url_for('chat'))
+
+@app.route('/login')
+def login():
+    authorization_url, state = flow.authorization_url(
+        include_granted_scopes='true',
+        access_type='offline',
+        prompt='consent'  # fuerza a Google a pedir consentimiento y dar refresh_token
+    )
+    session['state'] = state
+    return redirect(authorization_url)
+
+@app.route('/callback')
+def callback():
+    state = session.get('state')
+    flow.fetch_token(authorization_response=request.url)
+
+    if not flow.credentials:
+        return "No se pudo autenticar con Google.", 400
+
+    credentials = flow.credentials
+    session['credentials'] = {
+        'token': credentials.token,
+        'refresh_token': credentials.refresh_token,
+        'token_uri': credentials.token_uri,
+        'client_id': credentials.client_id,
+        'client_secret': credentials.client_secret,
+        'scopes': credentials.scopes
+    }
+
+    request_session = grequests.Request()
+
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            credentials._id_token,
+            request_session,
+            GOOGLE_CLIENT_ID
+        )
+    except ValueError:
+        return "Token inválido", 400
+
+    session['google_id'] = idinfo.get("sub")
+    session['email'] = idinfo.get("email")
+    session['name'] = idinfo.get("name")
+    session.permanent = True
+    return redirect(url_for('chat'))
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('home'))
 
 @app.route('/chat', methods=['GET', 'POST'])
 def chat():
@@ -54,13 +182,19 @@ def chat():
         if pregunta:
             session['historial'].append({"role": "user", "content": pregunta})
 
-            # Si el mensaje contiene palabras clave relacionadas con agendar
+            # Detectar intención de agendar
             if any(p in pregunta.lower() for p in ['agendar', 'reserva', 'cita', 'calendar']):
-                respuesta = "¿Para qué día y hora quieres agendar? (por ejemplo: 'mañana a las 10')"
+                if 'credentials' not in session:
+                    # Pide login solo si no está autenticado
+                    respuesta = "Para agendar necesito que te autentiques con Google Calendar. Por favor, <a href='/login'>inicia sesión aquí</a>."
+                else:
+                    respuesta = "¿Para qué día y hora quieres agendar? (por ejemplo: 'mañana a las 10')"
 
-            # Si el usuario proporciona una fecha y hora válida
-            elif dateparser.parse(pregunta):
-                respuesta = "¡Evento agendado correctamente! 🗓️"
+            # Si ya estaba en modo agendar y responde con fecha y hora
+            elif ('credentials' in session and
+                  any(p in session['historial'][-2]['content'].lower() for p in ['agendar', 'reserva', 'cita']) and
+                  dateparser.parse(pregunta)):
+                respuesta = crear_evento_google_calendar(session, pregunta)
 
             else:
                 # Llamada normal a OpenAI
@@ -79,7 +213,7 @@ def chat():
             session['historial'].append({"role": "assistant", "content": respuesta})
             guardar_historial_en_archivo(session['historial'])
 
-    return render_template_string(TEMPLATE, historial=session['historial'])
+    return render_template_string(TEMPLATE, historial=session['historial'], user_name=session.get('name'))
 
 TEMPLATE = """
 <!DOCTYPE html>
@@ -191,7 +325,7 @@ TEMPLATE = """
             <img src="https://cdn-icons-png.flaticon.com/512/194/194938.png" alt="Asistente" />
             <div>
                 <div class="name">Capitán Planeta</div>
-                <small style="font-size:12px;">Conectado como Invitado</small>
+                <small style="font-size:12px;">Conectado como {{ user_name or 'Invitado' }}</small>
             </div>
         </div>
         <div id="chat-messages">
@@ -243,3 +377,4 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
