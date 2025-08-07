@@ -12,7 +12,7 @@ CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 REDIRECT_URI = "https://chatbot-laortiga-3-zvsx.onrender.com/oauth2callback"  # Cambia por tu URL en render + /oauth2callback
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 
-# Forzar el uso de HTTPS en todas las rutass
+# Forzar el uso de HTTPS en todas las rutas
 @app.before_request
 def force_https():
     if not request.is_secure:
@@ -168,4 +168,5 @@ def logout():
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0')
+
 
