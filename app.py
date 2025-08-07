@@ -4,7 +4,7 @@ from googleapiclient.discovery import build
 from google.oauth2 import service_account
 
 # Cargar las credenciales de la cuenta de servicio desde el archivo JSON
-SERVICE_ACCOUNT_FILE = 'path/to/your/service-account-file.json'
+SERVICE_ACCOUNT_FILE = 'service-account.json'
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
 # Autenticación con las credenciales de la cuenta de servicio
@@ -39,3 +39,4 @@ event = {
 event_result = service.events().insert(calendarId='primary', body=event).execute()
 
 print(f"Evento creado: {event_result.get('htmlLink')}")
+
