@@ -1,15 +1,13 @@
 import os
-from flask import Flask, redirect, url_for, session, request, render_template_string
-from google.oauth2 import id_token
-from google_auth_oauthlib.flow import Flow
-from google.auth.transport import requests as grequests
+import base64
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from flask import Flask, render_template_string, request, session, redirect, url_for
 from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
+from google.oauth2 import service_account
+from googleapiclient.errors import HttpError
 from datetime import timedelta, datetime
-import openai
 from dotenv import load_dotenv
-import dateparser
-import pytz  
 
 load_dotenv()
 
@@ -19,39 +17,41 @@ if not app.secret_key:
     raise Exception("La variable de entorno SECRET_KEY no está configurada.")
 app.permanent_session_lifetime = timedelta(days=30)
 
-GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
-GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+# Ruta del archivo de la cuenta de servicio
+SERVICE_ACCOUNT_FILE = 'path_to_your_service_account_credentials.json'
 
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-if not OPENAI_API_KEY:
-    raise Exception("La variable de entorno OPENAI_API_KEY no está configurada.")
+# Define los alcances necesarios
+SCOPES = ['https://www.googleapis.com/auth/gmail.send']
 
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
-
-REDIRECT_URI = "https://chatbot-laortiga-9.onrender.com/callback"
-
-SCOPES = [
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-    "https://www.googleapis.com/auth/calendar.events"
-]
-
-flow = Flow.from_client_config(
-    {
-        "web": {
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [REDIRECT_URI],
-            "scopes": SCOPES
-        }
-    },
-    scopes=SCOPES,
-    redirect_uri=REDIRECT_URI
+# Configuración del cliente de Gmail
+credentials = service_account.Credentials.from_service_account_file(
+    SERVICE_ACCOUNT_FILE, scopes=SCOPES
 )
+service = build('gmail', 'v1', credentials=credentials)
+
+def create_message(sender, to, subject, message_text):
+    """Crea el mensaje de correo en formato MIME"""
+    message = MIMEMultipart()
+    message['to'] = to
+    message['from'] = sender
+    message['subject'] = subject
+    
+    msg = MIMEText(message_text)
+    message.attach(msg)
+
+    raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+    return {'raw': raw_message}
+
+def send_message(service, sender, to, subject, body):
+    """Envía el mensaje usando la API de Gmail"""
+    try:
+        message = create_message(sender, to, subject, body)
+        send_message = service.users().messages().send(userId="me", body=message).execute()
+        print(f'Mensaje enviado a {to}, ID: {send_message["id"]}')
+        return send_message
+    except HttpError as error:
+        print(f'Ha ocurrido un error: {error}')
+        return None
 
 def guardar_historial_en_archivo(historial):
     carpeta = "conversaciones_guardadas"
@@ -63,109 +63,14 @@ def guardar_historial_en_archivo(historial):
             rol = "Tú" if m['role'] == 'user' else "Bot"
             f.write(f"{rol}: {m['content']}\n\n")
 
-
-
-def crear_evento_google_calendar(session, fecha_hora):
-    if 'credentials' not in session:
-        return "No tengo permisos para acceder a tu calendario."
-
-    creds = Credentials(**session['credentials'])
-    service = build('calendar', 'v3', credentials=creds)
-
-    # Analiza la fecha/hora con zona horaria incluida
-    inicio = dateparser.parse(
-        fecha_hora,
-        settings={
-            "PREFER_DATES_FROM": "future",
-            "RETURN_AS_TIMEZONE_AWARE": True,
-            "TIMEZONE": "America/Santiago",
-            "TO_TIMEZONE": "America/Santiago",
-            "RELATIVE_BASE": datetime.now(pytz.timezone("America/Santiago"))
-        }
-    )
-
-    if not inicio:
-        return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
-
-    fin = inicio + timedelta(minutes=30)
-
-    evento = {
-        'summary': 'Consulta con LaOrtiga.cl',
-        'description': 'Reserva automatizada con Capitán Planeta 🌱',
-        'start': {
-            'dateTime': inicio.isoformat(),
-            'timeZone': 'America/Santiago'
-        },
-        'end': {
-            'dateTime': fin.isoformat(),
-            'timeZone': 'America/Santiago'
-        },
-    }
-
-    evento = service.events().insert(calendarId='primary', body=evento).execute()
-    return f"✅ Evento creado: <a href=\"{evento.get('htmlLink')}\" target=\"_blank\">Ver en tu calendario</a>"
-
-
-
 @app.route('/')
 def home():
-    # Usuario puede chatear sin loguearse con Google
     if 'historial' not in session:
         session['historial'] = [{
             "role": "assistant",
             "content": "¡Hola! 👋 Bienvenido a LaOrtiga.cl, la vitrina verde de Chile 🌱. ¿En qué puedo ayudarte hoy?"
         }]
     return redirect(url_for('chat'))
-
-@app.route('/login')
-def login():
-    authorization_url, state = flow.authorization_url(
-        include_granted_scopes='true',
-        access_type='offline',
-        prompt='consent'  # fuerza a Google a pedir consentimiento y dar refresh_token
-    )
-    session['state'] = state
-    return redirect(authorization_url)
-
-@app.route('/callback')
-def callback():
-    state = session.get('state')
-    flow.fetch_token(authorization_response=request.url)
-
-    if not flow.credentials:
-        return "No se pudo autenticar con Google.", 400
-
-    credentials = flow.credentials
-    session['credentials'] = {
-        'token': credentials.token,
-        'refresh_token': credentials.refresh_token,
-        'token_uri': credentials.token_uri,
-        'client_id': credentials.client_id,
-        'client_secret': credentials.client_secret,
-        'scopes': credentials.scopes
-    }
-
-    request_session = grequests.Request()
-
-    try:
-        idinfo = id_token.verify_oauth2_token(
-            credentials._id_token,
-            request_session,
-            GOOGLE_CLIENT_ID
-        )
-    except ValueError:
-        return "Token inválido", 400
-
-    session['google_id'] = idinfo.get("sub")
-    session['email'] = idinfo.get("email")
-    session['name'] = idinfo.get("name")
-    session.permanent = True
-    return redirect(url_for('chat'))
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('home'))
 
 @app.route('/chat', methods=['GET', 'POST'])
 def chat():
@@ -174,7 +79,7 @@ def chat():
             "role": "assistant",
             "content": "¡Hola! 👋 Bienvenido a LaOrtiga.cl, la vitrina verde de Chile 🌱. ¿En qué puedo ayudarte hoy?"
         }]
-
+    
     respuesta = ""
 
     if request.method == 'POST':
@@ -182,38 +87,23 @@ def chat():
         if pregunta:
             session['historial'].append({"role": "user", "content": pregunta})
 
-            # Detectar intención de agendar
-            if any(p in pregunta.lower() for p in ['agendar', 'reserva', 'cita', 'calendar']):
-                if 'credentials' not in session:
-                    # Pide login solo si no está autenticado
-                    respuesta = "Para agendar necesito que te autentiques con Google Calendar. Por favor, <a href='/login'>inicia sesión aquí</a>."
-                else:
-                    respuesta = "¿Para qué día y hora quieres agendar? (por ejemplo: 'mañana a las 10')"
+            # Detectar si la pregunta es sobre enviar un correo
+            if 'enviar correo' in pregunta.lower():
+                sender = "cristiancadiz987@gmail.com"  # Correo del que envías
+                to = "destinatario@dominio.com"  # Cambia por el correo destinatario
+                subject = "Asunto del Correo"
+                body = "Este es el cuerpo del correo"
 
-            # Si ya estaba en modo agendar y responde con fecha y hora
-            elif ('credentials' in session and
-                  any(p in session['historial'][-2]['content'].lower() for p in ['agendar', 'reserva', 'cita']) and
-                  dateparser.parse(pregunta)):
-                respuesta = crear_evento_google_calendar(session, pregunta)
+                send_message(service, sender, to, subject, body)
+                respuesta = "✅ Correo enviado con éxito."
 
             else:
-                # Llamada normal a OpenAI
-                mensajes = [
-                    {"role": "system", "content": "Eres un asistente conversacional de LaOrtiga.cl. Habla de forma amable, cercana y profesional. Solo responde preguntas sobre sostenibilidad, productos ecológicos o emprendimiento verde."}
-                ] + session['historial'][-10:]
-
-                completion = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=mensajes,
-                    max_tokens=200,
-                    temperature=0.7
-                )
-                respuesta = completion.choices[0].message.content.strip()
+                respuesta = "No entendí tu mensaje. ¿Necesitas ayuda con algo más?"
 
             session['historial'].append({"role": "assistant", "content": respuesta})
             guardar_historial_en_archivo(session['historial'])
 
-    return render_template_string(TEMPLATE, historial=session['historial'], user_name=session.get('name'))
+    return render_template_string(TEMPLATE, historial=session['historial'])
 
 TEMPLATE = """
 <!DOCTYPE html>
@@ -224,7 +114,6 @@ TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet" />
     <style>
-        /* tu CSS va aquí */
         body {
             font-family: 'Inter', sans-serif;
             background: #f4f9f4;
@@ -325,7 +214,7 @@ TEMPLATE = """
             <img src="https://cdn-icons-png.flaticon.com/512/194/194938.png" alt="Asistente" />
             <div>
                 <div class="name">Capitán Planeta</div>
-                <small style="font-size:12px;">Conectado como {{ user_name or 'Invitado' }}</small>
+                <small style="font-size:12px;">Conectado como {{ session.get('name') or 'Invitado' }}</small>
             </div>
         </div>
         <div id="chat-messages">
@@ -354,27 +243,12 @@ TEMPLATE = """
         toggleBtn.onclick = () => {
             if (chatBox.style.display === 'none') {
                 chatBox.style.display = 'flex';
-                scrollToBottom();
                 input.focus();
             } else {
                 chatBox.style.display = 'none';
             }
         };
-
-        function scrollToBottom() {
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-        }
-
-        window.onload = () => {
-            chatBox.style.display = 'flex';
-            scrollToBottom();
-        };
+        chatMessages.scrollTop = chatMessages.scrollHeight;
     </script>
 </body>
 </html>
-"""
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
-
