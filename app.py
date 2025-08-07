@@ -105,7 +105,7 @@ def crear_evento_google_calendar(session, fecha_hora):
 
 @app.route('/')
 def home():
-    # Usuario puede chatear sin loguearse con Google
+    # Usuario puede chatear sin loguearse con Googlee
     if 'historial' not in session:
         session['historial'] = [{
             "role": "assistant",
@@ -373,4 +373,5 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
