@@ -4,6 +4,7 @@ from googleapiclient.discovery import build
 from google.oauth2 import service_account
 
 # Cargar las credenciales desde una variable de entorno
+# Asegúrate de que la variable de entorno 'GOOGLE_APPLICATION_CREDENTIALS' esté correctamente configurada
 service_account_info = json.loads(os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
 
 # Crear las credenciales de la cuenta de servicio
@@ -12,7 +13,7 @@ credentials = service_account.Credentials.from_service_account_info(service_acco
 # Crear el servicio de Google Calendar
 service = build('calendar', 'v3', credentials=credentials)
 
-# Datos del evento
+# Datos del evento (sin asistentes)
 event = {
     'summary': 'Reunión de trabajo',
     'location': 'Oficina de Ejemplo',
@@ -25,15 +26,14 @@ event = {
         'dateTime': '2025-08-07T10:00:00-07:00',  # Fecha y hora de finalización
         'timeZone': 'America/Los_Angeles',
     },
-    'attendees': [
-        {'email': 'correo@ejemplo.com'},
-    ],
     'reminders': {
         'useDefault': True,
     },
 }
 
 # Crear el evento en el calendario
-event_result = service.events().insert(calendarId='primary', body=event).execute()
-
-print(f"Evento creado: {event_result.get('htmlLink')}")
+try:
+    event_result = service.events().insert(calendarId='primary', body=event).execute()
+    print(f"Evento creado: {event_result.get('htmlLink')}")
+except Exception as e:
+    print(f"Error al crear el evento: {e}")
