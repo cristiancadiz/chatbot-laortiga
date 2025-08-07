@@ -1,4 +1,5 @@
 import os
+import json
 from flask import Flask, request, render_template_string
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -7,14 +8,26 @@ from datetime import timedelta
 import pytz
 
 app = Flask(__name__)
-app.secret_key = os.getenv('app.secret_key', 'clave_secreta_para_testing')
+app.secret_key = os.getenv('APP_SECRET_KEY', 'clave_secreta_para_testing')
 
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 
-# Ruta donde está guardado tu token.json con permisos de tu cuenta
+# Ruta temporal para guardar token.json
 TOKEN_PATH = 'token.json'
 
+def guardar_token_desde_env():
+    token_json_str = os.getenv('GOOGLE_TOKEN_JSON')
+    if not token_json_str:
+        raise Exception("La variable de entorno GOOGLE_TOKEN_JSON no está configurada.")
+    # Guarda el contenido en token.json
+    with open(TOKEN_PATH, 'w') as f:
+        f.write(token_json_str)
+
 def crear_evento_tu_calendario(fecha_hora, nombre_usuario, email_usuario=None):
+    # Asegura que token.json existe
+    if not os.path.exists(TOKEN_PATH):
+        guardar_token_desde_env()
+
     creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
     service = build('calendar', 'v3', credentials=creds)
 
@@ -169,5 +182,8 @@ TEMPLATE = """
 """
 
 if __name__ == '__main__':
+    # Guarda token.json la primera vez que arranca la app
+    guardar_token_desde_env()
+
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
