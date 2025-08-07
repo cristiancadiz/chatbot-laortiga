@@ -5,16 +5,24 @@ import dateparser
 from datetime import datetime, timedelta
 import pytz
 import os
+import json
 
 app = Flask(__name__)
 
-# Ruta al archivo JSON con credenciales de cuenta de servicio
-SERVICE_ACCOUNT_FILE = 'credenciales_calendar.json'  # ponlo en .gitignore
+# Scopes para Google Calendar API
 SCOPES = ['https://www.googleapis.com/auth/calendar']
-CALENDAR_ID = 'cristiancadiz987@gmailcom'  # el correo del calendario compartido
 
-credentials = service_account.Credentials.from_service_account_file(
-    SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+# ID del calendario (correo electrónico del calendario compartido)
+CALENDAR_ID = 'cristiancadiz987@gmail.com'  # Corrige el typo que tenías (faltaba el punto antes de com)
+
+# Cargar credenciales desde variable de entorno
+google_account_info = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+if not google_account_info:
+    raise Exception("La variable de entorno GOOGLE_SERVICE_ACCOUNT_JSON no está definida.")
+
+info = json.loads(google_account_info)
+
+credentials = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
 
 @app.route('/', methods=['GET', 'POST'])
 def home():
@@ -34,7 +42,7 @@ def crear_evento_y_enviar_invite(correo, fecha_texto):
     try:
         service = build('calendar', 'v3', credentials=credentials)
 
-        # Analiza la fecha
+        # Analiza la fecha con timezone America/Santiago
         zona = pytz.timezone("America/Santiago")
         inicio = dateparser.parse(
             fecha_texto,
@@ -79,7 +87,6 @@ def crear_evento_y_enviar_invite(correo, fecha_texto):
     except Exception as e:
         return f"❌ Error al crear el evento: {str(e)}"
 
-
 TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -105,4 +112,3 @@ TEMPLATE = """
 
 if __name__ == '__main__':
     app.run(debug=True)
-
