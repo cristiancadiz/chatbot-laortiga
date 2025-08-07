@@ -11,7 +11,3 @@ python-dotenv
 google-api-python-client
 dateparser
 pytz
-
-
-
-
