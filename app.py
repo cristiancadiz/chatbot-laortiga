@@ -1,118 +1,245 @@
-from flask import Flask, request, render_template_string
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-import dateparser
-from datetime import datetime, timedelta
-import pytz
 import os
-import json
+from flask import Flask, session, request, render_template_string
+import openai
+from datetime import timedelta, datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
+app.secret_key = os.getenv('app.secret_key')
+if not app.secret_key:
+    raise Exception("La variable de entorno SECRET_KEY no está configurada.")
+app.permanent_session_lifetime = timedelta(days=30)
 
-# Scopes para Google Calendar API
-SCOPES = ['https://www.googleapis.com/auth/calendar']
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+if not OPENAI_API_KEY:
+    raise Exception("La variable de entorno OPENAI_API_KEY no está configurada.")
 
-# ID del calendario (correo electrónico del calendario compartido)
-CALENDAR_ID = 'cristiancadiz987@gmail.com'  # Corrige el typo que tenías (faltaba el punto antes de com)
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-# Cargar credenciales desde variable de entorno
-google_account_info = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-if not google_account_info:
-    raise Exception("La variable de entorno GOOGLE_SERVICE_ACCOUNT_JSON no está definida.")
+# Establecer un valor por defecto para los mensajes de bienvenida
+def guardar_historial_en_archivo(historial):
+    carpeta = "conversaciones_guardadas"
+    os.makedirs(carpeta, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    ruta = f"{carpeta}/chat_{timestamp}.txt"
+    with open(ruta, "w", encoding="utf-8", errors="ignore") as f:
+        for m in historial:
+            rol = "Tú" if m['role'] == 'user' else "Bot"
+            f.write(f"{rol}: {m['content']}\n\n")
 
-info = json.loads(google_account_info)
-
-credentials = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
-
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/')
 def home():
-    mensaje = ""
+    # Usuario puede chatear sin loguearse
+    if 'historial' not in session:
+        session['historial'] = [{
+            "role": "assistant",
+            "content": "¡Hola! 👋 Bienvenido a LaOrtiga.cl, la vitrina verde de Chile 🌱. ¿En qué puedo ayudarte hoy?"
+        }]
+    return redirect(url_for('chat'))
+
+@app.route('/chat', methods=['GET', 'POST'])
+def chat():
+    if 'historial' not in session:
+        session['historial'] = [{
+            "role": "assistant",
+            "content": "¡Hola! 👋 Bienvenido a LaOrtiga.cl, la vitrina verde de Chile 🌱. ¿En qué puedo ayudarte hoy?"
+        }]
+
+    respuesta = ""
+
     if request.method == 'POST':
-        correo = request.form.get('correo')
-        fecha_texto = request.form.get('fecha')
+        pregunta = request.form['pregunta'].strip()
+        if pregunta:
+            session['historial'].append({"role": "user", "content": pregunta})
 
-        if not correo or not fecha_texto:
-            mensaje = "⚠️ Por favor completa ambos campos."
-        else:
-            mensaje = crear_evento_y_enviar_invite(correo, fecha_texto)
+            # Si el mensaje contiene palabras clave relacionadas con agendar
+            if any(p in pregunta.lower() for p in ['agendar', 'reserva', 'cita', 'calendar']):
+                respuesta = "¿Para qué día y hora quieres agendar? (por ejemplo: 'mañana a las 10')"
 
-    return render_template_string(TEMPLATE, mensaje=mensaje)
+            # Si el usuario proporciona una fecha y hora válida
+            elif dateparser.parse(pregunta):
+                respuesta = "¡Evento agendado correctamente! 🗓️"
 
-def crear_evento_y_enviar_invite(correo, fecha_texto):
-    try:
-        service = build('calendar', 'v3', credentials=credentials)
+            else:
+                # Llamada normal a OpenAI
+                mensajes = [
+                    {"role": "system", "content": "Eres un asistente conversacional de LaOrtiga.cl. Habla de forma amable, cercana y profesional. Solo responde preguntas sobre sostenibilidad, productos ecológicos o emprendimiento verde."}
+                ] + session['historial'][-10:]
 
-        # Analiza la fecha con timezone America/Santiago
-        zona = pytz.timezone("America/Santiago")
-        inicio = dateparser.parse(
-            fecha_texto,
-            settings={
-                'PREFER_DATES_FROM': 'future',
-                'RETURN_AS_TIMEZONE_AWARE': True,
-                'TIMEZONE': 'America/Santiago',
-                'TO_TIMEZONE': 'UTC',
-                'RELATIVE_BASE': datetime.now(zona)
-            }
-        )
+                completion = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=mensajes,
+                    max_tokens=200,
+                    temperature=0.7
+                )
+                respuesta = completion.choices[0].message.content.strip()
 
-        if not inicio:
-            return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10'."
+            session['historial'].append({"role": "assistant", "content": respuesta})
+            guardar_historial_en_archivo(session['historial'])
 
-        fin = inicio + timedelta(minutes=30)
-
-        evento = {
-            'summary': 'Consulta con LaOrtiga.cl',
-            'description': 'Reserva automatizada con Capitán Planeta 🌱',
-            'start': {
-                'dateTime': inicio.isoformat(),
-                'timeZone': 'America/Santiago',
-            },
-            'end': {
-                'dateTime': fin.isoformat(),
-                'timeZone': 'America/Santiago',
-            },
-            'attendees': [{'email': correo}],
-            'guestsCanModify': False,
-            'guestsCanInviteOthers': False,
-            'guestsCanSeeOtherGuests': False,
-            'reminders': {
-                'useDefault': True,
-            }
-        }
-
-        evento = service.events().insert(calendarId=CALENDAR_ID, body=evento, sendUpdates='all').execute()
-
-        return f"✅ Evento creado y enviado a <b>{correo}</b>. <a href='{evento.get('htmlLink')}' target='_blank'>Ver evento</a>"
-
-    except Exception as e:
-        return f"❌ Error al crear el evento: {str(e)}"
+    return render_template_string(TEMPLATE, historial=session['historial'])
 
 TEMPLATE = """
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
-    <title>Agendar cita - LaOrtiga</title>
-    <meta charset="UTF-8">
+    <meta charset="UTF-8" />
+    <title>Asistente La Ortiga</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+    <style>
+        /* tu CSS va aquí */
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #f4f9f4;
+            margin: 0;
+            padding: 0;
+        }
+        #chat-toggle-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            font-size: 2rem;
+            background: #2c7a2c;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            cursor: pointer;
+        }
+        #chat-container {
+            position: fixed;
+            bottom: 90px;
+            right: 20px;
+            width: 350px;
+            max-height: 500px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 0 12px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+        }
+        #chat-header {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            background: #2c7a2c;
+            color: white;
+            border-top-left-radius: 10px;
+            border-top-right-radius: 10px;
+        }
+        #chat-header img {
+            width: 40px;
+            height: 40px;
+            margin-right: 10px;
+        }
+        .name {
+            font-weight: 600;
+        }
+        #chat-messages {
+            flex-grow: 1;
+            padding: 10px;
+            overflow-y: auto;
+            background: #eaf3ea;
+        }
+        .msg {
+            margin-bottom: 10px;
+            padding: 8px 12px;
+            border-radius: 20px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+        .bot {
+            background: #2c7a2c;
+            color: white;
+            align-self: flex-start;
+        }
+        .user {
+            background: #a3d1a3;
+            color: #000;
+            align-self: flex-end;
+        }
+        #chat-input-form {
+            display: flex;
+            border-top: 1px solid #ccc;
+        }
+        #chat-input {
+            flex-grow: 1;
+            border: none;
+            padding: 10px;
+            font-size: 1rem;
+            border-bottom-left-radius: 10px;
+        }
+        #chat-send {
+            border: none;
+            background: #2c7a2c;
+            color: white;
+            padding: 0 20px;
+            cursor: pointer;
+            font-size: 1.2rem;
+            border-bottom-right-radius: 10px;
+        }
+    </style>
 </head>
 <body>
-    <h1>Reserva una consulta 🌱</h1>
-    <form method="POST">
-        <label>Tu correo:</label><br>
-        <input type="email" name="correo" required><br><br>
+    <button id="chat-toggle-btn">💬</button>
+    <div id="chat-container" style="display:flex;">
+        <div id="chat-header">
+            <img src="https://cdn-icons-png.flaticon.com/512/194/194938.png" alt="Asistente" />
+            <div>
+                <div class="name">Capitán Planeta</div>
+                <small style="font-size:12px;">Conectado como Invitado</small>
+            </div>
+        </div>
+        <div id="chat-messages">
+            {% for m in historial %}
+                <div class="msg {% if m.role == 'user' %}user{% else %}bot{% endif %}">{{ m.content | safe }}</div>
+            {% endfor %}
+        </div>
+        <form id="chat-input-form" method="POST">
+            <input
+                type="text"
+                id="chat-input"
+                name="pregunta"
+                placeholder="Escribe tu mensaje..."
+                autocomplete="off"
+                required
+            />
+            <button id="chat-send">➤</button>
+        </form>
+    </div>
+    <script>
+        const toggleBtn = document.getElementById('chat-toggle-btn');
+        const chatBox = document.getElementById('chat-container');
+        const chatMessages = document.getElementById('chat-messages');
+        const input = document.getElementById('chat-input');
 
-        <label>¿Cuándo quieres agendar?</label><br>
-        <input type="text" name="fecha" placeholder="Ej: mañana a las 10" required><br><br>
+        toggleBtn.onclick = () => {
+            if (chatBox.style.display === 'none') {
+                chatBox.style.display = 'flex';
+                scrollToBottom();
+                input.focus();
+            } else {
+                chatBox.style.display = 'none';
+            }
+        };
 
-        <button type="submit">Agendar</button>
-    </form>
-    <p>{{ mensaje | safe }}</p>
+        function scrollToBottom() {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        window.onload = () => {
+            chatBox.style.display = 'flex';
+            scrollToBottom();
+        };
+    </script>
 </body>
 </html>
 """
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)  # Especificando el puerto 8080, que es común en entornos de despliegue
-
-
-
-
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
