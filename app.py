@@ -26,7 +26,7 @@ def get_credentials_from_env():
     
     return creds
 
-# Función para crear el servicio de la API de Google Calendar
+# Función para crear el servicio de la API de Google Calendario
 def build_calendar_service(creds):
     """Construye el servicio de Google Calendar"""
     try:
@@ -151,3 +151,4 @@ def get_events():
 if __name__ == '__main__':
     # Ejecutar la app de Flask
     app.run(debug=True, host='0.0.0.0', port=5000)
+
