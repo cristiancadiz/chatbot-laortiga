@@ -11,7 +11,7 @@ app = Flask(__name__)
 # Ruta al archivo JSON con credenciales de cuenta de servicio
 SERVICE_ACCOUNT_FILE = 'credenciales_calendar.json'  # ponlo en .gitignore
 SCOPES = ['https://www.googleapis.com/auth/calendar']
-CALENDAR_ID = 'tucorreo@gmail.com'  # el correo del calendario compartido
+CALENDAR_ID = 'cristiancadiz987@gmailcom'  # el correo del calendario compartido
 
 credentials = service_account.Credentials.from_service_account_file(
     SERVICE_ACCOUNT_FILE, scopes=SCOPES)
@@ -105,3 +105,4 @@ TEMPLATE = """
 
 if __name__ == '__main__':
     app.run(debug=True)
+
