@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot Calendar Events</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        body {
+            background-color: #f5f5f5;
+            padding: 50px;
+        }
+        .container {
+            background-color: #fff;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #007bff;
+        }
+        .card {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1 class="text-center">Bienvenido al Chatbot de Eventos de Google Calendar</h1>
+        <p class="text-center">A continuación se listan los próximos eventos en tu calendario de Google:</p>
+        
+        <div id="events-container">
+            <!-- Los eventos se mostrarán aquí -->
+        </div>
+
+        <div class="text-center">
+            <button class="btn btn-primary" onclick="fetchEvents()">Obtener Eventos</button>
+        </div>
+    </div>
+
+    <script>
+        function fetchEvents() {
+            fetch('/events')
+                .then(response => response.json())
+                .then(data => {
+                    let eventsContainer = document.getElementById('events-container');
+                    eventsContainer.innerHTML = '';  // Limpiar cualquier evento anterior
+
+                    if (data.error) {
+                        eventsContainer.innerHTML = `<p class="text-danger">${data.error}</p>`;
+                    } else if (data.message) {
+                        eventsContainer.innerHTML = `<p class="text-info">${data.message}</p>`;
+                    } else {
+                        let eventsList = '<ul class="list-group">';
+                        data.forEach(event => {
+                            eventsList += `
+                                <li class="list-group-item">
+                                    <strong>${event.summary}</strong><br>
+                                    ${new Date(event.start.dateTime || event.start.date).toLocaleString()}<br>
+                                    <a href="${event.htmlLink}" target="_blank">Ver en Google Calendar</a>
+                                </li>
+                            `;
+                        });
+                        eventsList += '</ul>';
+                        eventsContainer.innerHTML = eventsList;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error al obtener eventos:', error);
+                    document.getElementById('events-container').innerHTML = `<p class="text-danger">Hubo un problema al obtener los eventos.</p>`;
+                });
+        }
+    </script>
+
+</body>
+</html>
+
