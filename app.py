@@ -1,38 +1,63 @@
 import os
 import json
-from flask import Flask, render_template_string
+from flask import Flask, request, render_template_string
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 
-# Crear la aplicación Flask
 app = Flask(__name__)
 
-# Página principal para crear el evento
+# Cargar las credenciales desde una variable de entorno
+service_account_info = json.loads(os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
+credentials = service_account.Credentials.from_service_account_info(service_account_info)
+
+# Crear el servicio de Google Calendar
+service = build('calendar', 'v3', credentials=credentials)
+
 @app.route('/')
+def home():
+    return '''
+        <form action="/create_event" method="post">
+            <label for="summary">Título del evento:</label><br>
+            <input type="text" id="summary" name="summary" required><br><br>
+
+            <label for="start_datetime">Fecha y hora de inicio (YYYY-MM-DD HH:MM):</label><br>
+            <input type="text" id="start_datetime" name="start_datetime" required><br><br>
+
+            <label for="end_datetime">Fecha y hora de fin (YYYY-MM-DD HH:MM):</label><br>
+            <input type="text" id="end_datetime" name="end_datetime" required><br><br>
+
+            <label for="attendee_email">Correo electrónico del asistente:</label><br>
+            <input type="email" id="attendee_email" name="attendee_email" required><br><br>
+
+            <input type="submit" value="Crear Evento">
+        </form>
+    '''
+
+@app.route('/create_event', methods=['POST'])
 def create_event():
     try:
-        # Cargar las credenciales desde una variable de entorno
-        service_account_info = json.loads(os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
+        # Obtener datos del formulario
+        summary = request.form['summary']
+        start_datetime = request.form['start_datetime']
+        end_datetime = request.form['end_datetime']
+        attendee_email = request.form['attendee_email']
 
-        # Crear las credenciales de la cuenta de servicio
-        credentials = service_account.Credentials.from_service_account_info(service_account_info)
-
-        # Crear el servicio de Google Calendar
-        service = build('calendar', 'v3', credentials=credentials)
-
-        # Datos del evento (sin asistentes)
+        # Convertir las fechas a formato datetime con zona horaria
         event = {
-            'summary': 'Reunión de trabajo',
-            'location': 'Oficina de Ejemplo',
-            'description': 'Discutir los detalles del proyecto.',
+            'summary': summary,
+            'location': 'En línea',
+            'description': 'Reunión programada.',
             'start': {
-                'dateTime': '2025-08-07T09:00:00-07:00',  # Fecha y hora de inicio
+                'dateTime': f'{start_datetime}:00-07:00',  # Usamos la zona horaria de Los Ángeles (-07:00)
                 'timeZone': 'America/Los_Angeles',
             },
             'end': {
-                'dateTime': '2025-08-07T10:00:00-07:00',  # Fecha y hora de finalización
+                'dateTime': f'{end_datetime}:00-07:00',
                 'timeZone': 'America/Los_Angeles',
             },
+            'attendees': [
+                {'email': attendee_email},
+            ],
             'reminders': {
                 'useDefault': True,
             },
@@ -40,107 +65,16 @@ def create_event():
 
         # Crear el evento en el calendario
         event_result = service.events().insert(calendarId='primary', body=event).execute()
-        event_url = event_result.get('htmlLink')
 
-        # HTML para mostrar el evento creado
-        html_content = '''
-        <!DOCTYPE html>
-        <html lang="es">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Calendario - Crear Evento</title>
-            <style>
-                body {
-                    font-family: Arial, sans-serif;
-                    background-color: #f4f4f4;
-                    margin: 0;
-                    padding: 0;
-                }
-                .container {
-                    width: 80%;
-                    margin: 50px auto;
-                    background-color: #fff;
-                    padding: 20px;
-                    border-radius: 8px;
-                    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-                }
-                h1 {
-                    text-align: center;
-                    color: #333;
-                }
-                a {
-                    display: block;
-                    margin-top: 20px;
-                    text-align: center;
-                    color: #007bff;
-                    text-decoration: none;
-                }
-                a:hover {
-                    text-decoration: underline;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>Evento de Google Calendar</h1>
-                <p>¡El evento ha sido creado con éxito!</p>
-                <p>Puede ver el evento en su calendario haciendo clic en el siguiente enlace:</p>
-                <a href="{{ event_url }}" target="_blank">Ver evento en Google Calendar</a>
-            </div>
-        </body>
-        </html>
+        # Responder con el enlace del evento creado
+        return f'''
+            ¡El evento ha sido creado con éxito!<br>
+            Puede ver el evento en su calendario haciendo clic en el siguiente enlace:<br>
+            <a href="{event_result.get('htmlLink')}" target="_blank">Ver evento en Google Calendar</a>
         '''
-
-        return render_template_string(html_content, event_url=event_url)
 
     except Exception as e:
-        error_message = str(e)
-        # HTML para mostrar el error
-        error_html_content = f'''
-        <!DOCTYPE html>
-        <html lang="es">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Error al crear evento</title>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    background-color: #f4f4f4;
-                    margin: 0;
-                    padding: 0;
-                }}
-                .container {{
-                    width: 80%;
-                    margin: 50px auto;
-                    background-color: #fff;
-                    padding: 20px;
-                    border-radius: 8px;
-                    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-                }}
-                h1 {{
-                    text-align: center;
-                    color: #333;
-                }}
-                p {{
-                    color: red;
-                    text-align: center;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>Error al crear el evento</h1>
-                <p>{error_message}</p>
-            </div>
-        </body>
-        </html>
-        '''
-
-        return render_template_string(error_html_content)
-
+        return f"Hubo un error al crear el evento: {e}"
 
 if __name__ == '__main__':
-    # Asegurarse de que se use el puerto proporcionado por Render
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+    app.run(debug=True)
