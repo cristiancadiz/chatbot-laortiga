@@ -29,7 +29,7 @@ if not OPENAI_API_KEY:
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-REDIRECT_URI = "https://chatbot-laortiga-3-zvsx.onrender.com/callback"
+REDIRECT_URI = "https://chatbot-laortiga-9.onrender.com/callback"
 
 SCOPES = [
     "openid",
@@ -63,49 +63,53 @@ def guardar_historial_en_archivo(historial):
             rol = "Tú" if m['role'] == 'user' else "Bot"
             f.write(f"{rol}: {m['content']}\n\n")
 
-import pytz
+
 
 def crear_evento_google_calendar(session, fecha_hora):
     if 'credentials' not in session:
         return "No tengo permisos para acceder a tu calendario."
 
-    # Parseamos la fecha con dateparser
-    parsed_dt = dateparser.parse(
+    creds = Credentials(**session['credentials'])
+    service = build('calendar', 'v3', credentials=creds)
+
+    # Analiza la fecha/hora con zona horaria incluida
+    inicio = dateparser.parse(
         fecha_hora,
         settings={
             "PREFER_DATES_FROM": "future",
+            "RETURN_AS_TIMEZONE_AWARE": True,
             "TIMEZONE": "America/Santiago",
-            "RETURN_AS_TIMEZONE_AWARE": False,
+            "TO_TIMEZONE": "America/Santiago",
             "RELATIVE_BASE": datetime.now(pytz.timezone("America/Santiago"))
         }
     )
 
-    if not parsed_dt:
+    if not inicio:
         return "⚠️ No pude entender la fecha y hora. Intenta con algo como: 'mañana a las 10' o 'el jueves a las 4pm'."
 
-    # Forzamos que parsed_dt sea en Chile
-    tz = pytz.timezone("America/Santiago")
-    inicio = tz.localize(parsed_dt)
-
     fin = inicio + timedelta(minutes=30)
-
-    creds = Credentials(**session['credentials'])
-    service = build('calendar', 'v3', credentials=creds)
 
     evento = {
         'summary': 'Consulta con LaOrtiga.cl',
         'description': 'Reserva automatizada con Capitán Planeta 🌱',
-        'start': {'dateTime': inicio.isoformat(), 'timeZone': 'America/Santiago'},
-        'end': {'dateTime': fin.isoformat(), 'timeZone': 'America/Santiago'},
+        'start': {
+            'dateTime': inicio.isoformat(),
+            'timeZone': 'America/Santiago'
+        },
+        'end': {
+            'dateTime': fin.isoformat(),
+            'timeZone': 'America/Santiago'
+        },
     }
 
     evento = service.events().insert(calendarId='primary', body=evento).execute()
     return f"✅ Evento creado: <a href=\"{evento.get('htmlLink')}\" target=\"_blank\">Ver en tu calendario</a>"
 
 
+
 @app.route('/')
 def home():
-    # Usuario puede chatear sin loguearse con Googlee
+    # Usuario puede chatear sin loguearse con Google
     if 'historial' not in session:
         session['historial'] = [{
             "role": "assistant",
@@ -373,6 +377,8 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
+
 
 
 
