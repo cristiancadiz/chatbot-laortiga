@@ -29,7 +29,7 @@ if not OPENAI_API_KEY:
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-REDIRECT_URI = "https://chatbot-laortiga-cug6.onrender.com/callback"
+REDIRECT_URI = "https://chatbot-laortiga-4-1f9i.onrender.com/callback"
 
 SCOPES = [
     "openid",
@@ -376,6 +376,7 @@ TEMPLATE = """
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
