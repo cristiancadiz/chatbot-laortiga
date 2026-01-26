@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from flask import Flask, redirect, url_for, session, request, render_template_string, abort
 from google.oauth2 import id_token
@@ -11,7 +12,6 @@ import openai
 from dotenv import load_dotenv
 import dateparser
 import pytz
-
 
 load_dotenv()
 
@@ -47,7 +47,7 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
     raise Exception("Faltan GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET en variables de entorno.")
 
-REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "https://chatbot-laortiga-4-1f9i.onrender.com/callback")
+REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "https://chatbot-laortiga-9.onrender.com/callback")
 
 SCOPES = [
     "openid",
@@ -75,7 +75,7 @@ flow = Flow.from_client_config(
 # WhatsApp Cloud API (TEST)
 # =========================
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
-WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")  # tu 884166571456836
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")  # ej: 884166571456836
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
 
 if not WHATSAPP_TOKEN or not WHATSAPP_PHONE_NUMBER_ID or not WHATSAPP_VERIFY_TOKEN:
@@ -83,6 +83,25 @@ if not WHATSAPP_TOKEN or not WHATSAPP_PHONE_NUMBER_ID or not WHATSAPP_VERIFY_TOK
 
 # Sesiones simples en memoria para WhatsApp (en Render se reinicia si redeploy)
 WA_SESSIONS = {}
+
+# Deduplicación simple (en memoria) por message_id
+PROCESSED_MSG_IDS = {}
+DEDUP_TTL_SECONDS = 120
+
+
+def _dedup_seen(msg_id: str) -> bool:
+    """Retorna True si ya procesamos ese message_id recientemente."""
+    if not msg_id:
+        return False
+    now = time.time()
+    # limpia antiguos
+    for k in list(PROCESSED_MSG_IDS.keys()):
+        if now - PROCESSED_MSG_IDS[k] > DEDUP_TTL_SECONDS:
+            del PROCESSED_MSG_IDS[k]
+    if msg_id in PROCESSED_MSG_IDS:
+        return True
+    PROCESSED_MSG_IDS[msg_id] = now
+    return False
 
 
 def wa_send_text(to_number: str, text: str):
@@ -105,10 +124,16 @@ def wa_send_text(to_number: str, text: str):
         "type": "text",
         "text": {"body": (text or "")[:3900]},
     }
-    r = requests.post(url, headers=headers, json=payload, timeout=20)
-    if r.status_code >= 300:
-        print("❌ Error WA:", r.status_code, r.text)
-    return r
+
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=20)
+        print("📤 WA SEND:", r.status_code, r.text[:500])
+        if r.status_code >= 300:
+            print("❌ Error WA:", r.status_code, r.text)
+        return r
+    except Exception as e:
+        print("❌ Exception WA SEND:", str(e))
+        return None
 
 
 def get_wa_session(wa_id: str):
@@ -161,9 +186,6 @@ def parse_fecha_hora(texto: str):
 
 
 def crear_evento_google_calendar(fecha_hora_texto: str):
-    """
-    Crea evento en Calendar usando session['credentials'] del chat web.
-    """
     if "credentials" not in session:
         return "No tengo permisos para acceder a tu calendario."
 
@@ -191,26 +213,30 @@ def crear_evento_google_calendar(fecha_hora_texto: str):
 
 
 def responder_openai(historial, pregunta: str) -> str:
-    mensajes = [
-        {
-            "role": "system",
-            "content": (
-                "Eres un asistente conversacional de LaOrtiga.cl. "
-                "Habla de forma amable, cercana y profesional (español de Chile). "
-                "Solo responde preguntas sobre sostenibilidad, productos ecológicos o emprendimiento verde."
-            ),
-        }
-    ] + (historial[-10:] if historial else [])
+    try:
+        mensajes = [
+            {
+                "role": "system",
+                "content": (
+                    "Eres un asistente conversacional de LaOrtiga.cl. "
+                    "Habla de forma amable, cercana y profesional (español de Chile). "
+                    "Solo responde preguntas sobre sostenibilidad, productos ecológicos o emprendimiento verde."
+                ),
+            }
+        ] + (historial[-10:] if historial else [])
 
-    mensajes.append({"role": "user", "content": pregunta})
+        mensajes.append({"role": "user", "content": pregunta})
 
-    completion = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=mensajes,
-        max_tokens=240,
-        temperature=0.7,
-    )
-    return (completion.choices[0].message.content or "").strip()
+        completion = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=mensajes,
+            max_tokens=240,
+            temperature=0.7,
+        )
+        return (completion.choices[0].message.content or "").strip()
+    except Exception as e:
+        print("❌ OpenAI error:", str(e))
+        return "Ups, tuve un problema técnico 😅. ¿Me lo repites?"
 
 
 # =========================
@@ -240,7 +266,6 @@ def login():
 
 @app.route("/callback")
 def callback():
-    # OJO: Flow maneja parte del state, pero dejamos sesión igual
     if "state" not in session:
         abort(400)
 
@@ -251,7 +276,6 @@ def callback():
 
     credentials = flow.credentials
 
-    # Guardar credenciales en session (cookie). Para producción real: DB/Redis.
     session["credentials"] = {
         "token": credentials.token,
         "refresh_token": credentials.refresh_token,
@@ -262,11 +286,14 @@ def callback():
     }
 
     request_session = grequests.Request()
+    idinfo = {}
     try:
-        # Nota: dependiendo versiones, id_token puede venir en credentials.id_token
-        idinfo = id_token.verify_oauth2_token(credentials._id_token, request_session, GOOGLE_CLIENT_ID)
-    except Exception:
-        # fallback: no bloqueamos el chat
+        # más robusto que _id_token
+        tok = getattr(credentials, "id_token", None) or getattr(credentials, "_id_token", None)
+        if tok:
+            idinfo = id_token.verify_oauth2_token(tok, request_session, GOOGLE_CLIENT_ID)
+    except Exception as e:
+        print("⚠️ No pude verificar id_token:", str(e))
         idinfo = {}
 
     session["google_id"] = idinfo.get("sub")
@@ -299,7 +326,6 @@ def chat():
         if pregunta:
             session["historial"].append({"role": "user", "content": pregunta})
 
-            # 1) Si el usuario pide agendar → activar modo
             if es_intencion_agendar(pregunta):
                 if "credentials" not in session:
                     respuesta = "Para agendar necesito que te autentiques con Google. Haz click acá: /login"
@@ -307,7 +333,6 @@ def chat():
                     session["modo_agendar"] = True
                     respuesta = "Perfecto. ¿Para qué día y hora quieres agendar? (ej: 'mañana a las 10')"
 
-            # 2) Si estamos en modo agendar, tratamos de parsear fecha/hora
             elif session.get("modo_agendar") and "credentials" in session:
                 inicio = parse_fecha_hora(pregunta)
                 if not inicio:
@@ -316,7 +341,6 @@ def chat():
                     respuesta = crear_evento_google_calendar(pregunta)
                     session["modo_agendar"] = False
 
-            # 3) Normal: OpenAI
             else:
                 respuesta = responder_openai(session["historial"], pregunta)
 
@@ -343,19 +367,34 @@ def whatsapp_verify():
 @app.route("/whatsapp/webhook", methods=["POST"])
 def whatsapp_webhook():
     data = request.get_json(silent=True) or {}
+    print("📩 WA IN RAW:", str(data)[:800])
 
     try:
         entry = (data.get("entry") or [])[0]
         changes = (entry.get("changes") or [])[0]
         value = changes.get("value") or {}
 
+        # Si es status update, no respondemos
+        if value.get("statuses"):
+            print("🟡 WA: status update (no reply)")
+            return "ok", 200
+
         messages = value.get("messages") or []
         if not messages:
+            print("🟡 WA: no messages")
             return "ok", 200
 
         msg = messages[0]
-        wa_id = msg.get("from")  # ej: "569XXXXXXX"
-        text = (msg.get("text") or {}).get("body", "")
+        msg_id = msg.get("id")
+        wa_id = msg.get("from")
+        text = (msg.get("text") or {}).get("body", "").strip()
+
+        print("📩 WA IN PARSED:", {"id": msg_id, "from": wa_id, "text": text})
+
+        # Dedup por message id (Meta puede reenviar)
+        if _dedup_seen(msg_id):
+            print("🟡 WA: duplicate message_id, ignored:", msg_id)
+            return "ok", 200
 
         if not wa_id or not text:
             return "ok", 200
@@ -363,11 +402,10 @@ def whatsapp_webhook():
         s = get_wa_session(wa_id)
         s["historial"].append({"role": "user", "content": text})
 
-        # WhatsApp: si piden agendar, mandamos al web (porque OAuth vive ahí)
         if es_intencion_agendar(text):
             respuesta = (
                 "Para agendar en tu Google Calendar necesito que inicies sesión desde el chat web.\n"
-                "Entra a: https://chatbot-laortiga-4-1f9i.onrender.com\n"
+                "Entra a: https://chatbot-laortiga-9.onrender.com\n"
                 "y escribe: agendar"
             )
         else:
@@ -383,7 +421,7 @@ def whatsapp_webhook():
 
 
 # =========================
-# Template (sin |safe para evitar XSS)
+# Template (escape)
 # =========================
 TEMPLATE = """
 <!DOCTYPE html>
@@ -412,20 +450,14 @@ TEMPLATE = """
     #chat-header img { width: 40px; height: 40px; margin-right: 10px; }
     .name { font-weight: 600; }
     #chat-messages { flex-grow: 1; padding: 10px; overflow-y: auto; background: #eaf3ea; }
-    .msg {
-      margin-bottom: 10px; padding: 8px 12px; border-radius: 20px; max-width: 80%;
-      word-wrap: break-word; white-space: pre-wrap;
-    }
+    .msg { margin-bottom: 10px; padding: 8px 12px; border-radius: 20px; max-width: 80%;
+      word-wrap: break-word; white-space: pre-wrap; }
     .bot { background: #2c7a2c; color: white; align-self: flex-start; }
     .user { background: #a3d1a3; color: #000; align-self: flex-end; }
     #chat-input-form { display: flex; border-top: 1px solid #ccc; }
-    #chat-input {
-      flex-grow: 1; border: none; padding: 10px; font-size: 1rem; border-bottom-left-radius: 10px;
-    }
-    #chat-send {
-      border: none; background: #2c7a2c; color: white; padding: 0 20px; cursor: pointer;
-      font-size: 1.2rem; border-bottom-right-radius: 10px;
-    }
+    #chat-input { flex-grow: 1; border: none; padding: 10px; font-size: 1rem; border-bottom-left-radius: 10px; }
+    #chat-send { border: none; background: #2c7a2c; color: white; padding: 0 20px; cursor: pointer;
+      font-size: 1.2rem; border-bottom-right-radius: 10px; }
   </style>
 </head>
 <body>
@@ -485,4 +517,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     debug = os.getenv("FLASK_ENV") == "development"
     app.run(host="0.0.0.0", port=port, debug=debug)
-
