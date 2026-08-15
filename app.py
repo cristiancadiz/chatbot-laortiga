@@ -13,7 +13,6 @@ from flask import (
     session,
     request,
     render_template_string,
-    abort,
 )
 
 from datetime import timedelta, datetime
@@ -35,19 +34,30 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY")
 
 if not app.secret_key:
-    raise Exception("Falta SECRET_KEY en las variables de entorno.")
+    raise Exception(
+        "Falta SECRET_KEY en las variables de entorno."
+    )
 
 app.permanent_session_lifetime = timedelta(days=30)
 
+
 # ============================================================
-# IMPORTANTE PARA RENDER
-#
-# Render trabaja con HTTPS.
-# NO activar OAUTHLIB_INSECURE_TRANSPORT en producción.
+# PROXY / HTTPS - RENDER
 # ============================================================
 
-if os.getenv("FLASK_ENV") == "development":
-    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+# Render termina HTTPS delante de Flask.
+# Esta configuración permite que Flask reconozca
+# correctamente el esquema HTTPS original.
+
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+app.wsgi_app = ProxyFix(
+    app.wsgi_app,
+    x_for=1,
+    x_proto=1,
+    x_host=1,
+    x_port=1,
+)
 
 
 # ============================================================
@@ -57,7 +67,9 @@ if os.getenv("FLASK_ENV") == "development":
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not OPENAI_API_KEY:
-    raise Exception("Falta OPENAI_API_KEY.")
+    raise Exception(
+        "Falta OPENAI_API_KEY."
+    )
 
 client = openai.OpenAI(
     api_key=OPENAI_API_KEY
@@ -149,7 +161,6 @@ GOOGLE_REFRESH_TOKEN = os.getenv(
     "GOOGLE_REFRESH_TOKEN"
 )
 
-# ESTA DEBE SER EXACTAMENTE LA MISMA URL CONFIGURADA EN GOOGLE
 GOOGLE_REDIRECT_URI = os.getenv(
     "GOOGLE_REDIRECT_URI",
     "https://chatbot-laortiga-9.onrender.com/callback"
@@ -178,7 +189,7 @@ SCOPES = [
 
 def crear_google_flow():
 
-    return Flow.from_client_config(
+    flow = Flow.from_client_config(
 
         {
             "web": {
@@ -203,9 +214,10 @@ def crear_google_flow():
 
         scopes=SCOPES,
 
-        redirect_uri=
-            GOOGLE_REDIRECT_URI
+        redirect_uri=GOOGLE_REDIRECT_URI
     )
+
+    return flow
 
 
 # ============================================================
@@ -990,10 +1002,6 @@ def procesar_reserva(
     ).strip()
 
 
-    # --------------------------------------------------------
-    # SERVICIO
-    # --------------------------------------------------------
-
     if not datos["servicio"]:
 
         servicio = detectar_servicio(
@@ -1025,10 +1033,6 @@ def procesar_reserva(
             "• Perfilado"
         )
 
-
-    # --------------------------------------------------------
-    # FECHA
-    # --------------------------------------------------------
 
     if not datos["fecha_hora"]:
 
@@ -1116,10 +1120,6 @@ def procesar_reserva(
         )
 
 
-    # --------------------------------------------------------
-    # NOMBRE
-    # --------------------------------------------------------
-
     if not datos["nombre"]:
 
         if len(texto) < 2:
@@ -1138,18 +1138,10 @@ def procesar_reserva(
         )
 
 
-    # --------------------------------------------------------
-    # TELÉFONO
-    # --------------------------------------------------------
-
     if not datos["telefono"]:
 
         datos["telefono"] = texto
 
-
-    # --------------------------------------------------------
-    # CREAR RESERVA
-    # --------------------------------------------------------
 
     inicio = datetime.fromisoformat(
         datos["fecha_hora"]
@@ -1627,9 +1619,7 @@ def whatsapp_webhook():
 
 
 # ============================================================
-# ============================================================
 # GOOGLE AUTH
-# ============================================================
 # ============================================================
 
 @app.route(
@@ -1637,62 +1627,109 @@ def whatsapp_webhook():
 )
 def admin_login():
 
-    # Creamos un FLOW NUEVO en cada solicitud.
-    flow = crear_google_flow()
+    try:
 
-    # Google recomienda authorization_code.
-    #
-    # access_type=offline es fundamental
-    # para recibir refresh_token.
-    #
-    # prompt=consent fuerza a Google a
-    # volver a entregar refresh_token.
+        # ----------------------------------------------------
+        # Criar novo Flow
+        # ----------------------------------------------------
 
-    authorization_url, state = (
-        flow.authorization_url(
+        flow = crear_google_flow()
 
-            access_type="offline",
+        # ----------------------------------------------------
+        # Criar URL OAuth
+        #
+        # IMPORTANTE:
+        # authorization_url() gera o code_verifier
+        # quando PKCE está habilitado.
+        # ----------------------------------------------------
 
-            include_granted_scopes="true",
+        authorization_url, state = (
+            flow.authorization_url(
 
-            prompt="consent",
+                access_type="offline",
 
-            state=secrets.token_urlsafe(32),
+                include_granted_scopes="true",
+
+                prompt="consent"
+            )
         )
-    )
 
+        # ----------------------------------------------------
+        # GUARDAR STATE
+        # ----------------------------------------------------
 
-    # Guardamos solamente información mínima
-    # y NO dependemos de oauth_state para
-    # validar el callback.
+        session.permanent = True
 
-    session.permanent = True
+        session[
+            "google_oauth_state"
+        ] = state
 
-    session[
-        "google_oauth_state"
-    ] = state
+        # ----------------------------------------------------
+        # GUARDAR CODE VERIFIER
+        #
+        # ESTE É O PONTO PRINCIPAL DA CORREÇÃO.
+        # ----------------------------------------------------
 
-    session.modified = True
+        session[
+            "google_code_verifier"
+        ] = flow.code_verifier
 
+        session.modified = True
 
-    print(
-        "GOOGLE AUTH STATE:",
-        state
-    )
+        print(
+            "========================================"
+        )
 
-    print(
-        "REDIRECT URI:",
-        GOOGLE_REDIRECT_URI
-    )
+        print(
+            "GOOGLE OAUTH INICIADO"
+        )
 
+        print(
+            "STATE:",
+            state
+        )
 
-    return redirect(
-        authorization_url
-    )
+        print(
+            "CODE VERIFIER:",
+            "GUARDADO"
+            if flow.code_verifier
+            else "NÃO GERADO"
+        )
+
+        print(
+            "REDIRECT URI:",
+            GOOGLE_REDIRECT_URI
+        )
+
+        print(
+            "========================================"
+        )
+
+        return redirect(
+            authorization_url
+        )
+
+    except Exception as e:
+
+        print(
+            "GOOGLE LOGIN ERROR:",
+            repr(e)
+        )
+
+        return render_template_string(
+
+            ERROR_TEMPLATE,
+
+            titulo=
+                "Erro iniciando Google OAuth",
+
+            mensaje=
+                str(e)
+        )
 
 
 # ============================================================
-# CALLBACK
+# CALLBACK GOOGLE
 # ============================================================
 
 @app.route(
@@ -1739,49 +1776,98 @@ def callback():
     try:
 
         # ====================================================
-        # IMPORTANTE
-        #
-        # NO usamos el objeto Flow anterior.
-        # Creamos uno NUEVO.
-        #
-        # Esto evita problemas de:
-        #
-        # invalid_grant
-        # Missing code verifier
-        #
-        # ====================================================
-
-        flow = crear_google_flow()
-
-
-        # ====================================================
-        # Recuperamos state
+        # RECUPERAR DATOS DE LA SESIÓN
         # ====================================================
 
         state = session.get(
             "google_oauth_state"
         )
 
+        code_verifier = session.get(
+            "google_code_verifier"
+        )
 
-        # Si Render perdió la cookie de sesión,
-        # todavía podemos continuar porque Google
-        # ya nos devolvió el code.
-        #
-        # El state se utiliza para iniciar el flujo,
-        # pero no bloquearemos la autorización por
-        # una sesión perdida.
 
-        if state:
+        print(
+            "========================================"
+        )
 
-            flow.state = state
+        print(
+            "GOOGLE OAUTH CALLBACK"
+        )
+
+        print(
+            "STATE SESSION:",
+            bool(state)
+        )
+
+        print(
+            "CODE VERIFIER SESSION:",
+            bool(code_verifier)
+        )
+
+        print(
+            "REQUEST URL:",
+            request.url
+        )
+
+        print(
+            "========================================"
+        )
 
 
         # ====================================================
-        # AQUÍ ESTÁ LA PARTE CLAVE
+        # SI SE PERDIÓ LA SESIÓN
+        # ====================================================
+
+        if not state:
+
+            raise Exception(
+
+                "Se perdió la sesión OAuth "
+                "antes del callback. "
+                "Vuelve a iniciar desde /admin/login."
+            )
+
+
+        if not code_verifier:
+
+            raise Exception(
+
+                "Se perdió el code_verifier OAuth "
+                "antes del callback. "
+                "Vuelve a iniciar desde /admin/login."
+            )
+
+
+        # ====================================================
+        # CREAR NUEVO FLOW
+        # ====================================================
+
+        flow = crear_google_flow()
+
+
+        # ====================================================
+        # RESTAURAR STATE
+        # ====================================================
+
+        flow.state = state
+
+
+        # ====================================================
+        # RESTAURAR CODE VERIFIER
         #
-        # Construimos manualmente la URL de callback
-        # usando HTTPS.
+        # ESTE ES EL CAMBIO FUNDAMENTAL.
+        # ====================================================
+
+        flow.code_verifier = code_verifier
+
+
+        # ====================================================
+        # CONSTRUIR AUTHORIZATION RESPONSE
         #
+        # request.url ya viene de Render por HTTPS.
+        # ProxyFix permite que Flask lo reconozca.
         # ====================================================
 
         authorization_response = request.url
@@ -1792,20 +1878,15 @@ def callback():
         ):
 
             authorization_response = (
+
                 "https://"
                 + request.host
                 + request.full_path
             )
 
 
-        print(
-            "AUTHORIZATION RESPONSE:",
-            authorization_response
-        )
-
-
         # ====================================================
-        # INTERCAMBIO CODE -> TOKENS
+        # INTERCAMBIAR CODE POR TOKENS
         # ====================================================
 
         flow.fetch_token(
@@ -1842,15 +1923,31 @@ def callback():
                 mensaje=
                     (
                         "Google autorizó la aplicación, "
-                        "pero no entregó refresh_token. "
-                        "Vuelve a /admin/login usando "
-                        "prompt=consent."
+                        "pero no entregó refresh_token.\n\n"
+                        "Vuelve a /admin/login."
                     )
             )
 
 
         # ====================================================
-        # MOSTRAR TOKEN
+        # LIMPIAR DATOS OAUTH DE SESIÓN
+        # ====================================================
+
+        session.pop(
+            "google_oauth_state",
+            None
+        )
+
+        session.pop(
+            "google_code_verifier",
+            None
+        )
+
+        session.modified = True
+
+
+        # ====================================================
+        # MOSTRAR REFRESH TOKEN
         # ====================================================
 
         return render_template_string(
@@ -1865,8 +1962,19 @@ def callback():
     except Exception as e:
 
         print(
-            "GOOGLE CALLBACK ERROR:",
+            "========================================"
+        )
+
+        print(
+            "GOOGLE CALLBACK ERROR"
+        )
+
+        print(
             repr(e)
+        )
+
+        print(
+            "========================================"
         )
 
         return render_template_string(
