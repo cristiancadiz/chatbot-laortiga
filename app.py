@@ -37,9 +37,7 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY")
 
 if not app.secret_key:
-    raise Exception(
-        "Falta SECRET_KEY en las variables de entorno."
-    )
+    raise Exception("Falta SECRET_KEY en Render.")
 
 app.permanent_session_lifetime = timedelta(days=30)
 
@@ -56,14 +54,10 @@ app.wsgi_app = ProxyFix(
 # OPENAI
 # ============================================================
 
-OPENAI_API_KEY = os.getenv(
-    "OPENAI_API_KEY"
-)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not OPENAI_API_KEY:
-    raise Exception(
-        "Falta OPENAI_API_KEY."
-    )
+    raise Exception("Falta OPENAI_API_KEY.")
 
 client = openai.OpenAI(
     api_key=OPENAI_API_KEY
@@ -150,10 +144,6 @@ def inicializar_base_datos():
 
         cur = conn.cursor()
 
-        # ====================================================
-        # CONVERSACIONES
-        # ====================================================
-
         cur.execute("""
             CREATE TABLE IF NOT EXISTS conversaciones (
                 id UUID PRIMARY KEY,
@@ -170,10 +160,6 @@ def inicializar_base_datos():
                 actualizada_en TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             );
         """)
-
-        # ====================================================
-        # MENSAJES
-        # ====================================================
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS mensajes (
@@ -206,9 +192,7 @@ def inicializar_base_datos():
 
         cur.close()
 
-        print(
-            "POSTGRESQL: tablas listas."
-        )
+        print("POSTGRESQL: tablas listas.")
 
     except Exception as e:
 
@@ -985,9 +969,7 @@ def verificar_disponibilidad(
 
         fin = (
             inicio
-            + timedelta(
-                minutes=duracion
-            )
+            + timedelta(minutes=duracion)
         )
 
         limite = inicio.replace(
@@ -1010,7 +992,6 @@ def verificar_disponibilidad(
             .freebusy()
             .query(
                 body={
-
                     "timeMin":
                         inicio.isoformat(),
 
@@ -1018,7 +999,6 @@ def verificar_disponibilidad(
                         fin.isoformat(),
 
                     "items": [
-
                         {
                             "id":
                                 CALENDAR_ID
@@ -1141,8 +1121,34 @@ def formatear_opciones_horas(
     )
 
 
+def mostrar_proximas_horas():
+
+    horas = (
+        buscar_proximas_10_horas()
+    )
+
+    if not horas:
+
+        return (
+            "No encontré horas disponibles "
+            "en los próximos días 😕."
+        )
+
+    return (
+        "Estas son las próximas 10 horas "
+        "disponibles:\n\n"
+
+        f"{formatear_opciones_horas(horas)}"
+
+        "\n\n"
+
+        "Respóndeme con el número de la hora "
+        "que prefieras, del 1 al 10."
+    )
+
+
 # ============================================================
-# GOOGLE EVENT + MEET
+# GOOGLE EVENT + MEET + INVITACIÓN
 # ============================================================
 
 def crear_evento_diego(
@@ -1469,7 +1475,6 @@ hacia los servicios o la reserva.
             }
         ]
 
-        # No duplicar mensajes.
         for mensaje in historial[-12:]:
 
             if (
@@ -1506,7 +1511,6 @@ hacia los servicios o la reserva.
                 "content":
                     pregunta
             })
-
 
         completion = (
             client
@@ -1545,10 +1549,6 @@ hacia los servicios o la reserva.
             "OPENAI ERROR:",
             repr(e)
         )
-
-    # --------------------------------------------------------
-    # FALLBACK
-    # --------------------------------------------------------
 
     texto = normalizar_texto(
         pregunta
@@ -1605,7 +1605,7 @@ hacia los servicios o la reserva.
 
 
 # ============================================================
-# ESTADO RESERVA
+# ESTADO DE RESERVA
 # ============================================================
 
 def resetear_reserva(
@@ -1666,10 +1666,6 @@ def procesar_agenda(
         estado["datos_reserva"]
     )
 
-
-    # ========================================================
-    # CANCELACIÓN
-    # ========================================================
 
     if usuario_no_quiere(
         texto
@@ -2263,18 +2259,6 @@ def completar_reserva(
 # WHATSAPP
 # ============================================================
 
-WHATSAPP_TOKEN = os.getenv(
-    "WHATSAPP_TOKEN"
-)
-
-WHATSAPP_PHONE_NUMBER_ID = os.getenv(
-    "WHATSAPP_PHONE_NUMBER_ID"
-)
-
-WHATSAPP_VERIFY_TOKEN = os.getenv(
-    "WHATSAPP_VERIFY_TOKEN"
-)
-
 WA_SESSIONS = {}
 
 PROCESSED_MSG_IDS = {}
@@ -2337,6 +2321,19 @@ def get_wa_session(
     ]
 
 
+WHATSAPP_TOKEN = os.getenv(
+    "WHATSAPP_TOKEN"
+)
+
+WHATSAPP_PHONE_NUMBER_ID = os.getenv(
+    "WHATSAPP_PHONE_NUMBER_ID"
+)
+
+WHATSAPP_VERIFY_TOKEN = os.getenv(
+    "WHATSAPP_VERIFY_TOKEN"
+)
+
+
 def wa_send_text(
     to_number,
     text
@@ -2355,6 +2352,7 @@ def wa_send_text(
     )
 
     headers = {
+
         "Authorization":
             f"Bearer {WHATSAPP_TOKEN}",
 
@@ -2382,17 +2380,24 @@ def wa_send_text(
 
     try:
 
-        return requests.post(
+        response = requests.post(
             url,
             headers=headers,
             json=payload,
             timeout=20
         )
 
+        print(
+            "WhatsApp:",
+            response.status_code
+        )
+
+        return response
+
     except Exception as e:
 
         print(
-            "WHATSAPP SEND ERROR:",
+            "WHATSAPP ERROR:",
             repr(e)
         )
 
@@ -2400,14 +2405,16 @@ def wa_send_text(
 
 
 # ============================================================
-# WEB CHAT
+# CHAT NUEVA
 # ============================================================
 
 def iniciar_nueva_conversacion_web():
 
-    conversation_id = crear_conversacion(
-        "web",
-        str(uuid.uuid4())
+    conversation_id = (
+        crear_conversacion(
+            "web",
+            str(uuid.uuid4())
+        )
     )
 
     session[
@@ -2485,9 +2492,15 @@ def chat_nueva():
     iniciar_nueva_conversacion_web()
 
     return redirect(
-        url_for("chat")
+        url_for(
+            "chat"
+        )
     )
 
+
+# ============================================================
+# CHAT
+# ============================================================
 
 @app.route(
     "/chat",
@@ -2499,10 +2512,6 @@ def chat_nueva():
 def chat():
 
     session.permanent = True
-
-    # ========================================================
-    # NUEVA CONVERSACIÓN SI NO EXISTE
-    # ========================================================
 
     if not session.get(
         "conversation_id"
@@ -2516,10 +2525,6 @@ def chat():
     ]
 
 
-    # ========================================================
-    # POST
-    # ========================================================
-
     if request.method == "POST":
 
         pregunta = (
@@ -2530,6 +2535,7 @@ def chat():
             )
             .strip()
         )
+
 
         if pregunta:
 
@@ -2551,9 +2557,9 @@ def chat():
             )
 
 
-            # --------------------------------------------
-            # AGENDA ACTIVA
-            # --------------------------------------------
+            # =================================================
+            # AGENDA
+            # =================================================
 
             if session.get(
                 "modo_agendar",
@@ -2580,7 +2586,7 @@ def chat():
                     "datos_reserva":
                         session[
                             "datos_reserva"
-                        ]
+                        ],
                 }
 
                 respuesta = procesar_agenda(
@@ -2614,9 +2620,9 @@ def chat():
                 ]
 
 
-            # --------------------------------------------
+            # =================================================
             # INICIAR AGENDA
-            # --------------------------------------------
+            # =================================================
 
             elif es_intencion_agendar(
                 pregunta
@@ -2644,7 +2650,7 @@ def chat():
                     "datos_reserva":
                         session[
                             "datos_reserva"
-                        ]
+                        ],
                 }
 
                 respuesta = procesar_agenda(
@@ -2672,9 +2678,9 @@ def chat():
                 ]
 
 
-            # --------------------------------------------
+            # =================================================
             # SERVICIOS
-            # --------------------------------------------
+            # =================================================
 
             elif pregunta_servicios(
                 pregunta
@@ -2685,9 +2691,9 @@ def chat():
                 )
 
 
-            # --------------------------------------------
+            # =================================================
             # CONVERSACIÓN NATURAL
-            # --------------------------------------------
+            # =================================================
 
             else:
 
@@ -2720,7 +2726,9 @@ def chat():
 
 
     return render_template_string(
+
         TEMPLATE,
+
         historial=
             session[
                 "historial"
@@ -2896,10 +2904,6 @@ def whatsapp_webhook():
             ] = ahora_timestamp
 
 
-        # ====================================================
-        # SESIÓN WHATSAPP
-        # ====================================================
-
         estado = get_wa_session(
             wa_id
         )
@@ -2916,7 +2920,6 @@ def whatsapp_webhook():
             "telefono"
         ] = wa_id
 
-
         estado[
             "historial"
         ].append({
@@ -2928,17 +2931,12 @@ def whatsapp_webhook():
                 text
         })
 
-
         guardar_mensaje(
             conversation_id,
             "user",
             text
         )
 
-
-        # ====================================================
-        # PROCESAR
-        # ====================================================
 
         if estado[
             "modo_agendar"
@@ -2972,7 +2970,9 @@ def whatsapp_webhook():
             text
         ):
 
-            respuesta = mostrar_servicios()
+            respuesta = (
+                mostrar_servicios()
+            )
 
         else:
 
@@ -3002,12 +3002,10 @@ def whatsapp_webhook():
             respuesta
         )
 
-
         wa_send_text(
             wa_id,
             respuesta
         )
-
 
     except Exception as e:
 
@@ -3015,7 +3013,6 @@ def whatsapp_webhook():
             "WHATSAPP ERROR:",
             repr(e)
         )
-
 
     return "ok", 200
 
@@ -3083,7 +3080,7 @@ def admin():
 
 
 # ============================================================
-# ADMIN LISTADO
+# ADMIN CONVERSACIONES
 # ============================================================
 
 @app.route(
@@ -3099,9 +3096,9 @@ def admin_conversaciones():
             )
         )
 
-    conversaciones = []
-
     conn = None
+
+    conversaciones = []
 
     try:
 
@@ -3128,7 +3125,7 @@ def admin_conversaciones():
                 c.creada_en,
                 c.actualizada_en,
                 COUNT(m.id)
-                AS cantidad_mensajes
+                    AS cantidad_mensajes
 
             FROM conversaciones c
 
@@ -3144,14 +3141,16 @@ def admin_conversaciones():
             """
         )
 
-        conversaciones = cur.fetchall()
+        conversaciones = (
+            cur.fetchall()
+        )
 
         cur.close()
 
     except Exception as e:
 
         print(
-            "ADMIN LIST ERROR:",
+            "ADMIN ERROR:",
             repr(e)
         )
 
@@ -3213,7 +3212,9 @@ def admin_conversacion(
             )
         )
 
-        conversacion = cur.fetchone()
+        conversacion = (
+            cur.fetchone()
+        )
 
         if not conversacion:
 
@@ -3228,8 +3229,11 @@ def admin_conversacion(
                 rol,
                 mensaje,
                 creado_en
+
             FROM mensajes
+
             WHERE conversacion_id = %s
+
             ORDER BY creado_en ASC
             """,
             (
@@ -3237,7 +3241,9 @@ def admin_conversacion(
             )
         )
 
-        mensajes = cur.fetchall()
+        mensajes = (
+            cur.fetchall()
+        )
 
         cur.close()
 
@@ -3256,9 +3262,12 @@ def admin_conversacion(
 
 
     return render_template_string(
+
         ADMIN_DETALLE_TEMPLATE,
+
         conversacion=
             conversacion,
+
         mensajes=
             mensajes
     )
@@ -3286,7 +3295,7 @@ def admin_logout():
 
 
 # ============================================================
-# GOOGLE ADMIN LOGIN
+# GOOGLE LOGIN
 # ============================================================
 
 @app.route(
@@ -3406,7 +3415,7 @@ def callback():
 
             raise Exception(
                 "Se perdió la sesión OAuth. "
-                "Vuelve a /admin/login."
+                "Vuelve a iniciar desde /admin/login."
             )
 
 
@@ -3426,7 +3435,6 @@ def callback():
         flow.code_verifier = (
             code_verifier
         )
-
 
         authorization_response = (
             request.url
@@ -3526,7 +3534,7 @@ def logout():
 
 
 # ============================================================
-# LOGIN ADMIN TEMPLATE
+# ADMIN LOGIN TEMPLATE
 # ============================================================
 
 ADMIN_LOGIN_TEMPLATE = """
@@ -3850,12 +3858,16 @@ a {
 </div>
 
 <div>
+
 <a
 class="logout"
 href="/admin/logout"
 >
+
 Cerrar sesión
+
 </a>
+
 </div>
 
 </div>
@@ -3900,12 +3912,16 @@ href="/admin/conversacion/{{ c['id'] }}"
 <div>
 
 <span class="badge">
+
 {{ c['canal'] }}
+
 </span>
 
 <span class="badge">
+
 {{ c['cantidad_mensajes'] }}
 mensajes
+
 </span>
 
 </div>
@@ -4107,7 +4123,9 @@ header a {
 <a
 href="/admin/conversaciones"
 >
+
 ← Volver a conversaciones
+
 </a>
 
 </header>
@@ -4131,25 +4149,33 @@ href="/admin/conversaciones"
 </h2>
 
 <p>
+
 📱
 {{ conversacion['telefono'] or 'Sin teléfono' }}
+
 </p>
 
 <p>
+
 📧
 {{ conversacion['email'] or 'Sin correo' }}
+
 </p>
 
 <p>
+
 ✂️
 {{ conversacion['servicio'] or 'Sin servicio' }}
+
 </p>
 
 {% if conversacion['fecha_reserva'] %}
 
 <p>
+
 📅
 {{ conversacion['fecha_reserva'] }}
+
 </p>
 
 {% endif %}
@@ -4157,6 +4183,7 @@ href="/admin/conversaciones"
 {% if conversacion['meet_url'] %}
 
 <p>
+
 🎥
 
 <a
@@ -4320,7 +4347,9 @@ ERROR_TEMPLATE = """
 
 <meta charset="UTF-8">
 
-<title>Error</title>
+<title>
+Error
+</title>
 
 </head>
 
@@ -4373,7 +4402,8 @@ Asistente Virtual de Estilista Diego
 <style>
 
 * {
-    box-sizing: border-box;
+    box-sizing:
+        border-box;
 }
 
 body {
@@ -4604,6 +4634,27 @@ button {
         pointer;
 }
 
+@media(max-width:500px) {
+
+    #chat-container {
+
+        right:
+            0;
+
+        bottom:
+            0;
+
+        width:
+            100%;
+
+        height:
+            100%;
+
+        border-radius:
+            0;
+    }
+}
+
 </style>
 
 </head>
@@ -4636,7 +4687,9 @@ Lunes a sábado · 10:00 a 18:00
 class="new-chat"
 href="/chat/nueva"
 >
+
 Nueva conversación
+
 </a>
 
 </div>
