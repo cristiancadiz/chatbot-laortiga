@@ -1,6 +1,4 @@
 import os
-import time
-import secrets
 import requests
 import pytz
 import dateparser
@@ -21,6 +19,8 @@ from dotenv import load_dotenv
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
+
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 # ============================================================
@@ -44,12 +44,6 @@ app.permanent_session_lifetime = timedelta(days=30)
 # ============================================================
 # PROXY / HTTPS - RENDER
 # ============================================================
-
-# Render termina HTTPS delante de Flask.
-# Esta configuración permite que Flask reconozca
-# correctamente el esquema HTTPS original.
-
-from werkzeug.middleware.proxy_fix import ProxyFix
 
 app.wsgi_app = ProxyFix(
     app.wsgi_app,
@@ -98,6 +92,40 @@ TIMEZONE = os.getenv(
 CALENDAR_ID = os.getenv(
     "GOOGLE_CALENDAR_ID",
     "primary"
+)
+
+
+# ============================================================
+# HORARIO DE ATENCIÓN
+# ============================================================
+
+# Lunes = 0
+# Martes = 1
+# Miércoles = 2
+# Jueves = 3
+# Viernes = 4
+# Sábado = 5
+# Domingo = 6
+
+DIAS_ATENCION = {
+    0: "lunes",
+    1: "martes",
+    2: "miércoles",
+    3: "jueves",
+    4: "viernes",
+    5: "sábado",
+}
+
+HORA_APERTURA = 10
+HORA_CIERRE = 18
+
+# Solamente horas exactas.
+# NO existen horarios 10:30, 11:30, etc.
+HORAS_DISPONIBLES = list(
+    range(
+        HORA_APERTURA,
+        HORA_CIERRE + 1
+    )
 )
 
 
@@ -331,6 +359,8 @@ def get_wa_session(
 
                 "nombre": None,
 
+                # El teléfono se obtiene directamente
+                # desde WhatsApp.
                 "telefono": wa_id,
             },
         }
@@ -444,6 +474,12 @@ def parse_fecha_hora(
                 resultado
             )
 
+        else:
+
+            resultado = resultado.astimezone(
+                zona
+            )
+
         return resultado
 
     except Exception as e:
@@ -454,6 +490,60 @@ def parse_fecha_hora(
         )
 
         return None
+
+
+# ============================================================
+# VALIDAR HORARIO DE ATENCIÓN
+# ============================================================
+
+def es_dia_atencion(
+    fecha
+):
+
+    zona = pytz.timezone(
+        TIMEZONE
+    )
+
+    fecha = fecha.astimezone(
+        zona
+    )
+
+    return fecha.weekday() in DIAS_ATENCION
+
+
+def es_hora_atencion(
+    fecha
+):
+
+    zona = pytz.timezone(
+        TIMEZONE
+    )
+
+    fecha = fecha.astimezone(
+        zona
+    )
+
+    return (
+
+        fecha.weekday()
+        in DIAS_ATENCION
+
+        and fecha.minute == 0
+
+        and fecha.second == 0
+
+        and HORA_APERTURA
+        <= fecha.hour
+        <= HORA_CIERRE
+    )
+
+
+def horario_atencion_texto():
+
+    return (
+        "lunes a sábado, "
+        "de 10:00 a 18:00 hrs"
+    )
 
 
 # ============================================================
@@ -516,6 +606,22 @@ def verificar_disponibilidad(
 
     try:
 
+        zona = pytz.timezone(
+            TIMEZONE
+        )
+
+        inicio = inicio.astimezone(
+            zona
+        )
+
+        # Primero validamos que el inicio
+        # esté dentro del horario.
+        if not es_hora_atencion(
+            inicio
+        ):
+
+            return False
+
         service = (
             obtener_calendar_service()
         )
@@ -576,12 +682,11 @@ def verificar_disponibilidad(
 
 
 # ============================================================
-# HORAS DISPONIBLES
+# CREAR HORAS DEL DÍA
 # ============================================================
 
-def buscar_horas_disponibles(
-    fecha,
-    duracion=60
+def generar_horas_del_dia(
+    fecha
 ):
 
     zona = pytz.timezone(
@@ -592,52 +697,207 @@ def buscar_horas_disponibles(
         zona
     )
 
-    resultados = []
+    horas = []
 
-    for hora in range(
-        9,
-        20
+    if not es_dia_atencion(
+        fecha
     ):
 
-        for minuto in [
-            0,
-            30
-        ]:
+        return horas
 
-            inicio = fecha.replace(
+    for hora in HORAS_DISPONIBLES:
 
-                hour=hora,
+        inicio = fecha.replace(
 
-                minute=minuto,
+            hour=hora,
 
-                second=0,
+            minute=0,
 
-                microsecond=0,
+            second=0,
+
+            microsecond=0,
+        )
+
+        horas.append(
+            inicio
+        )
+
+    return horas
+
+
+# ============================================================
+# PRÓXIMAS HORAS DISPONIBLES
+# ============================================================
+
+def buscar_horas_disponibles(
+    fecha,
+    duracion=60,
+    cantidad=5,
+    desde_hora=None
+):
+
+    zona = pytz.timezone(
+        TIMEZONE
+    )
+
+    fecha = fecha.astimezone(
+        zona
+    )
+
+    ahora = datetime.now(
+        zona
+    )
+
+    resultados = []
+
+    # Si no se especifica una hora inicial,
+    # comenzamos desde las 10:00.
+    if desde_hora is None:
+
+        desde_hora = HORA_APERTURA
+
+    # Si el día es domingo,
+    # no hay atención.
+    if not es_dia_atencion(
+        fecha
+    ):
+
+        return resultados
+
+    for hora in HORAS_DISPONIBLES:
+
+        if hora < desde_hora:
+            continue
+
+        inicio = fecha.replace(
+
+            hour=hora,
+
+            minute=0,
+
+            second=0,
+
+            microsecond=0,
+        )
+
+        # No ofrecer horas pasadas.
+        if inicio <= ahora:
+            continue
+
+        disponible = (
+            verificar_disponibilidad(
+                inicio,
+                duracion
+            )
+        )
+
+        if disponible:
+
+            resultados.append(
+                inicio
             )
 
-            if inicio <= datetime.now(
-                zona
-            ):
-                continue
+            if len(resultados) >= cantidad:
 
-            disponible = (
-                verificar_disponibilidad(
-                    inicio,
-                    duracion
-                )
-            )
-
-            if disponible:
-
-                resultados.append(
-                    inicio
-                )
-
-            if len(resultados) >= 5:
-
-                return resultados
+                break
 
     return resultados
+
+
+# ============================================================
+# BUSCAR PRÓXIMAS HORAS INCLUYENDO DÍAS SIGUIENTES
+# ============================================================
+
+def buscar_proximas_horas(
+    fecha_inicial,
+    duracion=60,
+    cantidad=5,
+    dias_maximos=14
+):
+
+    zona = pytz.timezone(
+        TIMEZONE
+    )
+
+    fecha_inicial = (
+        fecha_inicial.astimezone(
+            zona
+        )
+    )
+
+    ahora = datetime.now(
+        zona
+    )
+
+    resultados = []
+
+    for offset in range(
+        dias_maximos
+    ):
+
+        fecha = (
+            fecha_inicial
+            + timedelta(days=offset)
+        )
+
+        fecha = fecha.replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0
+        )
+
+        if not es_dia_atencion(
+            fecha
+        ):
+            continue
+
+        desde_hora = HORA_APERTURA
+
+        # Si estamos revisando hoy,
+        # comenzamos desde la próxima hora.
+        if fecha.date() == ahora.date():
+
+            if ahora.minute > 0:
+
+                desde_hora = (
+                    ahora.hour + 1
+                )
+
+            else:
+
+                desde_hora = (
+                    ahora.hour
+                )
+
+            desde_hora = max(
+                desde_hora,
+                HORA_APERTURA
+            )
+
+        horas = buscar_horas_disponibles(
+
+            fecha,
+
+            duracion,
+
+            cantidad=(
+                cantidad
+                - len(resultados)
+            ),
+
+            desde_hora=desde_hora
+        )
+
+        resultados.extend(
+            horas
+        )
+
+        if len(resultados) >= cantidad:
+
+            break
+
+    return resultados[:cantidad]
 
 
 # ============================================================
@@ -825,6 +1085,27 @@ def formato_fecha(
 
 
 # ============================================================
+# FORMATO CORTO DE HORA
+# ============================================================
+
+def formato_horas(
+    horas
+):
+
+    if not horas:
+
+        return ""
+
+    return "\n".join(
+
+        [
+            f"• {h.strftime('%H:%M')}"
+            for h in horas
+        ]
+    )
+
+
+# ============================================================
 # INTENCIÓN
 # ============================================================
 
@@ -896,6 +1177,28 @@ Servicios:
 • Perfilado
 • Otro servicio
 
+HORARIO DE ATENCIÓN:
+
+Lunes a sábado.
+Desde las 10:00 hasta las 18:00 horas.
+
+Las horas de inicio de atención son solamente:
+
+10:00
+11:00
+12:00
+13:00
+14:00
+15:00
+16:00
+17:00
+18:00
+
+NO existen horarios de inicio como 10:30,
+11:30, 12:30, etc.
+
+Los domingos NO hay atención.
+
 La agenda utilizada pertenece EXCLUSIVAMENTE
 a Diego.
 
@@ -914,6 +1217,9 @@ Cuando quiera reservar debes obtener:
 No inventes disponibilidad.
 
 La disponibilidad real la verifica el sistema.
+
+Si una hora está ocupada, el sistema ofrecerá
+otras horas disponibles.
 
 Estilista:
 {ESTILISTA_NOMBRE}
@@ -1002,6 +1308,10 @@ def procesar_reserva(
     ).strip()
 
 
+    # ========================================================
+    # 1. SERVICIO
+    # ========================================================
+
     if not datos["servicio"]:
 
         servicio = detectar_servicio(
@@ -1018,7 +1328,9 @@ def procesar_reserva(
 
                 "Perfecto ✂️\n\n"
                 "¿Qué día y a qué hora "
-                "te gustaría venir?"
+                "te gustaría venir?\n\n"
+                f"Atendemos "
+                f"{horario_atencion_texto()}."
             )
 
         return (
@@ -1034,6 +1346,10 @@ def procesar_reserva(
         )
 
 
+    # ========================================================
+    # 2. FECHA Y HORA
+    # ========================================================
+
     if not datos["fecha_hora"]:
 
         fecha = parse_fecha_hora(
@@ -1045,9 +1361,232 @@ def procesar_reserva(
             return (
 
                 "No entendí la fecha y hora 😅\n\n"
+
                 "Por ejemplo:\n"
-                "\"mañana a las 15:00\""
+                "\"mañana a las 15:00\"\n\n"
+
+                f"Nuestro horario es "
+                f"{horario_atencion_texto()}."
             )
+
+
+        zona = pytz.timezone(
+            TIMEZONE
+        )
+
+        fecha = fecha.astimezone(
+            zona
+        )
+
+
+        # ====================================================
+        # DOMINGO
+        # ====================================================
+
+        if not es_dia_atencion(
+            fecha
+        ):
+
+            proximas = (
+                buscar_proximas_horas(
+
+                    fecha,
+
+                    obtener_servicio(
+                        datos["servicio"]
+                    )["duracion"],
+
+                    cantidad=5
+                )
+            )
+
+            if proximas:
+
+                horas = formato_horas(
+                    proximas
+                )
+
+                return (
+
+                    "El domingo no tenemos "
+                    "atención 😕.\n\n"
+
+                    "Las próximas horas "
+                    "disponibles son:\n\n"
+
+                    f"{horas}\n\n"
+
+                    "¿Cuál te acomoda?"
+                )
+
+            return (
+
+                "El domingo no tenemos "
+                "atención 😕.\n\n"
+
+                f"Atendemos "
+                f"{horario_atencion_texto()}."
+            )
+
+
+        # ====================================================
+        # VALIDAR HORA EXACTA
+        # ====================================================
+
+        if fecha.minute != 0:
+
+            proximas = (
+                buscar_proximas_horas(
+
+                    fecha,
+
+                    obtener_servicio(
+                        datos["servicio"]
+                    )["duracion"],
+
+                    cantidad=5,
+
+                    dias_maximos=7
+                )
+            )
+
+            if proximas:
+
+                horas = formato_horas(
+                    proximas
+                )
+
+                return (
+
+                    "Las reservas comienzan "
+                    "solamente en horas exactas "
+                    "🕐.\n\n"
+
+                    "Por ejemplo: 10:00, 11:00, "
+                    "12:00, 13:00, etc.\n\n"
+
+                    "Estas son las próximas "
+                    "horas disponibles:\n\n"
+
+                    f"{horas}\n\n"
+
+                    "¿Cuál prefieres?"
+                )
+
+            return (
+
+                "Las reservas comienzan "
+                "solamente en horas exactas 🕐.\n\n"
+
+                f"Nuestro horario es "
+                f"{horario_atencion_texto()}."
+            )
+
+
+        # ====================================================
+        # VALIDAR RANGO HORARIO
+        # ====================================================
+
+        if (
+            fecha.hour < HORA_APERTURA
+            or fecha.hour > HORA_CIERRE
+        ):
+
+            proximas = (
+                buscar_proximas_horas(
+
+                    fecha,
+
+                    obtener_servicio(
+                        datos["servicio"]
+                    )["duracion"],
+
+                    cantidad=5,
+
+                    dias_maximos=7
+                )
+            )
+
+            if proximas:
+
+                horas = formato_horas(
+                    proximas
+                )
+
+                return (
+
+                    "Ese horario está fuera "
+                    "de nuestro horario de atención 😕.\n\n"
+
+                    f"Atendemos "
+                    f"{horario_atencion_texto()}.\n\n"
+
+                    "Próximas horas disponibles:\n\n"
+
+                    f"{horas}\n\n"
+
+                    "¿Cuál te acomoda?"
+                )
+
+            return (
+
+                f"Nuestro horario de atención es "
+                f"{horario_atencion_texto()}."
+            )
+
+
+        # ====================================================
+        # VALIDAR QUE NO SEA UNA HORA PASADA
+        # ====================================================
+
+        ahora = datetime.now(
+            zona
+        )
+
+        if fecha <= ahora:
+
+            proximas = (
+                buscar_proximas_horas(
+
+                    fecha,
+
+                    obtener_servicio(
+                        datos["servicio"]
+                    )["duracion"],
+
+                    cantidad=5
+                )
+            )
+
+            if proximas:
+
+                horas = formato_horas(
+                    proximas
+                )
+
+                return (
+
+                    "Esa hora ya pasó 😕.\n\n"
+
+                    "Te puedo ofrecer estas "
+                    "próximas horas:\n\n"
+
+                    f"{horas}\n\n"
+
+                    "¿Cuál te acomoda?"
+                )
+
+            return (
+
+                "Esa hora ya pasó 😕.\n\n"
+
+                "Dime otro día y horario."
+            )
+
+
+        # ====================================================
+        # VERIFICAR CALENDAR
+        # ====================================================
 
         servicio = obtener_servicio(
             datos["servicio"]
@@ -1062,48 +1601,68 @@ def procesar_reserva(
             )
         )
 
+
         if disponible is None:
 
             return (
 
                 "No pude consultar la agenda "
-                "de Diego en este momento 😕."
+                "de Diego en este momento 😕.\n\n"
+                "Intenta nuevamente en unos segundos."
             )
+
+
+        # ====================================================
+        # HORA OCUPADA
+        # ====================================================
 
         if not disponible:
 
-            alternativas = (
-                buscar_horas_disponibles(
+            proximas = (
+                buscar_proximas_horas(
 
                     fecha,
 
-                    servicio["duracion"]
+                    servicio["duracion"],
+
+                    cantidad=5,
+
+                    desde_hora=fecha.hour,
+
+                    dias_maximos=7
                 )
             )
 
-            if alternativas:
+            if proximas:
 
-                horas = "\n".join(
-
-                    [
-                        f"• {h.strftime('%H:%M')}"
-                        for h in alternativas
-                    ]
+                horas = formato_horas(
+                    proximas
                 )
 
                 return (
 
-                    "Esa hora está ocupada 😕.\n\n"
-                    "Tengo estas alternativas:\n\n"
+                    "Esa hora ya está ocupada 😕.\n\n"
+
+                    "Te puedo ofrecer estas "
+                    "próximas horas disponibles:\n\n"
+
                     f"{horas}\n\n"
+
                     "¿Cuál te acomoda?"
                 )
 
             return (
 
-                "Esa hora está ocupada 😕.\n"
-                "Prueba con otro horario."
+                "Esa hora está ocupada 😕.\n\n"
+
+                "No encontré disponibilidad "
+                "cercana. Prueba con otro día."
             )
+
+
+        # ====================================================
+        # GUARDAR FECHA
+        # ====================================================
 
         datos["fecha_hora"] = (
             fecha.isoformat()
@@ -1120,6 +1679,10 @@ def procesar_reserva(
         )
 
 
+    # ========================================================
+    # 3. NOMBRE
+    # ========================================================
+
     if not datos["nombre"]:
 
         if len(texto) < 2:
@@ -1131,6 +1694,121 @@ def procesar_reserva(
 
         datos["nombre"] = texto
 
+        # ====================================================
+        # WHATSAPP
+        # ====================================================
+
+        telefono_actual = datos.get(
+            "telefono"
+        )
+
+        if telefono_actual:
+
+            # Si ya tenemos el número de WhatsApp,
+            # no preguntamos nuevamente.
+            inicio = datetime.fromisoformat(
+                datos["fecha_hora"]
+            )
+
+            servicio = obtener_servicio(
+                datos["servicio"]
+            )
+
+            disponible = (
+                verificar_disponibilidad(
+
+                    inicio,
+
+                    servicio["duracion"]
+                )
+            )
+
+            if not disponible:
+
+                datos["fecha_hora"] = None
+
+                return (
+
+                    "Justo esa hora se ocupó 😕.\n\n"
+
+                    "Dime otra hora y vuelvo "
+                    "a revisar la agenda."
+                )
+
+            resultado = crear_evento_diego(
+
+                inicio=inicio,
+
+                servicio_codigo=
+                    datos["servicio"],
+
+                nombre_cliente=
+                    datos["nombre"],
+
+                telefono_cliente=
+                    telefono_actual,
+            )
+
+            if not resultado["ok"]:
+
+                print(
+                    resultado["error"]
+                )
+
+                return (
+
+                    "No pude completar la reserva "
+                    "en este momento 😕."
+                )
+
+            nombre = datos["nombre"]
+
+            fecha_texto = formato_fecha(
+                inicio
+            )
+
+            servicio_nombre = servicio[
+                "nombre"
+            ]
+
+            telefono = telefono_actual
+
+            estado["datos_reserva"] = {
+
+                "servicio":
+                    None,
+
+                "fecha_hora":
+                    None,
+
+                "nombre":
+                    None,
+
+                "telefono":
+                    telefono_actual,
+            }
+
+            estado["modo_agendar"] = False
+
+            return (
+
+                "✅ ¡Reserva confirmada!\n\n"
+
+                f"✂️ Servicio: {servicio_nombre}\n"
+
+                f"👤 Cliente: {nombre}\n"
+
+                f"📞 Teléfono: {telefono}\n"
+
+                f"📅 {fecha_texto}\n\n"
+
+                f"Tu hora quedó agendada "
+                f"directamente en la agenda de "
+                f"{ESTILISTA_NOMBRE}.\n\n"
+
+                "¡Te esperamos! 🙌"
+            )
+
         return (
 
             f"Perfecto, {texto} 👍\n\n"
@@ -1138,10 +1816,18 @@ def procesar_reserva(
         )
 
 
+    # ========================================================
+    # 4. TELÉFONO
+    # ========================================================
+
     if not datos["telefono"]:
 
         datos["telefono"] = texto
 
+
+    # ========================================================
+    # 5. CREAR RESERVA
+    # ========================================================
 
     inicio = datetime.fromisoformat(
         datos["fecha_hora"]
@@ -1150,6 +1836,11 @@ def procesar_reserva(
     servicio = obtener_servicio(
         datos["servicio"]
     )
+
+
+    # ========================================================
+    # SEGUNDA VERIFICACIÓN
+    # ========================================================
 
     disponible = (
         verificar_disponibilidad(
@@ -1160,6 +1851,18 @@ def procesar_reserva(
         )
     )
 
+
+    if disponible is None:
+
+        return (
+
+            "No pude comprobar nuevamente "
+            "la disponibilidad 😕.\n\n"
+
+            "Por favor intenta nuevamente."
+        )
+
+
     if not disponible:
 
         datos["fecha_hora"] = None
@@ -1167,9 +1870,15 @@ def procesar_reserva(
         return (
 
             "Justo esa hora se ocupó 😕.\n\n"
-            "Dime otra hora y vuelvo a revisar."
+
+            "Dime otra hora y vuelvo "
+            "a revisar."
         )
 
+
+    # ========================================================
+    # CREAR EVENTO
+    # ========================================================
 
     resultado = crear_evento_diego(
 
@@ -1211,6 +1920,10 @@ def procesar_reserva(
         "nombre"
     ]
 
+
+    # ========================================================
+    # LIMPIAR RESERVA
+    # ========================================================
 
     estado["datos_reserva"] = {
 
@@ -1492,11 +2205,17 @@ def whatsapp_webhook():
             or {}
         )
 
+
+        # ====================================================
+        # IGNORAR ESTADOS
+        # ====================================================
+
         if value.get(
             "statuses"
         ):
 
             return "ok", 200
+
 
         messages = (
             value.get(
@@ -1508,6 +2227,7 @@ def whatsapp_webhook():
         if not messages:
 
             return "ok", 200
+
 
         msg = messages[0]
 
@@ -1534,6 +2254,46 @@ def whatsapp_webhook():
             return "ok", 200
 
 
+        # ====================================================
+        # EVITAR MENSAJES DUPLICADOS
+        # ====================================================
+
+        ahora_timestamp = (
+            datetime.now().timestamp()
+        )
+
+        if msg_id:
+
+            # Limpiar mensajes antiguos.
+            for old_id in list(
+                PROCESSED_MSG_IDS.keys()
+            ):
+
+                if (
+                    ahora_timestamp
+                    - PROCESSED_MSG_IDS[old_id]
+                    > DEDUP_TTL_SECONDS
+                ):
+
+                    del PROCESSED_MSG_IDS[
+                        old_id
+                    ]
+
+
+            if msg_id in PROCESSED_MSG_IDS:
+
+                return "ok", 200
+
+
+            PROCESSED_MSG_IDS[
+                msg_id
+            ] = ahora_timestamp
+
+
+        # ====================================================
+        # OBTENER SESIÓN
+        # ====================================================
+
         estado = get_wa_session(
             wa_id
         )
@@ -1550,6 +2310,10 @@ def whatsapp_webhook():
                 text,
         })
 
+
+        # ====================================================
+        # PROCESAMIENTO
+        # ====================================================
 
         if (
 
@@ -1589,6 +2353,10 @@ def whatsapp_webhook():
             )
 
 
+        # ====================================================
+        # HISTORIAL
+        # ====================================================
+
         estado[
             "historial"
         ].append({
@@ -1600,6 +2368,10 @@ def whatsapp_webhook():
                 respuesta,
         })
 
+
+        # ====================================================
+        # ENVIAR
+        # ====================================================
 
         wa_send_text(
             wa_id,
@@ -1629,19 +2401,7 @@ def admin_login():
 
     try:
 
-        # ----------------------------------------------------
-        # Criar novo Flow
-        # ----------------------------------------------------
-
         flow = crear_google_flow()
-
-        # ----------------------------------------------------
-        # Criar URL OAuth
-        #
-        # IMPORTANTE:
-        # authorization_url() gera o code_verifier
-        # quando PKCE está habilitado.
-        # ----------------------------------------------------
 
         authorization_url, state = (
             flow.authorization_url(
@@ -1654,27 +2414,22 @@ def admin_login():
             )
         )
 
-        # ----------------------------------------------------
-        # GUARDAR STATE
-        # ----------------------------------------------------
 
         session.permanent = True
+
 
         session[
             "google_oauth_state"
         ] = state
 
-        # ----------------------------------------------------
-        # GUARDAR CODE VERIFIER
-        #
-        # ESTE É O PONTO PRINCIPAL DA CORREÇÃO.
-        # ----------------------------------------------------
 
         session[
             "google_code_verifier"
         ] = flow.code_verifier
 
+
         session.modified = True
+
 
         print(
             "========================================"
@@ -1693,7 +2448,7 @@ def admin_login():
             "CODE VERIFIER:",
             "GUARDADO"
             if flow.code_verifier
-            else "NÃO GERADO"
+            else "NO GENERADO"
         )
 
         print(
@@ -1705,9 +2460,11 @@ def admin_login():
             "========================================"
         )
 
+
         return redirect(
             authorization_url
         )
+
 
     except Exception as e:
 
@@ -1721,7 +2478,7 @@ def admin_login():
             ERROR_TEMPLATE,
 
             titulo=
-                "Erro iniciando Google OAuth",
+                "Error iniciando Google OAuth",
 
             mensaje=
                 str(e)
@@ -1775,10 +2532,6 @@ def callback():
 
     try:
 
-        # ====================================================
-        # RECUPERAR DATOS DE LA SESIÓN
-        # ====================================================
-
         state = session.get(
             "google_oauth_state"
         )
@@ -1816,10 +2569,6 @@ def callback():
         )
 
 
-        # ====================================================
-        # SI SE PERDIÓ LA SESIÓN
-        # ====================================================
-
         if not state:
 
             raise Exception(
@@ -1840,37 +2589,18 @@ def callback():
             )
 
 
-        # ====================================================
-        # CREAR NUEVO FLOW
-        # ====================================================
-
         flow = crear_google_flow()
 
-
-        # ====================================================
-        # RESTAURAR STATE
-        # ====================================================
 
         flow.state = state
 
 
-        # ====================================================
-        # RESTAURAR CODE VERIFIER
-        #
-        # ESTE ES EL CAMBIO FUNDAMENTAL.
-        # ====================================================
-
         flow.code_verifier = code_verifier
 
 
-        # ====================================================
-        # CONSTRUIR AUTHORIZATION RESPONSE
-        #
-        # request.url ya viene de Render por HTTPS.
-        # ProxyFix permite que Flask lo reconozca.
-        # ====================================================
-
-        authorization_response = request.url
+        authorization_response = (
+            request.url
+        )
 
 
         if not authorization_response.startswith(
@@ -1884,10 +2614,6 @@ def callback():
                 + request.full_path
             )
 
-
-        # ====================================================
-        # INTERCAMBIAR CODE POR TOKENS
-        # ====================================================
 
         flow.fetch_token(
 
@@ -1929,10 +2655,6 @@ def callback():
             )
 
 
-        # ====================================================
-        # LIMPIAR DATOS OAUTH DE SESIÓN
-        # ====================================================
-
         session.pop(
             "google_oauth_state",
             None
@@ -1945,10 +2667,6 @@ def callback():
 
         session.modified = True
 
-
-        # ====================================================
-        # MOSTRAR REFRESH TOKEN
-        # ====================================================
 
         return render_template_string(
 
@@ -1976,6 +2694,7 @@ def callback():
         print(
             "========================================"
         )
+
 
         return render_template_string(
 
@@ -2478,7 +3197,7 @@ button {
 </div>
 
 <div class="subtitle">
-Agenda de horas disponibles
+Lunes a sábado · 10:00 a 18:00
 </div>
 
 </div>
