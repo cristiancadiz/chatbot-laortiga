@@ -1,6 +1,5 @@
 import os
 import re
-import uuid
 import requests
 import pytz
 import openai
@@ -15,6 +14,7 @@ from flask import (
 )
 
 from datetime import timedelta, datetime
+
 from dotenv import load_dotenv
 
 from google_auth_oauthlib.flow import Flow
@@ -35,7 +35,9 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY")
 
 if not app.secret_key:
-    raise Exception("Falta SECRET_KEY en las variables de entorno.")
+    raise Exception(
+        "Falta SECRET_KEY en las variables de entorno."
+    )
 
 app.permanent_session_lifetime = timedelta(days=30)
 
@@ -55,7 +57,9 @@ app.wsgi_app = ProxyFix(
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not OPENAI_API_KEY:
-    raise Exception("Falta OPENAI_API_KEY.")
+    raise Exception(
+        "Falta OPENAI_API_KEY."
+    )
 
 client = openai.OpenAI(
     api_key=OPENAI_API_KEY
@@ -85,27 +89,6 @@ CALENDAR_ID = os.getenv(
     "GOOGLE_CALENDAR_ID",
     "primary"
 )
-
-
-# ============================================================
-# RESEND
-# ============================================================
-
-RESEND_API_KEY = os.getenv(
-    "RESEND_API_KEY"
-)
-
-EMAIL_FROM = os.getenv(
-    "EMAIL_FROM"
-)
-
-# Ejemplo:
-#
-# EMAIL_FROM=Estilista Diego <reservas@tudominio.cl>
-#
-# IMPORTANTE:
-# El dominio utilizado en EMAIL_FROM debe estar verificado
-# en Resend.
 
 
 # ============================================================
@@ -208,15 +191,15 @@ GOOGLE_REDIRECT_URI = os.getenv(
 )
 
 if not GOOGLE_CLIENT_ID:
-    raise Exception("Falta GOOGLE_CLIENT_ID.")
+    raise Exception(
+        "Falta GOOGLE_CLIENT_ID."
+    )
 
 if not GOOGLE_CLIENT_SECRET:
-    raise Exception("Falta GOOGLE_CLIENT_SECRET.")
+    raise Exception(
+        "Falta GOOGLE_CLIENT_SECRET."
+    )
 
-
-# ============================================================
-# SCOPES
-# ============================================================
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar"
@@ -234,13 +217,10 @@ def crear_google_flow():
             "web": {
                 "client_id": GOOGLE_CLIENT_ID,
                 "client_secret": GOOGLE_CLIENT_SECRET,
-
                 "auth_uri":
                     "https://accounts.google.com/o/oauth2/auth",
-
                 "token_uri":
                     "https://oauth2.googleapis.com/token",
-
                 "redirect_uris": [
                     GOOGLE_REDIRECT_URI
                 ],
@@ -299,9 +279,7 @@ def ahora_local():
 
     zona = obtener_zona()
 
-    return datetime.now(
-        zona
-    )
+    return datetime.now(zona)
 
 
 # ============================================================
@@ -457,11 +435,14 @@ def es_dia_atencion(fecha):
         zona
     )
 
-    return fecha.weekday() in DIAS_ATENCION
+    return (
+        fecha.weekday()
+        in DIAS_ATENCION
+    )
 
 
 # ============================================================
-# FORMATO FECHA
+# FORMATO FECHAS
 # ============================================================
 
 def formato_fecha_corta(fecha):
@@ -475,7 +456,7 @@ def formato_fecha_corta(fecha):
     return (
         f"{DIAS_NOMBRES[fecha.weekday()]} "
         f"{fecha.day}/{fecha.month} "
-        f"{fecha.strftime('%H:%M')}"
+        f"a las {fecha.strftime('%H:%M')}"
     )
 
 
@@ -511,240 +492,29 @@ def formato_fecha_larga(fecha):
 
 
 # ============================================================
-# EMAIL
+# VALIDAR CORREO
 # ============================================================
 
-def correo_valido(email):
+def correo_valido(correo):
 
-    if not email:
-        return False
+    correo = (
+        correo or ""
+    ).strip()
 
     patron = (
-        r"^[A-Za-z0-9._%+-]+@"
-        r"[A-Za-z0-9.-]+\."
-        r"[A-Za-z]{2,}$"
+        r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
     )
 
     return bool(
-        re.fullmatch(
+        re.match(
             patron,
-            email.strip()
+            correo
         )
     )
-
-
-def enviar_email_confirmacion(
-    email_cliente,
-    nombre_cliente,
-    telefono_cliente,
-    servicio,
-    inicio,
-    meet_link
-):
-
-    if not RESEND_API_KEY:
-        print(
-            "RESEND_API_KEY no configurada."
-        )
-
-        return False
-
-    if not EMAIL_FROM:
-        print(
-            "EMAIL_FROM no configurado."
-        )
-
-        return False
-
-    if not correo_valido(
-        email_cliente
-    ):
-        print(
-            "Correo cliente inválido:",
-            email_cliente
-        )
-
-        return False
-
-    fecha_texto = formato_fecha_larga(
-        inicio
-    )
-
-    precio = (
-        f"${servicio['precio']:,}"
-        .replace(",", ".")
-    )
-
-    meet_html = ""
-
-    if meet_link:
-
-        meet_html = f"""
-        <p style="margin-top:25px;">
-            <a href="{meet_link}"
-               style="
-               display:inline-block;
-               background:#111827;
-               color:white;
-               padding:12px 20px;
-               border-radius:8px;
-               text-decoration:none;
-               font-weight:bold;
-               ">
-               🎥 Entrar a videollamada Google Meet
-            </a>
-        </p>
-
-        <p style="font-size:13px;color:#666;">
-            También puedes ingresar directamente desde
-            tu evento de Google Calendar.
-        </p>
-        """
-
-    html = f"""
-    <!DOCTYPE html>
-
-    <html lang="es">
-
-    <body style="
-        font-family:Arial,sans-serif;
-        background:#f5f5f5;
-        padding:30px;
-    ">
-
-        <div style="
-            max-width:600px;
-            margin:auto;
-            background:white;
-            padding:30px;
-            border-radius:14px;
-        ">
-
-            <h2>
-                ✅ Reserva confirmada
-            </h2>
-
-            <p>
-                Hola <b>{nombre_cliente}</b> 👋
-            </p>
-
-            <p>
-                Tu hora con
-                <b>Estilista {ESTILISTA_NOMBRE}</b>
-                quedó reservada correctamente.
-            </p>
-
-            <hr>
-
-            <p>
-                ✂️ <b>Servicio:</b>
-                {servicio['nombre']}
-            </p>
-
-            <p>
-                💰 <b>Valor:</b>
-                {precio}
-            </p>
-
-            <p>
-                👤 <b>Cliente:</b>
-                {nombre_cliente}
-            </p>
-
-            <p>
-                📞 <b>Teléfono:</b>
-                {telefono_cliente}
-            </p>
-
-            <p>
-                📅 <b>Fecha:</b>
-                {fecha_texto}
-            </p>
-
-            {meet_html}
-
-            <hr>
-
-            <p>
-                La atención tiene una duración
-                de 1 hora.
-            </p>
-
-            <p>
-                ¡Te esperamos! 🙌
-            </p>
-
-        </div>
-
-    </body>
-
-    </html>
-    """
-
-    payload = {
-        "from": EMAIL_FROM,
-
-        "to": [
-            email_cliente
-        ],
-
-        "subject":
-            (
-                f"Reserva confirmada - "
-                f"{servicio['nombre']} - "
-                f"{ESTILISTA_NOMBRE}"
-            ),
-
-        "html": html,
-    }
-
-    headers = {
-        "Authorization":
-            f"Bearer {RESEND_API_KEY}",
-
-        "Content-Type":
-            "application/json",
-    }
-
-    try:
-
-        response = requests.post(
-            "https://api.resend.com/emails",
-            headers=headers,
-            json=payload,
-            timeout=20
-        )
-
-        print(
-            "RESEND STATUS:",
-            response.status_code
-        )
-
-        print(
-            "RESEND RESPONSE:",
-            response.text[:1000]
-        )
-
-        if (
-            response.status_code >= 200
-            and response.status_code < 300
-        ):
-            return True
-
-        return False
-
-    except Exception as e:
-
-        print(
-            "RESEND ERROR:",
-            repr(e)
-        )
-
-        return False
 
 
 # ============================================================
-# GOOGLE CALENDAR: DISPONIBILIDAD
+# GOOGLE: DISPONIBILIDAD
 # ============================================================
 
 def verificar_disponibilidad(
@@ -791,7 +561,9 @@ def verificar_disponibilidad(
         if fin > limite:
             return False
 
-        service = obtener_calendar_service()
+        service = (
+            obtener_calendar_service()
+        )
 
         resultado = (
             service
@@ -834,12 +606,6 @@ def verificar_disponibilidad(
 
         if bloques:
 
-            print(
-                "HORA OCUPADA:",
-                inicio,
-                bloques
-            )
-
             return False
 
         return True
@@ -864,6 +630,7 @@ def buscar_proximas_10_horas():
 
     resultados = []
 
+    # Hasta 31 días hacia adelante.
     for offset in range(31):
 
         fecha = (
@@ -892,6 +659,7 @@ def buscar_proximas_10_horas():
                 microsecond=0
             )
 
+            # Nunca ofrecer una hora pasada.
             if inicio <= ahora:
                 continue
 
@@ -909,6 +677,7 @@ def buscar_proximas_10_horas():
                 disponible
             )
 
+            # Si Google falla, no inventar disponibilidad.
             if disponible is None:
                 continue
 
@@ -955,22 +724,22 @@ def formatear_opciones_horas(
 
 def mostrar_proximas_horas():
 
-    horas = buscar_proximas_10_horas()
+    horas = (
+        buscar_proximas_10_horas()
+    )
 
     if not horas:
 
         return (
             "No encontré horas disponibles "
             "en los próximos días 😕.\n\n"
-            "Si quieres, podemos intentar "
-            "nuevamente más adelante."
+            "¿Quieres que probemos más adelante?"
         )
 
     return (
         "Perfecto 😊 Estas son las próximas "
         "10 horas disponibles:\n\n"
-        f"{formatear_opciones_horas(horas)}"
-        "\n\n"
+        f"{formatear_opciones_horas(horas)}\n\n"
         "Respóndeme con el número de la hora "
         "que prefieras, del 1 al 10."
     )
@@ -997,31 +766,23 @@ def get_wa_session(
 
             "historial": [],
 
-            "modo_agendar":
-                False,
+            "modo_agendar": False,
 
-            "paso":
-                "inicio",
+            "paso": "inicio",
 
-            "horas_ofrecidas":
-                [],
+            "horas_ofrecidas": [],
 
             "datos_reserva": {
 
-                "servicio":
-                    None,
+                "servicio": None,
 
-                "fecha_hora":
-                    None,
+                "fecha_hora": None,
 
-                "nombre":
-                    None,
+                "nombre": None,
 
-                "telefono":
-                    wa_id,
+                "telefono": wa_id,
 
-                "email":
-                    None,
+                "correo": None,
             },
         }
 
@@ -1056,6 +817,7 @@ def wa_send_text(
         not WHATSAPP_TOKEN
         or not WHATSAPP_PHONE_NUMBER_ID
     ):
+
         return None
 
     url = (
@@ -1128,22 +890,28 @@ def pregunta_servicios(
     )
 
     patrones = [
+
         "servicios",
         "servicio",
+
         "que haces",
         "que hacen",
         "que ofrecen",
         "que tienes",
+
         "precios",
         "precio",
+
         "cuanto sale",
         "cuanto cuesta",
+
         "valor",
         "valores",
         "tarifa",
+
         "cortes",
+
         "barberia",
-        "barbería",
     ]
 
     return any(
@@ -1165,21 +933,29 @@ def es_intencion_agendar(
     )
 
     patrones = [
+
         "agendar",
         "agenda",
+
         "reservar",
         "reserva",
         "reservame",
+
         "quiero una hora",
         "quiero agendar",
         "quiero reservar",
+
         "sacar hora",
         "sacar una hora",
+
         "pedir hora",
+
         "cita",
         "turno",
+
         "hora para corte",
         "hora para barba",
+
         "quiero cortarme",
         "quiero corte",
         "me quiero cortar",
@@ -1204,15 +980,21 @@ def usuario_no_quiere(
     )
 
     patrones = [
+
         "no quiero",
         "no gracias",
         "gracias no",
+
         "dejalo",
         "olvidalo",
+
         "cancelar",
         "cancela",
+
         "no por ahora",
+
         "despues",
+
         "no necesito",
     ]
 
@@ -1249,25 +1031,21 @@ def resetear_reserva(
 
     estado["datos_reserva"] = {
 
-        "servicio":
-            None,
+        "servicio": None,
 
-        "fecha_hora":
-            None,
+        "fecha_hora": None,
 
-        "nombre":
-            None,
+        "nombre": None,
 
         "telefono":
             telefono,
 
-        "email":
-            None,
+        "correo": None,
     }
 
 
 # ============================================================
-# CONVERSACIÓN NATURAL
+# OPENAI
 # ============================================================
 
 def responder_openai(
@@ -1278,63 +1056,66 @@ def responder_openai(
     try:
 
         system_prompt = f"""
-Eres el Asistente Virtual de
-Estilista {ESTILISTA_NOMBRE}.
+Eres el Asistente Virtual de {NEGOCIO_NOMBRE}.
 
-Tu objetivo es conversar de forma natural
-con los clientes y conducirlos suavemente
-hacia conocer los servicios o reservar una hora.
+Tu nombre es:
+"Asistente Virtual de Estilista {ESTILISTA_NOMBRE}".
 
-IMPORTANTE:
+Hablas español natural de Chile.
 
-No repitas siempre la misma respuesta.
+Tu conversación debe sentirse humana,
+fluida y natural.
 
-Debes entender el contexto de la conversación.
+PERSONALIDAD:
 
-Si el cliente dice:
+- amable
+- cercano
+- simpático
+- profesional
+- natural
+- breve
 
-"Hola"
+MUY IMPORTANTE:
 
-responde algo natural como:
+No repitas la misma respuesta.
 
-"¡Hola! 👋 Qué gusto saludarte. ¿Cómo estás?"
-
-Si dice:
-
-"bien y tú?"
-
-NO vuelvas a decir:
-
-"¡Hola! ¿Cómo estás?"
-
-Debes responder al contenido.
+Debes responder exactamente al contenido
+del mensaje del cliente.
 
 Por ejemplo:
 
-"¡Muy bien también, gracias! 😊
-¿Quieres que te cuente los servicios de Diego
-o prefieres que busquemos una hora?"
+Cliente:
+"Hola"
 
-Si dice:
+Respuesta:
+"¡Hola! 👋 Qué gusto saludarte.
+¿Cómo estás?"
 
-"qué tal?"
+Cliente:
+"bien y tú?"
 
-puedes responder:
+Respuesta:
+"¡Muy bien también! 😄 Gracias por preguntar.
+Si quieres, puedo contarte qué servicios tiene
+Diego o podemos buscar una hora para ti."
 
-"¡Todo muy bien! 😄 ¿Y tú?
-Si estás pensando en darte un cambio de look,
-puedo mostrarte los servicios o buscarte una hora."
+Cliente:
+"que tal"
 
-Si el cliente conversa informalmente,
-mantén una conversación humana y natural.
+No debes responder:
+"¡Qué bueno! Si quieres puedo mostrarte..."
 
-No fuerces inmediatamente una reserva.
+Debes contestar naturalmente, por ejemplo:
+"¡Todo bien por acá! 😄 ¿Y tú cómo estás?"
 
-Pero siempre intenta conducir suavemente
-la conversación hacia:
+OBJETIVO:
 
-1. Conocer servicios.
-2. Agendar una hora.
+Conducir naturalmente al cliente hacia:
+
+1. conocer los servicios
+2. reservar una hora
+
+No debes forzar una reserva inmediatamente.
 
 SERVICIOS:
 
@@ -1349,22 +1130,23 @@ HORARIO:
 Lunes a sábado.
 10:00 a 18:00.
 
-Cada servicio dura 1 hora.
+Cada atención dura 1 hora.
 
-Las horas disponibles reales las comprueba
-el sistema.
+Domingo cerrado.
 
-Nunca inventes una hora disponible.
+La disponibilidad real la comprueba el sistema.
+
+Nunca inventes horarios.
 
 Cuando el cliente quiera reservar,
-el sistema se encargará del flujo.
+el sistema se encargará del flujo de reserva.
 
-No hables de APIs, código, programación,
-Google Calendar, servidores ni sistemas internos.
+No menciones APIs, código, programación,
+Google Calendar, OpenAI ni detalles técnicos.
 
-Habla como un asistente real de una barbería.
-
-Sé breve y natural.
+Si el cliente dice que no quiere reservar,
+despídete amablemente y deja abierta
+la posibilidad de volver.
 
 ESTILISTA:
 {ESTILISTA_NOMBRE}
@@ -1374,46 +1156,31 @@ ESTILISTA:
             {
                 "role":
                     "system",
-
                 "content":
                     system_prompt
             }
         ]
 
-        # Evitamos pasar demasiada conversación
+        # Evitar repetir demasiado historial.
         mensajes.extend(
-            historial[-16:]
+            historial[-12:]
         )
 
-        # IMPORTANTE:
-        # Si la última entrada ya es el mensaje
-        # del usuario, no lo duplicamos.
-        if not (
-            mensajes
-            and mensajes[-1]["role"] == "user"
-            and mensajes[-1]["content"] == pregunta
-        ):
-
-            mensajes.append({
-                "role":
-                    "user",
-
-                "content":
-                    pregunta
-            })
+        mensajes.append({
+            "role":
+                "user",
+            "content":
+                pregunta
+        })
 
         completion = (
             client
             .chat
             .completions
             .create(
-
                 model="gpt-4o-mini",
-
                 messages=mensajes,
-
-                max_tokens=250,
-
+                max_tokens=300,
                 temperature=0.8,
             )
         )
@@ -1428,9 +1195,8 @@ ESTILISTA:
         if not respuesta:
 
             return (
-                "¡Qué bueno verte por aquí! 😊 "
-                "¿Quieres conocer nuestros servicios "
-                "o prefieres reservar una hora?"
+                "¡Hola! 👋 Qué gusto saludarte. "
+                "¿Cómo estás?"
             )
 
         return respuesta.strip()
@@ -1443,9 +1209,9 @@ ESTILISTA:
         )
 
         return (
-            "¡Todo bien por aquí! 😊 "
-            "Si quieres, puedo mostrarte nuestros "
-            "servicios o ayudarte a reservar una hora."
+            "¡Hola! 😊 Qué gusto saludarte. "
+            "¿Quieres conocer los servicios "
+            "o reservar una hora?"
         )
 
 
@@ -1458,9 +1224,9 @@ def procesar_agenda(
     texto
 ):
 
-    datos = estado[
-        "datos_reserva"
-    ]
+    datos = (
+        estado["datos_reserva"]
+    )
 
     texto = (
         texto or ""
@@ -1471,9 +1237,7 @@ def procesar_agenda(
     # CANCELACIÓN
     # ========================================================
 
-    if usuario_no_quiere(
-        texto
-    ):
+    if usuario_no_quiere(texto):
 
         resetear_reserva(
             estado
@@ -1481,13 +1245,14 @@ def procesar_agenda(
 
         return (
             "No hay problema 😊 "
-            "Cuando quieras volver, aquí estaré. "
+            "Cuando quieras conocer los servicios "
+            "o reservar una hora, aquí estaré. "
             "¡Que estés muy bien! 👋"
         )
 
 
     # ========================================================
-    # SERVICIO
+    # PASO 1 — SERVICIO
     # ========================================================
 
     if not datos["servicio"]:
@@ -1500,19 +1265,25 @@ def procesar_agenda(
 
             datos["servicio"] = servicio
 
-            servicio_info = obtener_servicio(
-                servicio
+            servicio_info = (
+                obtener_servicio(
+                    servicio
+                )
             )
 
-            horas = buscar_proximas_10_horas()
+            # Buscar inmediatamente las próximas
+            # 10 horas reales.
+            horas = (
+                buscar_proximas_10_horas()
+            )
 
             if not horas:
 
                 return (
                     f"Perfecto 😊 Elegiste "
                     f"{servicio_info['nombre']}.\n\n"
-                    "Por ahora no encontré horas "
-                    "disponibles."
+                    "Pero por ahora no encontré "
+                    "horas disponibles."
                 )
 
             estado[
@@ -1537,22 +1308,19 @@ def procesar_agenda(
                 f"💰 {precio}\n\n"
                 "Estas son las próximas "
                 "10 horas disponibles:\n\n"
-                f"{formatear_opciones_horas(horas)}"
-                "\n\n"
-                "Respóndeme con el número de la "
-                "hora que prefieras, del 1 al 10."
+                f"{formatear_opciones_horas(horas)}\n\n"
+                "Respóndeme con el número de la hora "
+                "que prefieras, del 1 al 10."
             )
 
         return mostrar_servicios()
 
 
     # ========================================================
-    # SELECCIONAR HORA
+    # PASO 2 — HORA
     # ========================================================
 
-    if estado[
-        "paso"
-    ] == "seleccionar_hora":
+    if estado["paso"] == "seleccionar_hora":
 
         match = re.fullmatch(
             r"\s*(\d{1,2})\s*",
@@ -1562,8 +1330,8 @@ def procesar_agenda(
         if not match:
 
             return (
-                "Indícame el número de la hora "
-                "que prefieres 😊.\n\n"
+                "Indícame solamente el número "
+                "de la hora que prefieres 😊.\n\n"
                 "Por ejemplo: 1"
             )
 
@@ -1571,9 +1339,11 @@ def procesar_agenda(
             match.group(1)
         )
 
-        horas_guardadas = estado.get(
-            "horas_ofrecidas",
-            []
+        horas_guardadas = (
+            estado.get(
+                "horas_ofrecidas",
+                []
+            )
         )
 
         if (
@@ -1585,20 +1355,25 @@ def procesar_agenda(
 
             return (
                 f"Elige un número entre 1 y "
-                f"{len(horas_guardadas)}, por favor 😊."
+                f"{len(horas_guardadas)}, "
+                "por favor 😊."
             )
 
         try:
 
-            fecha_hora = datetime.fromisoformat(
-                horas_guardadas[
-                    numero - 1
-                ]
+            fecha_hora = (
+                datetime.fromisoformat(
+                    horas_guardadas[
+                        numero - 1
+                    ]
+                )
             )
 
         except Exception:
 
-            horas = buscar_proximas_10_horas()
+            horas = (
+                buscar_proximas_10_horas()
+            )
 
             estado[
                 "horas_ofrecidas"
@@ -1618,9 +1393,11 @@ def procesar_agenda(
         # SEGUNDA COMPROBACIÓN
         # ====================================================
 
-        disponible = verificar_disponibilidad(
-            fecha_hora,
-            DURACION_RESERVA
+        disponible = (
+            verificar_disponibilidad(
+                fecha_hora,
+                DURACION_RESERVA
+            )
         )
 
         if disponible is None:
@@ -1633,7 +1410,9 @@ def procesar_agenda(
 
         if not disponible:
 
-            horas = buscar_proximas_10_horas()
+            horas = (
+                buscar_proximas_10_horas()
+            )
 
             estado[
                 "horas_ofrecidas"
@@ -1667,17 +1446,16 @@ def procesar_agenda(
 
 
     # ========================================================
-    # NOMBRE
+    # PASO 3 — NOMBRE
     # ========================================================
 
-    if estado[
-        "paso"
-    ] == "nombre":
+    if estado["paso"] == "nombre":
 
         if len(texto) < 2:
 
             return (
-                "¿Me indicas tu nombre, por favor? 😊"
+                "¿Me indicas tu nombre, "
+                "por favor? 😊"
             )
 
         datos[
@@ -1695,26 +1473,18 @@ def procesar_agenda(
 
 
     # ========================================================
-    # TELÉFONO
+    # PASO 4 — TELÉFONO
     # ========================================================
 
-    if estado[
-        "paso"
-    ] == "telefono":
+    if estado["paso"] == "telefono":
 
-        telefono_limpio = re.sub(
-            r"[^0-9+]",
+        numeros = re.sub(
+            r"\D",
             "",
             texto
         )
 
-        if len(
-            re.sub(
-                r"\D",
-                "",
-                telefono_limpio
-            )
-        ) < 7:
+        if len(numeros) < 7:
 
             return (
                 "¿Me indicas un número de teléfono "
@@ -1723,43 +1493,42 @@ def procesar_agenda(
 
         datos[
             "telefono"
-        ] = telefono_limpio
+        ] = texto
 
         estado[
             "paso"
-        ] = "email"
+        ] = "correo"
 
         return (
             "Perfecto 👍\n\n"
             "¿Cuál es tu correo electrónico? 📧\n\n"
-            "Te enviaremos la confirmación de tu "
-            "reserva y el enlace de Google Meet."
+            "Te enviaremos la invitación de "
+            "Google Calendar con la reserva "
+            "y el enlace de Google Meet."
         )
 
 
     # ========================================================
-    # EMAIL
+    # PASO 5 — CORREO
     # ========================================================
 
-    if estado[
-        "paso"
-    ] == "email":
+    if estado["paso"] == "correo":
 
-        email = texto.strip().lower()
+        correo = texto.strip()
 
         if not correo_valido(
-            email
+            correo
         ):
 
             return (
-                "Parece que ese correo no está "
-                "correcto 😕.\n\n"
-                "Por favor escríbelo nuevamente."
+                "Ese correo no parece válido 😕.\n\n"
+                "Por favor escríbelo nuevamente.\n\n"
+                "Ejemplo: nombre@gmail.com"
             )
 
         datos[
-            "email"
-        ] = email
+            "correo"
+        ] = correo
 
         estado[
             "paso"
@@ -1774,9 +1543,7 @@ def procesar_agenda(
     # CONFIRMAR
     # ========================================================
 
-    if estado[
-        "paso"
-    ] == "confirmar":
+    if estado["paso"] == "confirmar":
 
         return completar_reserva(
             estado
@@ -1794,13 +1561,11 @@ def completar_reserva(
     estado
 ):
 
-    datos = estado[
-        "datos_reserva"
-    ]
+    datos = (
+        estado["datos_reserva"]
+    )
 
-    if not datos[
-        "servicio"
-    ]:
+    if not datos["servicio"]:
 
         estado[
             "paso"
@@ -1809,9 +1574,7 @@ def completar_reserva(
         return mostrar_servicios()
 
 
-    if not datos[
-        "fecha_hora"
-    ]:
+    if not datos["fecha_hora"]:
 
         estado[
             "paso"
@@ -1820,9 +1583,7 @@ def completar_reserva(
         return mostrar_proximas_horas()
 
 
-    if not datos[
-        "nombre"
-    ]:
+    if not datos["nombre"]:
 
         estado[
             "paso"
@@ -1833,9 +1594,7 @@ def completar_reserva(
         )
 
 
-    if not datos[
-        "telefono"
-    ]:
+    if not datos["telefono"]:
 
         estado[
             "paso"
@@ -1846,13 +1605,11 @@ def completar_reserva(
         )
 
 
-    if not datos[
-        "email"
-    ]:
+    if not datos["correo"]:
 
         estado[
             "paso"
-        ] = "email"
+        ] = "correo"
 
         return (
             "¿Cuál es tu correo electrónico? 📧"
@@ -1862,9 +1619,7 @@ def completar_reserva(
     try:
 
         inicio = datetime.fromisoformat(
-            datos[
-                "fecha_hora"
-            ]
+            datos["fecha_hora"]
         )
 
     except Exception:
@@ -1884,9 +1639,11 @@ def completar_reserva(
     # COMPROBACIÓN FINAL
     # ========================================================
 
-    disponible = verificar_disponibilidad(
-        inicio,
-        DURACION_RESERVA
+    disponible = (
+        verificar_disponibilidad(
+            inicio,
+            DURACION_RESERVA
+        )
     )
 
     if disponible is None:
@@ -1896,6 +1653,7 @@ def completar_reserva(
             "la disponibilidad 😕.\n\n"
             "Intenta nuevamente en unos segundos."
         )
+
 
     if not disponible:
 
@@ -1907,7 +1665,9 @@ def completar_reserva(
             "paso"
         ] = "seleccionar_hora"
 
-        horas = buscar_proximas_10_horas()
+        horas = (
+            buscar_proximas_10_horas()
+        )
 
         estado[
             "horas_ofrecidas"
@@ -1926,10 +1686,11 @@ def completar_reserva(
 
 
     # ========================================================
-    # CREAR EVENTO GOOGLE + GOOGLE MEET
+    # CREAR EVENTO
     # ========================================================
 
     resultado = crear_evento_diego(
+
         inicio=inicio,
 
         servicio_codigo=
@@ -1941,13 +1702,12 @@ def completar_reserva(
         telefono_cliente=
             datos["telefono"],
 
-        email_cliente=
-            datos["email"],
+        correo_cliente=
+            datos["correo"],
     )
 
-    if not resultado[
-        "ok"
-    ]:
+
+    if not resultado["ok"]:
 
         print(
             "ERROR CREANDO RESERVA:",
@@ -1975,44 +1735,24 @@ def completar_reserva(
         "telefono"
     ]
 
-    email = datos[
-        "email"
+    correo = datos[
+        "correo"
     ]
 
-    fecha_texto = formato_fecha_larga(
-        inicio
+    fecha_texto = (
+        formato_fecha_larga(
+            inicio
+        )
     )
 
-    meet_link = resultado.get(
-        "meet_link"
-    )
-
-
-    # ========================================================
-    # ENVIAR CORREO
-    # ========================================================
-
-    email_enviado = (
-        enviar_email_confirmacion(
-            email_cliente=email,
-
-            nombre_cliente=nombre,
-
-            telefono_cliente=telefono,
-
-            servicio=servicio,
-
-            inicio=inicio,
-
-            meet_link=meet_link,
+    meet_link = (
+        resultado.get(
+            "meet_link"
         )
     )
 
 
-    # ========================================================
-    # GUARDAR TELÉFONO
-    # ========================================================
-
+    # Guardar teléfono para futuras reservas.
     telefono_guardar = telefono
 
 
@@ -2031,9 +1771,11 @@ def completar_reserva(
     ] = telefono_guardar
 
 
-    # ========================================================
-    # RESPUESTA FINAL
-    # ========================================================
+    precio = (
+        f"${servicio['precio']:,}"
+        .replace(",", ".")
+    )
+
 
     respuesta = (
         "✅ ¡Reserva confirmada!\n\n"
@@ -2042,9 +1784,7 @@ def completar_reserva(
         f"{servicio['nombre']}\n"
 
         f"💰 Valor: "
-        f"${servicio['precio']:,}"
-        .replace(",", ".")
-        + "\n"
+        f"{precio}\n"
 
         f"👤 Cliente: "
         f"{nombre}\n"
@@ -2053,41 +1793,30 @@ def completar_reserva(
         f"{telefono}\n"
 
         f"📧 Correo: "
-        f"{email}\n"
+        f"{correo}\n"
 
-        f"📅 {fecha_texto}\n\n"
+        f"📅 "
+        f"{fecha_texto}\n\n"
 
         f"Tu hora quedó agendada directamente "
-        f"en la agenda de {ESTILISTA_NOMBRE}.\n"
+        f"en la agenda de {ESTILISTA_NOMBRE}.\n\n"
     )
 
 
     if meet_link:
 
         respuesta += (
-            "\n🎥 Videollamada Google Meet:\n"
-            f"{meet_link}\n"
-        )
-
-
-    if email_enviado:
-
-        respuesta += (
-            "\n📧 También te envié la confirmación "
-            "a tu correo.\n"
-        )
-
-    else:
-
-        respuesta += (
-            "\n📧 No pude enviar el correo de "
-            "confirmación en este momento, pero "
-            "tu reserva quedó registrada correctamente.\n"
+            "🎥 Videollamada Google Meet:\n"
+            f"{meet_link}\n\n"
         )
 
 
     respuesta += (
-        "\nLa atención dura 1 hora.\n\n"
+        "📅 Te enviamos la invitación de "
+        "Google Calendar a tu correo.\n\n"
+
+        "La atención dura 1 hora.\n\n"
+
         "¡Te esperamos! 🙌"
     )
 
@@ -2096,8 +1825,7 @@ def completar_reserva(
 
 
 # ============================================================
-# CREAR EVENTO GOOGLE CALENDAR
-# + GOOGLE MEET
+# CREAR EVENTO GOOGLE CALENDAR + GOOGLE MEET
 # ============================================================
 
 def crear_evento_diego(
@@ -2105,12 +1833,14 @@ def crear_evento_diego(
     servicio_codigo,
     nombre_cliente,
     telefono_cliente,
-    email_cliente
+    correo_cliente
 ):
 
     try:
 
-        service = obtener_calendar_service()
+        service = (
+            obtener_calendar_service()
+        )
 
         servicio = obtener_servicio(
             servicio_codigo
@@ -2128,9 +1858,10 @@ def crear_evento_diego(
         # REQUEST ID ÚNICO PARA GOOGLE MEET
         # ====================================================
 
+        import uuid
+
         request_id = (
-            "meet-"
-            + uuid.uuid4().hex
+            uuid.uuid4().hex
         )
 
 
@@ -2159,7 +1890,7 @@ def crear_evento_diego(
                     f"{telefono_cliente}\n"
 
                     f"Correo: "
-                    f"{email_cliente}\n"
+                    f"{correo_cliente}\n"
 
                     f"Servicio: "
                     f"{servicio['nombre']}\n"
@@ -2191,20 +1922,25 @@ def crear_evento_diego(
                     TIMEZONE,
             },
 
+
             # =================================================
-            # CLIENTE COMO ASISTENTE
+            # INVITADO
             # =================================================
-            #
-            # Si el correo es Gmail/Google,
-            # Google Calendar puede agregar la cita
-            # al calendario del cliente.
-            #
+
             "attendees": [
+
                 {
                     "email":
-                        email_cliente
+                        correo_cliente,
+
+                    "displayName":
+                        nombre_cliente,
+
+                    "responseStatus":
+                        "needsAction",
                 }
             ],
+
 
             # =================================================
             # GOOGLE MEET
@@ -2225,6 +1961,7 @@ def crear_evento_diego(
                 }
             },
 
+
             # =================================================
             # DATOS INTERNOS
             # =================================================
@@ -2239,8 +1976,8 @@ def crear_evento_diego(
                     "telefono":
                         telefono_cliente,
 
-                    "email":
-                        email_cliente,
+                    "correo":
+                        correo_cliente,
 
                     "servicio":
                         servicio["nombre"],
@@ -2262,6 +1999,13 @@ def crear_evento_diego(
 
         # ====================================================
         # CREAR EVENTO
+        #
+        # sendUpdates="all":
+        # Google Calendar envía automáticamente
+        # la invitación al correo del cliente.
+        #
+        # conferenceDataVersion=1:
+        # habilita la creación de Google Meet.
         # ====================================================
 
         resultado = (
@@ -2285,64 +2029,60 @@ def crear_evento_diego(
         )
 
 
-        # ====================================================
-        # EXTRAER LINK MEET
-        # ====================================================
-
-        meet_link = (
-            resultado
-            .get(
-                "hangoutLink"
-            )
-        )
-
-
-        # ====================================================
-        # RESPALDO: BUSCAR ENTRY POINT
-        # ====================================================
-
-        if not meet_link:
-
-            conference_data = (
-                resultado
-                .get(
-                    "conferenceData",
-                    {}
-                )
-            )
-
-            entry_points = (
-                conference_data
-                .get(
-                    "entryPoints",
-                    []
-                )
-            )
-
-            for entry in entry_points:
-
-                if (
-                    entry.get(
-                        "entryPointType"
-                    )
-                    == "video"
-                ):
-
-                    meet_link = (
-                        entry.get(
-                            "uri"
-                        )
-                    )
-
-                    break
-
-
         print(
             "EVENTO GOOGLE CREADO:",
-            resultado.get(
-                "id"
-            )
+            resultado.get("id")
         )
+
+
+        # ====================================================
+        # OBTENER LINK GOOGLE MEET
+        # ====================================================
+
+        meet_link = None
+
+        conference_data = (
+            resultado.get(
+                "conferenceData"
+            )
+            or {}
+        )
+
+        entry_points = (
+            conference_data.get(
+                "entryPoints"
+            )
+            or []
+        )
+
+        for entry in entry_points:
+
+            if (
+                entry.get(
+                    "entryPointType"
+                )
+                == "video"
+            ):
+
+                meet_link = (
+                    entry.get(
+                        "uri"
+                    )
+                )
+
+                break
+
+
+        # Algunas respuestas de Google pueden
+        # traer hangoutLink.
+        if not meet_link:
+
+            meet_link = (
+                resultado.get(
+                    "hangoutLink"
+                )
+            )
+
 
         print(
             "GOOGLE MEET:",
@@ -2383,7 +2123,7 @@ def crear_evento_diego(
                 False,
 
             "error":
-                str(e)
+                str(e),
         }
 
 
@@ -2395,9 +2135,7 @@ def crear_evento_diego(
 def home():
 
     return redirect(
-        url_for(
-            "chat"
-        )
+        url_for("chat")
     )
 
 
@@ -2407,10 +2145,7 @@ def home():
 
 @app.route(
     "/chat",
-    methods=[
-        "GET",
-        "POST"
-    ]
+    methods=["GET", "POST"]
 )
 def chat():
 
@@ -2481,7 +2216,7 @@ def chat():
             "telefono":
                 None,
 
-            "email":
+            "correo":
                 None,
         }
 
@@ -2552,10 +2287,14 @@ def chat():
                         ],
                 }
 
-                respuesta = procesar_agenda(
-                    estado,
-                    pregunta
+
+                respuesta = (
+                    procesar_agenda(
+                        estado,
+                        pregunta
+                    )
                 )
+
 
                 session[
                     "modo_agendar"
@@ -2583,7 +2322,7 @@ def chat():
 
 
             # =================================================
-            # YA AGENDANDO
+            # YA ESTÁ AGENDANDO
             # =================================================
 
             elif session.get(
@@ -2614,10 +2353,14 @@ def chat():
                         ],
                 }
 
-                respuesta = procesar_agenda(
-                    estado,
-                    pregunta
+
+                respuesta = (
+                    procesar_agenda(
+                        estado,
+                        pregunta
+                    )
                 )
+
 
                 session[
                     "modo_agendar"
@@ -2660,6 +2403,7 @@ def chat():
                     "paso"
                 ] = "inicio"
 
+
                 estado = {
 
                     "modo_agendar":
@@ -2677,10 +2421,14 @@ def chat():
                         ],
                 }
 
-                respuesta = procesar_agenda(
-                    estado,
-                    pregunta
+
+                respuesta = (
+                    procesar_agenda(
+                        estado,
+                        pregunta
+                    )
                 )
+
 
                 session[
                     "paso"
@@ -2709,7 +2457,9 @@ def chat():
                 pregunta
             ):
 
-                respuesta = mostrar_servicios()
+                respuesta = (
+                    mostrar_servicios()
+                )
 
 
             # =================================================
@@ -2718,11 +2468,13 @@ def chat():
 
             else:
 
-                respuesta = responder_openai(
-                    session[
-                        "historial"
-                    ],
-                    pregunta
+                respuesta = (
+                    responder_openai(
+                        session[
+                            "historial"
+                        ],
+                        pregunta
+                    )
                 )
 
 
@@ -2736,6 +2488,7 @@ def chat():
                 "content":
                     respuesta,
             })
+
 
             session.modified = True
 
@@ -2771,12 +2524,15 @@ def whatsapp_verify():
         "hub.challenge"
     )
 
+
     if (
         mode == "subscribe"
-        and token == WHATSAPP_VERIFY_TOKEN
+        and token ==
+            WHATSAPP_VERIFY_TOKEN
     ):
 
         return challenge, 200
+
 
     return "Forbidden", 403
 
@@ -2798,6 +2554,7 @@ def whatsapp_webhook():
         or {}
     )
 
+
     try:
 
         entry = (
@@ -2807,12 +2564,14 @@ def whatsapp_webhook():
             or []
         )[0]
 
+
         changes = (
             entry.get(
                 "changes"
             )
             or []
         )[0]
+
 
         value = (
             changes.get(
@@ -2821,11 +2580,13 @@ def whatsapp_webhook():
             or {}
         )
 
+
         if value.get(
             "statuses"
         ):
 
             return "ok", 200
+
 
         messages = (
             value.get(
@@ -2834,11 +2595,14 @@ def whatsapp_webhook():
             or []
         )
 
+
         if not messages:
 
             return "ok", 200
 
+
         msg = messages[0]
+
 
         msg_id = msg.get(
             "id"
@@ -2847,6 +2611,7 @@ def whatsapp_webhook():
         wa_id = msg.get(
             "from"
         )
+
 
         text = (
             msg.get(
@@ -2857,6 +2622,7 @@ def whatsapp_webhook():
             "body",
             ""
         ).strip()
+
 
         if not wa_id:
 
@@ -2877,12 +2643,13 @@ def whatsapp_webhook():
 
 
         # ====================================================
-        # DEDUPLICACIÓN
+        # DEDUP
         # ====================================================
 
         ahora_timestamp = (
             datetime.now().timestamp()
         )
+
 
         if msg_id:
 
@@ -2903,7 +2670,9 @@ def whatsapp_webhook():
                     ]
 
 
-            if msg_id in PROCESSED_MSG_IDS:
+            if msg_id in (
+                PROCESSED_MSG_IDS
+            ):
 
                 return "ok", 200
 
@@ -2921,11 +2690,13 @@ def whatsapp_webhook():
             wa_id
         )
 
+
         estado[
             "datos_reserva"
         ][
             "telefono"
         ] = wa_id
+
 
         estado[
             "historial"
@@ -2947,10 +2718,13 @@ def whatsapp_webhook():
             "modo_agendar"
         ]:
 
-            respuesta = procesar_agenda(
-                estado,
-                text
+            respuesta = (
+                procesar_agenda(
+                    estado,
+                    text
+                )
             )
+
 
         elif es_intencion_agendar(
             text
@@ -2964,24 +2738,33 @@ def whatsapp_webhook():
                 "paso"
             ] = "inicio"
 
-            respuesta = procesar_agenda(
-                estado,
-                text
+
+            respuesta = (
+                procesar_agenda(
+                    estado,
+                    text
+                )
             )
+
 
         elif pregunta_servicios(
             text
         ):
 
-            respuesta = mostrar_servicios()
+            respuesta = (
+                mostrar_servicios()
+            )
+
 
         else:
 
-            respuesta = responder_openai(
-                estado[
-                    "historial"
-                ],
-                text
+            respuesta = (
+                responder_openai(
+                    estado[
+                        "historial"
+                    ],
+                    text
+                )
             )
 
 
@@ -3010,6 +2793,7 @@ def whatsapp_webhook():
             repr(e)
         )
 
+
     return "ok", 200
 
 
@@ -3024,7 +2808,10 @@ def admin_login():
 
     try:
 
-        flow = crear_google_flow()
+        flow = (
+            crear_google_flow()
+        )
+
 
         authorization_url, state = (
             flow.authorization_url(
@@ -3040,21 +2827,29 @@ def admin_login():
             )
         )
 
+
         session.permanent = True
+
 
         session[
             "google_oauth_state"
         ] = state
 
+
         session[
             "google_code_verifier"
-        ] = flow.code_verifier
+        ] = (
+            flow.code_verifier
+        )
+
 
         session.modified = True
+
 
         return redirect(
             authorization_url
         )
+
 
     except Exception as e:
 
@@ -3063,7 +2858,9 @@ def admin_login():
             repr(e)
         )
 
+
         return render_template_string(
+
             ERROR_TEMPLATE,
 
             titulo=
@@ -3087,9 +2884,11 @@ def callback():
         "error"
     )
 
+
     if error:
 
         return render_template_string(
+
             ERROR_TEMPLATE,
 
             titulo=
@@ -3104,9 +2903,11 @@ def callback():
         "code"
     )
 
+
     if not code:
 
         return render_template_string(
+
             ERROR_TEMPLATE,
 
             titulo=
@@ -3144,7 +2945,10 @@ def callback():
             )
 
 
-        flow = crear_google_flow()
+        flow = (
+            crear_google_flow()
+        )
+
 
         flow.state = state
 
@@ -3175,7 +2979,9 @@ def callback():
         )
 
 
-        credentials = flow.credentials
+        credentials = (
+            flow.credentials
+        )
 
 
         if not credentials:
@@ -3193,6 +2999,7 @@ def callback():
         if not refresh_token:
 
             return render_template_string(
+
                 ERROR_TEMPLATE,
 
                 titulo=
@@ -3220,6 +3027,7 @@ def callback():
 
 
         return render_template_string(
+
             TOKEN_TEMPLATE,
 
             token=
@@ -3234,7 +3042,9 @@ def callback():
             repr(e)
         )
 
+
         return render_template_string(
+
             ERROR_TEMPLATE,
 
             titulo=
@@ -3257,9 +3067,7 @@ def logout():
     session.clear()
 
     return redirect(
-        url_for(
-            "home"
-        )
+        url_for("home")
     )
 
 
@@ -3337,7 +3145,7 @@ Ahora haz esto en Render:
 <ol>
 
 <li>
-Ve a <b>Environment</b>.
+Ve a Environment.
 </li>
 
 <li>
@@ -3625,25 +3433,37 @@ button {
 <div id="chat-header">
 
 <div class="name">
+
 ✂️ Asistente Virtual de Estilista Diego
+
 </div>
 
 <div class="subtitle">
-Lunes a sábado · 10:00 a 18:00 · Reservas de 1 hora
+
+Lunes a sábado · 10:00 a 18:00 ·
+Reservas de 1 hora
+
 </div>
 
 </div>
+
 
 <div id="chat-messages">
 
 {% for m in historial %}
 
 <div class="msg
+
 {% if m['role'] == 'user' %}
+
 user
+
 {% else %}
+
 bot
+
 {% endif %}
+
 ">
 
 {{ m['content'] | e }}
@@ -3653,6 +3473,7 @@ bot
 {% endfor %}
 
 </div>
+
 
 <form
 id="chat-input-form"
@@ -3668,12 +3489,15 @@ required
 >
 
 <button type="submit">
+
 ➤
+
 </button>
 
 </form>
 
 </div>
+
 
 <script>
 
@@ -3711,6 +3535,7 @@ if __name__ == "__main__":
     )
 
     app.run(
+
         host="0.0.0.0",
 
         port=port,
