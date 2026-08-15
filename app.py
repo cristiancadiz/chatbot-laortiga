@@ -1,10 +1,11 @@
 import os
 import time
-import json
 import requests
 import pytz
 import dateparser
 import openai
+
+from datetime import timedelta, datetime
 
 from flask import (
     Flask,
@@ -16,12 +17,11 @@ from flask import (
     abort,
 )
 
-from datetime import timedelta, datetime
 from dotenv import load_dotenv
 
-from google.oauth2 import id_token
+from werkzeug.middleware.proxy_fix import ProxyFix
+
 from google_auth_oauthlib.flow import Flow
-from google.auth.transport import requests as grequests
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 
@@ -34,6 +34,10 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# ------------------------------------------------------------
+# SECRET KEY
+# ------------------------------------------------------------
+
 app.secret_key = os.getenv("SECRET_KEY")
 
 if not app.secret_key:
@@ -42,6 +46,27 @@ if not app.secret_key:
     )
 
 app.permanent_session_lifetime = timedelta(days=30)
+
+# ------------------------------------------------------------
+# RENDER / HTTPS
+#
+# Render funciona detrás de un proxy.
+# ProxyFix permite que Flask reconozca correctamente
+# que la solicitud original utiliza HTTPS.
+# ------------------------------------------------------------
+
+app.wsgi_app = ProxyFix(
+    app.wsgi_app,
+    x_for=1,
+    x_proto=1,
+    x_host=1,
+    x_port=1,
+    x_prefix=1,
+)
+
+# ------------------------------------------------------------
+# DESARROLLO LOCAL
+# ------------------------------------------------------------
 
 if os.getenv("FLASK_ENV") == "development":
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
@@ -100,6 +125,7 @@ DURACION_DEFAULT = int(
 # ============================================================
 
 SERVICIOS = {
+
     "corte": {
         "nombre": "Corte de cabello",
         "duracion": 45,
@@ -140,15 +166,6 @@ SERVICIOS = {
 
 # ============================================================
 # GOOGLE CALENDAR
-#
-# IMPORTANTE:
-#
-# El cliente NO inicia sesión.
-#
-# GOOGLE_REFRESH_TOKEN pertenece a Diego.
-#
-# Ese token permite que el servidor consulte y modifique
-# exclusivamente el calendario autorizado por Diego.
 # ============================================================
 
 GOOGLE_CLIENT_ID = os.getenv(
@@ -168,6 +185,11 @@ GOOGLE_REDIRECT_URI = os.getenv(
     "https://chatbot-laortiga-9.onrender.com/callback"
 )
 
+
+# ------------------------------------------------------------
+# VALIDACIONES
+# ------------------------------------------------------------
+
 if not GOOGLE_CLIENT_ID:
     raise Exception(
         "Falta GOOGLE_CLIENT_ID."
@@ -179,36 +201,60 @@ if not GOOGLE_CLIENT_SECRET:
     )
 
 
+# ============================================================
+# GOOGLE OAUTH SCOPES
+# ============================================================
+
 SCOPES = [
+
     "openid",
+
     "https://www.googleapis.com/auth/userinfo.email",
+
     "https://www.googleapis.com/auth/userinfo.profile",
+
     "https://www.googleapis.com/auth/calendar",
 ]
 
 
 # ============================================================
-# OAUTH FLOW
+# CREAR FLOW OAUTH
 #
-# Se utiliza solamente para que DIEGO autorice su calendario.
-# Los clientes NO pasan por este proceso.
+# Se crea un Flow nuevo para cada solicitud.
+# Esto evita problemas de estado entre usuarios/sesiones.
 # ============================================================
 
-flow = Flow.from_client_config(
-    {
-        "web": {
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [
-                GOOGLE_REDIRECT_URI
-            ],
-        }
-    },
-    scopes=SCOPES,
-    redirect_uri=GOOGLE_REDIRECT_URI,
-)
+def crear_google_flow():
+
+    flow = Flow.from_client_config(
+
+        {
+            "web": {
+
+                "client_id":
+                    GOOGLE_CLIENT_ID,
+
+                "client_secret":
+                    GOOGLE_CLIENT_SECRET,
+
+                "auth_uri":
+                    "https://accounts.google.com/o/oauth2/auth",
+
+                "token_uri":
+                    "https://oauth2.googleapis.com/token",
+
+                "redirect_uris": [
+                    GOOGLE_REDIRECT_URI
+                ],
+            }
+        },
+
+        scopes=SCOPES,
+
+        redirect_uri=GOOGLE_REDIRECT_URI,
+    )
+
+    return flow
 
 
 # ============================================================
@@ -232,6 +278,7 @@ if (
     or not WHATSAPP_PHONE_NUMBER_ID
     or not WHATSAPP_VERIFY_TOKEN
 ):
+
     print(
         "⚠️ WhatsApp no está completamente configurado."
     )
@@ -265,15 +312,21 @@ def _dedup_seen(msg_id: str) -> bool:
             now - PROCESSED_MSG_IDS[key]
             > DEDUP_TTL_SECONDS
         ):
+
             del PROCESSED_MSG_IDS[key]
 
     if msg_id in PROCESSED_MSG_IDS:
+
         return True
 
     PROCESSED_MSG_IDS[msg_id] = now
 
     return False
 
+
+# ============================================================
+# ENVIAR MENSAJE WHATSAPP
+# ============================================================
 
 def wa_send_text(
     to_number: str,
@@ -284,9 +337,11 @@ def wa_send_text(
         not WHATSAPP_TOKEN
         or not WHATSAPP_PHONE_NUMBER_ID
     ):
+
         print(
             "❌ WhatsApp no configurado."
         )
+
         return None
 
     url = (
@@ -295,6 +350,7 @@ def wa_send_text(
     )
 
     headers = {
+
         "Authorization":
             f"Bearer {WHATSAPP_TOKEN}",
 
@@ -314,6 +370,7 @@ def wa_send_text(
             "text",
 
         "text": {
+
             "body":
                 (text or "")[:3900]
         },
@@ -322,9 +379,13 @@ def wa_send_text(
     try:
 
         response = requests.post(
+
             url,
+
             headers=headers,
+
             json=payload,
+
             timeout=20,
         )
 
@@ -346,6 +407,10 @@ def wa_send_text(
         return None
 
 
+# ============================================================
+# SESIÓN WHATSAPP
+# ============================================================
+
 def get_wa_session(
     wa_id: str
 ):
@@ -359,9 +424,13 @@ def get_wa_session(
             "modo_agendar": False,
 
             "datos_reserva": {
+
                 "servicio": None,
+
                 "fecha_hora": None,
+
                 "nombre": None,
+
                 "telefono": wa_id,
             },
         }
@@ -383,25 +452,46 @@ def obtener_credentials_diego():
         )
 
     credentials = Credentials(
+
         token=None,
-        refresh_token=GOOGLE_REFRESH_TOKEN,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=GOOGLE_CLIENT_ID,
-        client_secret=GOOGLE_CLIENT_SECRET,
-        scopes=SCOPES,
+
+        refresh_token=
+            GOOGLE_REFRESH_TOKEN,
+
+        token_uri=
+            "https://oauth2.googleapis.com/token",
+
+        client_id=
+            GOOGLE_CLIENT_ID,
+
+        client_secret=
+            GOOGLE_CLIENT_SECRET,
+
+        scopes=
+            SCOPES,
     )
 
     return credentials
 
 
+# ============================================================
+# SERVICIO GOOGLE CALENDAR
+# ============================================================
+
 def obtener_calendar_service():
 
-    credentials = obtener_credentials_diego()
+    credentials = (
+        obtener_credentials_diego()
+    )
 
     service = build(
+
         "calendar",
+
         "v3",
+
         credentials=credentials,
+
         cache_discovery=False,
     )
 
@@ -425,9 +515,13 @@ def parse_fecha_hora(texto):
         )
 
         resultado = dateparser.parse(
+
             texto,
+
             languages=["es"],
+
             settings={
+
                 "PREFER_DATES_FROM":
                     "future",
 
@@ -446,6 +540,7 @@ def parse_fecha_hora(texto):
         )
 
         if not resultado:
+
             return None
 
         if resultado.tzinfo is None:
@@ -467,7 +562,7 @@ def parse_fecha_hora(texto):
 
 
 # ============================================================
-# NORMALIZAR SERVICIO
+# DETECTAR SERVICIO
 # ============================================================
 
 def detectar_servicio(texto):
@@ -480,41 +575,52 @@ def detectar_servicio(texto):
         "corte" in texto
         and "barba" in texto
     ):
+
         return "corte_barba"
 
     if (
         "niño" in texto
         or "nino" in texto
     ):
+
         return "corte_nino"
 
     if "barba" in texto:
+
         return "barba"
 
     if (
         "perfilado" in texto
         or "perfil" in texto
     ):
+
         return "perfilado"
 
     if "corte" in texto:
+
         return "corte"
 
     return None
 
+
+# ============================================================
+# OBTENER SERVICIO
+# ============================================================
 
 def obtener_servicio(
     codigo
 ):
 
     return SERVICIOS.get(
+
         codigo,
+
         SERVICIOS["otro"]
     )
 
 
 # ============================================================
-# CONSULTAR DISPONIBILIDAD
+# VERIFICAR DISPONIBILIDAD
 # ============================================================
 
 def verificar_disponibilidad(
@@ -526,6 +632,20 @@ def verificar_disponibilidad(
 
         service = (
             obtener_calendar_service()
+        )
+
+        zona = pytz.timezone(
+            TIMEZONE
+        )
+
+        if inicio.tzinfo is None:
+
+            inicio = zona.localize(
+                inicio
+            )
+
+        inicio = inicio.astimezone(
+            zona
         )
 
         fin = (
@@ -544,6 +664,7 @@ def verificar_disponibilidad(
                 fin.isoformat(),
 
             "items": [
+
                 {
                     "id":
                         CALENDAR_ID
@@ -552,16 +673,26 @@ def verificar_disponibilidad(
         }
 
         resultado = (
+
             service
             .freebusy()
-            .query(body=body)
+            .query(
+                body=body
+            )
             .execute()
         )
 
         calendario = (
+
             resultado
-            .get("calendars", {})
-            .get(CALENDAR_ID, {})
+            .get(
+                "calendars",
+                {}
+            )
+            .get(
+                CALENDAR_ID,
+                {}
+            )
         )
 
         bloques = calendario.get(
@@ -574,8 +705,7 @@ def verificar_disponibilidad(
     except Exception as e:
 
         print(
-            "❌ Error consultando "
-            "Google Calendar:",
+            "❌ Error consultando Google Calendar:",
             e
         )
 
@@ -599,8 +729,8 @@ def buscar_horas_disponibles(
         zona
     )
 
-    # Horario configurable
     hora_inicio = 9
+
     hora_fin = 20
 
     resultados = []
@@ -613,20 +743,27 @@ def buscar_horas_disponibles(
         for minuto in [0, 30]:
 
             inicio = fecha.replace(
+
                 hour=hora,
+
                 minute=minuto,
+
                 second=0,
+
                 microsecond=0,
             )
 
             if inicio <= datetime.now(
                 zona
             ):
+
                 continue
 
             disponible = (
                 verificar_disponibilidad(
+
                     inicio,
+
                     duracion
                 )
             )
@@ -638,19 +775,24 @@ def buscar_horas_disponibles(
                 )
 
             if len(resultados) >= 5:
+
                 return resultados
 
     return resultados
 
 
 # ============================================================
-# CREAR EVENTO EN EL CALENDARIO DE DIEGO
+# CREAR EVENTO EN CALENDARIO DE DIEGO
 # ============================================================
 
 def crear_evento_diego(
+
     inicio,
+
     servicio_codigo,
+
     nombre_cliente,
+
     telefono_cliente
 ):
 
@@ -660,13 +802,29 @@ def crear_evento_diego(
             obtener_calendar_service()
         )
 
-        servicio = obtener_servicio(
-            servicio_codigo
+        servicio = (
+            obtener_servicio(
+                servicio_codigo
+            )
         )
 
         duracion = servicio[
             "duracion"
         ]
+
+        zona = pytz.timezone(
+            TIMEZONE
+        )
+
+        if inicio.tzinfo is None:
+
+            inicio = zona.localize(
+                inicio
+            )
+
+        inicio = inicio.astimezone(
+            zona
+        )
 
         fin = (
             inicio
@@ -676,17 +834,23 @@ def crear_evento_diego(
         )
 
         titulo = (
+
             f"{servicio['nombre']} - "
             f"{nombre_cliente}"
         )
 
         descripcion = (
+
             "Reserva agendada por "
             "Asistente Virtual de "
             "Estilista Diego.\n\n"
+
             f"Cliente: {nombre_cliente}\n"
+
             f"Teléfono: {telefono_cliente}\n"
+
             f"Servicio: {servicio['nombre']}\n"
+
             f"Duración: {duracion} minutos\n"
         )
 
@@ -699,6 +863,7 @@ def crear_evento_diego(
                 descripcion,
 
             "start": {
+
                 "dateTime":
                     inicio.isoformat(),
 
@@ -707,6 +872,7 @@ def crear_evento_diego(
             },
 
             "end": {
+
                 "dateTime":
                     fin.isoformat(),
 
@@ -734,19 +900,31 @@ def crear_evento_diego(
         }
 
         evento = (
+
             service
             .events()
             .insert(
-                calendarId=CALENDAR_ID,
-                body=evento_body,
+
+                calendarId=
+                    CALENDAR_ID,
+
+                body=
+                    evento_body,
+
+                sendUpdates=
+                    "none",
             )
             .execute()
         )
 
         return {
-            "ok": True,
+
+            "ok":
+                True,
+
             "evento_id":
                 evento.get("id"),
+
             "link":
                 evento.get("htmlLink"),
         }
@@ -759,7 +937,10 @@ def crear_evento_diego(
         )
 
         return {
-            "ok": False,
+
+            "ok":
+                False,
+
             "error":
                 str(e)
         }
@@ -782,41 +963,65 @@ def formato_fecha(
     )
 
     dias = [
+
         "lunes",
+
         "martes",
+
         "miércoles",
+
         "jueves",
+
         "viernes",
+
         "sábado",
+
         "domingo",
     ]
 
     meses = [
+
         "enero",
+
         "febrero",
+
         "marzo",
+
         "abril",
+
         "mayo",
+
         "junio",
+
         "julio",
+
         "agosto",
+
         "septiembre",
+
         "octubre",
+
         "noviembre",
+
         "diciembre",
     ]
 
     return (
+
         f"{dias[fecha.weekday()]} "
+
         f"{fecha.day} de "
+
         f"{meses[fecha.month - 1]} "
+
         f"a las "
+
         f"{fecha.strftime('%H:%M')}"
     )
 
 
 # ============================================================
-# DETECTAR INTENCIÓN DE AGENDAR
+# INTENCIÓN DE AGENDAR
 # ============================================================
 
 def es_intencion_agendar(
@@ -828,56 +1033,79 @@ def es_intencion_agendar(
     ).lower()
 
     palabras = [
+
         "agendar",
+
         "agenda",
+
         "reservar",
+
         "reserva",
+
         "cita",
+
         "hora",
+
         "turno",
+
         "barbero",
+
         "barbería",
+
         "barberia",
+
         "estilista",
+
         "corte",
+
         "barba",
     ]
 
     return any(
+
         palabra in texto
+
         for palabra in palabras
     )
 
 
 # ============================================================
-# RESPUESTA NORMAL DE GPT
+# RESPUESTA NORMAL OPENAI
 # ============================================================
 
 def responder_openai(
+
     historial,
+
     pregunta
 ):
 
     try:
 
         system_prompt = f"""
+
 Eres el Asistente Virtual de Estilista Diego.
 
-Tu función principal es ayudar a los clientes a reservar
-una hora disponible en la agenda de Diego.
+Tu función principal es ayudar a los clientes
+a reservar una hora disponible en la agenda de Diego.
 
 NO eres un asistente de LaOrtiga.
+
 NO menciones LaOrtiga.
+
 NO menciones Capitán Planeta.
 
-Habla en español de Chile, de manera:
-- cercana
+Habla en español de Chile.
+
+Tu tono debe ser:
+
+- cercano
 - amable
 - profesional
 - breve
 - natural
 
-Tu objetivo comercial principal es llevar al cliente
+Tu objetivo principal es llevar al cliente
 a reservar una hora.
 
 Servicios disponibles:
@@ -891,15 +1119,18 @@ Servicios disponibles:
 
 IMPORTANTE:
 
-La agenda que se consulta y modifica es EXCLUSIVAMENTE
-la agenda de Diego.
+La agenda que se consulta y modifica es
+EXCLUSIVAMENTE la agenda de Diego.
 
 El cliente NO necesita Google Calendar.
-El cliente NO necesita iniciar sesión.
+
+El cliente NO necesita iniciar sesión en Google.
+
 El cliente NO debe autorizar Google.
+
 Nunca le pidas al cliente iniciar sesión en Google.
 
-Cuando el cliente quiera reservar, debes obtener:
+Cuando el cliente quiera reservar debes obtener:
 
 1. Servicio
 2. Día
@@ -908,7 +1139,9 @@ Cuando el cliente quiera reservar, debes obtener:
 5. Teléfono
 
 No inventes disponibilidad.
-La disponibilidad real será comprobada por el sistema.
+
+La disponibilidad real será comprobada
+por el sistema.
 
 Si el cliente pregunta por una hora específica,
 el sistema debe verificarla.
@@ -921,44 +1154,67 @@ hasta que el sistema confirme que el evento
 fue creado correctamente.
 
 Nombre del estilista:
+
 {ESTILISTA_NOMBRE}
+
+Nombre del negocio:
+
+{NEGOCIO_NOMBRE}
+
 """
 
         mensajes = [
+
             {
-                "role": "system",
+                "role":
+                    "system",
+
                 "content":
                     system_prompt,
             }
         ]
 
         mensajes += (
+
             historial[-10:]
+
             if historial
+
             else []
         )
 
-        mensajes.append(
-            {
-                "role": "user",
-                "content":
-                    pregunta,
-            }
-        )
+        mensajes.append({
+
+            "role":
+                "user",
+
+            "content":
+                pregunta,
+        })
 
         completion = (
+
             client
             .chat
             .completions
             .create(
-                model="gpt-4o-mini",
-                messages=mensajes,
-                max_tokens=300,
-                temperature=0.5,
+
+                model=
+                    "gpt-4o-mini",
+
+                messages=
+                    mensajes,
+
+                max_tokens=
+                    300,
+
+                temperature=
+                    0.5,
             )
         )
 
         return (
+
             completion
             .choices[0]
             .message
@@ -974,6 +1230,7 @@ Nombre del estilista:
         )
 
         return (
+
             "Ups 😅 tuve un pequeño "
             "problema técnico. "
             "¿Me puedes repetir?"
@@ -993,11 +1250,14 @@ def guardar_historial_en_archivo(
     )
 
     os.makedirs(
+
         carpeta,
+
         exist_ok=True
     )
 
     timestamp = (
+
         datetime.now()
         .strftime(
             "%Y-%m-%d_%H-%M-%S"
@@ -1005,27 +1265,36 @@ def guardar_historial_en_archivo(
     )
 
     ruta = (
+
         f"{carpeta}/chat_{timestamp}.txt"
     )
 
     try:
 
         with open(
+
             ruta,
+
             "w",
+
             encoding="utf-8"
         ) as f:
 
             for mensaje in historial:
 
                 rol = (
+
                     "Cliente"
+
                     if mensaje["role"]
                     == "user"
-                    else "Asistente"
+
+                    else
+                    "Asistente"
                 )
 
                 f.write(
+
                     f"{rol}: "
                     f"{mensaje['content']}\n\n"
                 )
@@ -1039,11 +1308,13 @@ def guardar_historial_en_archivo(
 
 
 # ============================================================
-# PROCESAMIENTO INTELIGENTE DE RESERVA
+# PROCESAR RESERVA
 # ============================================================
 
 def procesar_reserva(
+
     estado,
+
     texto
 ):
 
@@ -1054,6 +1325,7 @@ def procesar_reserva(
     texto_limpio = (
         texto or ""
     ).strip()
+
 
     # --------------------------------------------------------
     # 1. SERVICIO
@@ -1070,20 +1342,29 @@ def procesar_reserva(
             datos["servicio"] = servicio
 
             return (
+
                 "Perfecto ✂️\n\n"
+
                 "¿Qué día y a qué hora "
                 "te gustaría venir?"
             )
 
         return (
+
             "¡Claro! ✂️ ¿Qué servicio "
             "quieres reservar?\n\n"
+
             "• Corte de cabello\n"
+
             "• Corte + barba\n"
+
             "• Arreglo de barba\n"
+
             "• Corte de niño\n"
+
             "• Perfilado"
         )
+
 
     # --------------------------------------------------------
     # 2. FECHA / HORA
@@ -1098,19 +1379,25 @@ def procesar_reserva(
         if not fecha:
 
             return (
+
                 "No alcancé a entender "
                 "la fecha y hora 😅\n\n"
+
                 "Por ejemplo: "
                 "\"mañana a las 15:00\"."
             )
 
         servicio = obtener_servicio(
+
             datos["servicio"]
         )
 
         disponible = (
+
             verificar_disponibilidad(
+
                 fecha,
+
                 servicio["duracion"]
             )
         )
@@ -1118,17 +1405,22 @@ def procesar_reserva(
         if disponible is None:
 
             return (
+
                 "No pude consultar la "
                 "agenda de Diego en "
-                "este momento 😕. "
+                "este momento 😕.\n\n"
+
                 "Inténtalo nuevamente."
             )
 
         if not disponible:
 
             alternativas = (
+
                 buscar_horas_disponibles(
+
                     fecha,
+
                     servicio["duracion"]
                 )
             )
@@ -1136,24 +1428,33 @@ def procesar_reserva(
             if alternativas:
 
                 texto_horas = "\n".join(
+
                     [
+
                         f"• {h.strftime('%H:%M')}"
+
                         for h in alternativas
                     ]
                 )
 
                 return (
+
                     "Esa hora ya está ocupada "
                     "en la agenda de Diego 😕.\n\n"
+
                     "Tengo estas alternativas:\n\n"
+
                     f"{texto_horas}\n\n"
+
                     "¿Cuál te acomoda?"
                 )
 
             return (
+
                 "Esa hora está ocupada y "
                 "no encontré otras horas "
                 "cercanas disponibles 😕.\n\n"
+
                 "¿Quieres probar otro horario?"
             )
 
@@ -1162,12 +1463,16 @@ def procesar_reserva(
         )
 
         return (
+
             f"¡Perfecto! 🙌\n\n"
+
             f"Hay disponibilidad el "
             f"{formato_fecha(fecha)}.\n\n"
+
             "¿Me indicas tu nombre para "
             "dejar la reserva?"
         )
+
 
     # --------------------------------------------------------
     # 3. NOMBRE
@@ -1178,6 +1483,7 @@ def procesar_reserva(
         if len(texto_limpio) < 2:
 
             return (
+
                 "¿Me indicas tu nombre, "
                 "por favor? 😊"
             )
@@ -1187,11 +1493,14 @@ def procesar_reserva(
         )
 
         return (
+
             "Perfecto, "
             f"{datos['nombre']} 👍\n\n"
+
             "¿Me das tu número de teléfono "
             "para dejarlo asociado a la reserva?"
         )
+
 
     # --------------------------------------------------------
     # 4. TELÉFONO
@@ -1205,28 +1514,32 @@ def procesar_reserva(
 
         datos["telefono"] = telefono
 
+
     # --------------------------------------------------------
     # 5. CREAR RESERVA
     # --------------------------------------------------------
 
     inicio = datetime.fromisoformat(
+
         datos["fecha_hora"]
     )
 
-    # --------------------------------------------------------
-    # DOBLE VERIFICACIÓN
-    #
-    # Importante para evitar que dos clientes
-    # reserven la misma hora.
-    # --------------------------------------------------------
-
     servicio = obtener_servicio(
+
         datos["servicio"]
     )
 
+
+    # --------------------------------------------------------
+    # DOBLE VERIFICACIÓN
+    # --------------------------------------------------------
+
     disponible = (
+
         verificar_disponibilidad(
+
             inicio,
+
             servicio["duracion"]
         )
     )
@@ -1236,19 +1549,32 @@ def procesar_reserva(
         datos["fecha_hora"] = None
 
         return (
+
             "Justo mientras terminábamos "
             "la reserva esa hora se ocupó 😕.\n\n"
+
             "Dime otra hora y vuelvo a "
             "revisar la agenda de Diego."
         )
 
+
+    # --------------------------------------------------------
+    # CREAR EVENTO
+    # --------------------------------------------------------
+
     resultado = (
+
         crear_evento_diego(
-            inicio=inicio,
+
+            inicio=
+                inicio,
+
             servicio_codigo=
                 datos["servicio"],
+
             nombre_cliente=
                 datos["nombre"],
+
             telefono_cliente=
                 datos["telefono"],
         )
@@ -1262,10 +1588,13 @@ def procesar_reserva(
         )
 
         return (
+
             "No pude completar la reserva "
             "en este momento 😕.\n\n"
+
             "Por favor inténtalo nuevamente."
         )
+
 
     servicio_nombre = servicio[
         "nombre"
@@ -1275,26 +1604,49 @@ def procesar_reserva(
         inicio
     )
 
-    # Reiniciamos datos después
-    # de una reserva exitosa.
+    nombre_confirmado = datos[
+        "nombre"
+    ]
+
+
+    # --------------------------------------------------------
+    # REINICIAR RESERVA
+    # --------------------------------------------------------
 
     estado["datos_reserva"] = {
-        "servicio": None,
-        "fecha_hora": None,
-        "nombre": None,
-        "telefono": None,
+
+        "servicio":
+            None,
+
+        "fecha_hora":
+            None,
+
+        "nombre":
+            None,
+
+        "telefono":
+            None,
     }
 
     estado["modo_agendar"] = False
 
+
     return (
+
         "✅ ¡Reserva confirmada!\n\n"
-        f"✂️ Servicio: {servicio_nombre}\n"
-        f"👤 Cliente: {datos['nombre']}\n"
+
+        f"✂️ Servicio: "
+        f"{servicio_nombre}\n"
+
+        f"👤 Cliente: "
+        f"{nombre_confirmado}\n"
+
         f"📅 {fecha_texto}\n\n"
+
         f"Tu hora quedó agendada "
         f"directamente en la agenda de "
         f"{ESTILISTA_NOMBRE}.\n\n"
+
         "¡Te esperamos! 🙌"
     )
 
@@ -1309,6 +1661,7 @@ def home():
     if "historial" not in session:
 
         session["historial"] = [
+
             {
                 "role":
                     "assistant",
@@ -1318,6 +1671,7 @@ def home():
                         "¡Hola! 👋 Soy el "
                         "Asistente Virtual de "
                         "Estilista Diego ✂️\n\n"
+
                         "Estoy aquí para ayudarte "
                         "a encontrar y reservar "
                         "una hora disponible."
@@ -1332,10 +1686,18 @@ def home():
     if "datos_reserva" not in session:
 
         session["datos_reserva"] = {
-            "servicio": None,
-            "fecha_hora": None,
-            "nombre": None,
-            "telefono": None,
+
+            "servicio":
+                None,
+
+            "fecha_hora":
+                None,
+
+            "nombre":
+                None,
+
+            "telefono":
+                None,
         }
 
     return redirect(
@@ -1353,9 +1715,12 @@ def home():
 )
 def chat():
 
+    session.permanent = True
+
     if "historial" not in session:
 
         session["historial"] = [
+
             {
                 "role":
                     "assistant",
@@ -1365,6 +1730,7 @@ def chat():
                         "¡Hola! 👋 Soy el "
                         "Asistente Virtual de "
                         "Estilista Diego ✂️\n\n"
+
                         "¿Quieres reservar una hora?"
                     ),
             }
@@ -1377,50 +1743,70 @@ def chat():
     if "datos_reserva" not in session:
 
         session["datos_reserva"] = {
-            "servicio": None,
-            "fecha_hora": None,
-            "nombre": None,
-            "telefono": None,
+
+            "servicio":
+                None,
+
+            "fecha_hora":
+                None,
+
+            "nombre":
+                None,
+
+            "telefono":
+                None,
         }
+
 
     if request.method == "POST":
 
         pregunta = (
+
             request.form
-            .get("pregunta", "")
+            .get(
+                "pregunta",
+                ""
+            )
             .strip()
         )
 
         if pregunta:
 
-            session["historial"].append(
-                {
-                    "role":
-                        "user",
+            session["historial"].append({
 
-                    "content":
-                        pregunta,
-                }
-            )
+                "role":
+                    "user",
 
-            # --------------------------------------------
-            # SI EL USUARIO QUIERE AGENDAR
-            # --------------------------------------------
+                "content":
+                    pregunta,
+            })
+
+
+            # ------------------------------------------------
+            # AGENDAR
+            # ------------------------------------------------
 
             if (
+
                 es_intencion_agendar(
                     pregunta
                 )
+
                 or session.get(
                     "modo_agendar"
                 )
             ):
 
-                session["modo_agendar"] = True
+                session[
+                    "modo_agendar"
+                ] = True
 
                 estado = {
+
                     "modo_agendar":
-                        session["modo_agendar"],
+                        session[
+                            "modo_agendar"
+                        ],
 
                     "datos_reserva":
                         session[
@@ -1429,8 +1815,11 @@ def chat():
                 }
 
                 respuesta = (
+
                     procesar_reserva(
+
                         estado,
+
                         pregunta
                     )
                 )
@@ -1446,36 +1835,44 @@ def chat():
                 ] = estado[
                     "modo_agendar"
                 ]
+
 
             else:
 
                 respuesta = (
+
                     responder_openai(
+
                         session[
                             "historial"
                         ],
+
                         pregunta
                     )
                 )
 
-            session["historial"].append(
-                {
-                    "role":
-                        "assistant",
 
-                    "content":
-                        respuesta,
-                }
-            )
+            session["historial"].append({
+
+                "role":
+                    "assistant",
+
+                "content":
+                    respuesta,
+            })
 
             session.modified = True
 
             guardar_historial_en_archivo(
+
                 session["historial"]
             )
 
+
     return render_template_string(
+
         TEMPLATE,
+
         historial=
             session["historial"],
     )
@@ -1504,8 +1901,11 @@ def whatsapp_verify():
     )
 
     if (
+
         mode == "subscribe"
-        and token == WHATSAPP_VERIFY_TOKEN
+
+        and token ==
+            WHATSAPP_VERIFY_TOKEN
     ):
 
         return challenge, 200
@@ -1524,9 +1924,11 @@ def whatsapp_verify():
 def whatsapp_webhook():
 
     data = (
+
         request.get_json(
             silent=True
         )
+
         or {}
     )
 
@@ -1538,16 +1940,19 @@ def whatsapp_webhook():
     try:
 
         entry = (
+
             data.get("entry")
             or []
         )[0]
 
         changes = (
+
             entry.get("changes")
             or []
         )[0]
 
         value = (
+
             changes.get("value")
             or {}
         )
@@ -1557,6 +1962,7 @@ def whatsapp_webhook():
             return "ok", 200
 
         messages = (
+
             value.get("messages")
             or []
         )
@@ -1576,6 +1982,7 @@ def whatsapp_webhook():
         )
 
         text = (
+
             msg.get("text")
             or {}
         ).get(
@@ -1584,11 +1991,18 @@ def whatsapp_webhook():
         ).strip()
 
         print(
+
             "📩 WA:",
+
             {
-                "id": msg_id,
-                "from": wa_id,
-                "text": text,
+                "id":
+                    msg_id,
+
+                "from":
+                    wa_id,
+
+                "text":
+                    text,
             }
         )
 
@@ -1606,21 +2020,25 @@ def whatsapp_webhook():
             wa_id
         )
 
-        estado["historial"].append(
-            {
-                "role":
-                    "user",
+        estado["historial"].append({
 
-                "content":
-                    text,
-            }
-        )
+            "role":
+                "user",
+
+            "content":
+                text,
+        })
+
 
         if (
+
             es_intencion_agendar(
                 text
             )
-            or estado["modo_agendar"]
+
+            or estado[
+                "modo_agendar"
+            ]
         ):
 
             estado[
@@ -1628,8 +2046,11 @@ def whatsapp_webhook():
             ] = True
 
             respuesta = (
+
                 procesar_reserva(
+
                     estado,
+
                     text
                 )
             )
@@ -1637,24 +2058,32 @@ def whatsapp_webhook():
         else:
 
             respuesta = (
+
                 responder_openai(
-                    estado["historial"],
+
+                    estado[
+                        "historial"
+                    ],
+
                     text
                 )
             )
 
-        estado["historial"].append(
-            {
-                "role":
-                    "assistant",
 
-                "content":
-                    respuesta,
-            }
-        )
+        estado["historial"].append({
+
+            "role":
+                "assistant",
+
+            "content":
+                respuesta,
+        })
+
 
         wa_send_text(
+
             wa_id,
+
             respuesta
         )
 
@@ -1669,11 +2098,9 @@ def whatsapp_webhook():
 
 
 # ============================================================
-# ADMIN - AUTORIZAR GOOGLE CALENDAR
+# ADMIN LOGIN GOOGLE
 #
-# ESTA RUTA ES SOLO PARA DIEGO.
-#
-# El cliente nunca debe usar /admin/login.
+# SOLO DIEGO DEBE USAR ESTA RUTA.
 # ============================================================
 
 @app.route(
@@ -1681,20 +2108,28 @@ def whatsapp_webhook():
 )
 def admin_login():
 
+    flow = crear_google_flow()
+
     authorization_url, state = (
+
         flow.authorization_url(
-            include_granted_scopes=
-                "true",
 
             access_type=
                 "offline",
+
+            include_granted_scopes=
+                "true",
 
             prompt=
                 "consent",
         )
     )
 
-    session["oauth_state"] = state
+    session[
+        "oauth_state"
+    ] = state
+
+    session.permanent = True
 
     return redirect(
         authorization_url
@@ -1710,24 +2145,62 @@ def admin_login():
 )
 def callback():
 
-    if "oauth_state" not in session:
+    oauth_state = session.get(
+        "oauth_state"
+    )
 
-        abort(400)
+    if not oauth_state:
+
+        return (
+
+            "Sesión OAuth no encontrada. "
+            "Vuelve a iniciar el proceso desde "
+            "/admin/login.",
+
+            400
+        )
+
 
     try:
 
+        flow = crear_google_flow()
+
+        # ----------------------------------------------------
+        # IMPORTANTE:
+        #
+        # Recuperamos el state que Google devolvió.
+        # ----------------------------------------------------
+
+        flow.state = oauth_state
+
+        # ----------------------------------------------------
+        # fetch_token
+        #
+        # ProxyFix permite que request.url sea HTTPS
+        # cuando la aplicación está detrás de Render.
+        # ----------------------------------------------------
+
         flow.fetch_token(
+
             authorization_response=
                 request.url
         )
 
     except Exception as e:
 
+        print(
+            "❌ Error OAuth:",
+            repr(e)
+        )
+
         return (
-            "Error autenticando con "
-            f"Google: {e}",
+
+            "Error autenticando con Google: "
+            f"{e}",
+
             400
         )
+
 
     credentials = (
         flow.credentials
@@ -1736,20 +2209,44 @@ def callback():
     if not credentials:
 
         return (
+
             "No se pudo autenticar "
             "con Google.",
+
             400
         )
 
+
     refresh_token = (
+
         credentials.refresh_token
     )
+
 
     if not refresh_token:
 
         return (
+
             """
-            <h2>Google no entregó refresh token</h2>
+            <!DOCTYPE html>
+
+            <html lang="es">
+
+            <head>
+
+            <meta charset="UTF-8">
+
+            <title>
+            Google Calendar
+            </title>
+
+            </head>
+
+            <body>
+
+            <h2>
+            Google no entregó refresh token
+            </h2>
 
             <p>
             Vuelve a intentar entrando por
@@ -1757,77 +2254,176 @@ def callback():
             </p>
 
             <p>
-            Es posible que Google ya haya autorizado
-            esta aplicación. En ese caso debes
-            revocar previamente el acceso de la
-            aplicación desde tu cuenta de Google
-            y volver a autorizar.
+            Si la aplicación ya había sido autorizada,
+            revoca previamente el acceso de la aplicación
+            desde tu cuenta de Google y vuelve a autorizar.
             </p>
+
+            </body>
+
+            </html>
             """,
+
             400
         )
 
+
+    # --------------------------------------------------------
+    # LIMPIAR STATE
+    # --------------------------------------------------------
+
+    session.pop(
+        "oauth_state",
+        None
+    )
+
+
+    # --------------------------------------------------------
+    # MOSTRAR REFRESH TOKEN
+    # --------------------------------------------------------
+
     return render_template_string(
+
         """
         <!DOCTYPE html>
-        <html lang="es">
-        <head>
-            <meta charset="UTF-8">
-            <title>Autorización Diego</title>
-            <style>
-                body {
-                    font-family: Arial;
-                    max-width: 800px;
-                    margin: 50px auto;
-                    padding: 20px;
-                }
 
-                textarea {
-                    width: 100%;
-                    height: 100px;
+        <html lang="es">
+
+        <head>
+
+            <meta charset="UTF-8">
+
+            <meta name="viewport"
+                  content="width=device-width, initial-scale=1">
+
+            <title>
+                Autorización Diego
+            </title>
+
+            <style>
+
+                body {
+
+                    font-family:
+                        Arial,
+                        sans-serif;
+
+                    max-width:
+                        800px;
+
+                    margin:
+                        50px auto;
+
+                    padding:
+                        20px;
+
+                    background:
+                        #f5f5f5;
                 }
 
                 .ok {
-                    padding: 20px;
-                    background: #e8f5e9;
-                    border-radius: 10px;
+
+                    padding:
+                        25px;
+
+                    background:
+                        #e8f5e9;
+
+                    border-radius:
+                        12px;
+
+                    border:
+                        1px solid #c8e6c9;
                 }
+
+                textarea {
+
+                    width:
+                        100%;
+
+                    height:
+                        130px;
+
+                    margin-top:
+                        10px;
+
+                    padding:
+                        10px;
+
+                    font-family:
+                        monospace;
+
+                    box-sizing:
+                        border-box;
+                }
+
+                .warning {
+
+                    background:
+                        #fff3cd;
+
+                    padding:
+                        15px;
+
+                    border-radius:
+                        8px;
+
+                    margin-top:
+                        20px;
+                }
+
             </style>
+
         </head>
 
         <body>
 
             <div class="ok">
 
-                <h1>✅ Google Calendar autorizado</h1>
+                <h1>
+                    ✅ Google Calendar autorizado
+                </h1>
 
                 <p>
-                    Este es el refresh token de Diego.
+                    La cuenta de Google autorizó
+                    correctamente el calendario.
                 </p>
 
-                <p>
-                    Debes copiarlo a la variable
-                    de entorno:
-                </p>
-
-                <pre>GOOGLE_REFRESH_TOKEN</pre>
+                <h3>
+                    GOOGLE_REFRESH_TOKEN
+                </h3>
 
                 <textarea readonly>{{ token }}</textarea>
 
-                <p>
-                    ⚠️ No compartas este token.
-                </p>
+                <div class="warning">
 
-                <p>
-                    Después de configurarlo en Render,
-                    puedes utilizar el asistente normalmente.
-                </p>
+                    <strong>
+                        ⚠️ IMPORTANTE
+                    </strong>
+
+                    <p>
+                        Este token es privado.
+                        No lo compartas.
+                    </p>
+
+                    <p>
+                        Cópialo directamente en Render
+                        como la variable:
+                    </p>
+
+                    <pre>
+GOOGLE_REFRESH_TOKEN
+                    </pre>
+
+                </div>
 
             </div>
 
         </body>
+
         </html>
         """,
+
         token=refresh_token
     )
 
@@ -1849,7 +2445,7 @@ def logout():
 
 
 # ============================================================
-# HTML DEL CHAT
+# HTML CHAT
 # ============================================================
 
 TEMPLATE = """
@@ -1889,174 +2485,219 @@ body {
     background:
         #f3f4f6;
 
-    margin: 0;
+    margin:
+        0;
 
-    padding: 0;
+    padding:
+        0;
 }
 
 
-/* BOTÓN */
-
 #chat-toggle-btn {
 
-    position: fixed;
+    position:
+        fixed;
 
-    bottom: 20px;
+    bottom:
+        20px;
 
-    right: 20px;
+    right:
+        20px;
 
-    width: 64px;
+    width:
+        64px;
 
-    height: 64px;
+    height:
+        64px;
 
-    border: none;
+    border:
+        none;
 
-    border-radius: 50%;
+    border-radius:
+        50%;
 
     background:
         #111827;
 
-    color: white;
+    color:
+        white;
 
-    font-size: 28px;
+    font-size:
+        28px;
 
-    cursor: pointer;
+    cursor:
+        pointer;
 
     box-shadow:
         0 5px 20px
         rgba(0,0,0,.20);
 
-    z-index: 1000;
+    z-index:
+        1000;
 }
 
 
-/* CONTENEDOR */
-
 #chat-container {
 
-    position: fixed;
+    position:
+        fixed;
 
-    bottom: 95px;
+    bottom:
+        95px;
 
-    right: 20px;
+    right:
+        20px;
 
-    width: 370px;
+    width:
+        370px;
 
-    height: 560px;
+    height:
+        560px;
 
-    background: white;
+    background:
+        white;
 
-    border-radius: 18px;
+    border-radius:
+        18px;
 
     box-shadow:
         0 10px 40px
         rgba(0,0,0,.18);
 
-    display: flex;
+    display:
+        flex;
 
-    flex-direction: column;
+    flex-direction:
+        column;
 
-    overflow: hidden;
+    overflow:
+        hidden;
 
-    z-index: 999;
+    z-index:
+        999;
 }
 
 
-/* HEADER */
-
 #chat-header {
 
-    padding: 16px;
+    padding:
+        16px;
 
     background:
         #111827;
 
-    color: white;
+    color:
+        white;
 
-    display: flex;
+    display:
+        flex;
 
-    align-items: center;
+    align-items:
+        center;
 }
 
 
 .avatar {
 
-    width: 46px;
+    width:
+        46px;
 
-    height: 46px;
+    height:
+        46px;
 
-    border-radius: 50%;
+    border-radius:
+        50%;
 
     background:
         #374151;
 
-    display: flex;
+    display:
+        flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    justify-content: center;
+    justify-content:
+        center;
 
-    font-size: 23px;
+    font-size:
+        23px;
 
-    margin-right: 12px;
+    margin-right:
+        12px;
 }
 
 
 .name {
 
-    font-weight: 700;
+    font-weight:
+        700;
 
-    font-size: 15px;
+    font-size:
+        15px;
 }
 
 
 .subtitle {
 
-    font-size: 11px;
+    font-size:
+        11px;
 
-    opacity: .75;
+    opacity:
+        .75;
 
-    margin-top: 3px;
+    margin-top:
+        3px;
 }
 
 
-/* MENSAJES */
-
 #chat-messages {
 
-    flex: 1;
+    flex:
+        1;
 
-    padding: 15px;
+    padding:
+        15px;
 
-    overflow-y: auto;
+    overflow-y:
+        auto;
 
     background:
         #f9fafb;
 
-    display: flex;
+    display:
+        flex;
 
-    flex-direction: column;
+    flex-direction:
+        column;
 }
 
 
 .msg {
 
-    margin-bottom: 10px;
+    margin-bottom:
+        10px;
 
     padding:
         10px 13px;
 
-    border-radius: 16px;
+    border-radius:
+        16px;
 
-    max-width: 84%;
+    max-width:
+        84%;
 
-    word-wrap: break-word;
+    word-wrap:
+        break-word;
 
-    white-space: pre-wrap;
+    white-space:
+        pre-wrap;
 
-    font-size: 14px;
+    font-size:
+        14px;
 
-    line-height: 1.4;
+    line-height:
+        1.4;
 }
 
 
@@ -2065,11 +2706,14 @@ body {
     background:
         #111827;
 
-    color: white;
+    color:
+        white;
 
-    align-self: flex-start;
+    align-self:
+        flex-start;
 
-    border-bottom-left-radius: 4px;
+    border-bottom-left-radius:
+        4px;
 }
 
 
@@ -2078,61 +2722,77 @@ body {
     background:
         #e5e7eb;
 
-    color: #111827;
+    color:
+        #111827;
 
-    align-self: flex-end;
+    align-self:
+        flex-end;
 
-    border-bottom-right-radius: 4px;
+    border-bottom-right-radius:
+        4px;
 }
 
 
-/* FORMULARIO */
-
 #chat-input-form {
 
-    display: flex;
+    display:
+        flex;
 
     border-top:
         1px solid #e5e7eb;
 
-    background: white;
+    background:
+        white;
 
-    padding: 8px;
+    padding:
+        8px;
 }
 
 
 #chat-input {
 
-    flex: 1;
+    flex:
+        1;
 
-    border: none;
+    border:
+        none;
 
-    outline: none;
+    outline:
+        none;
 
-    padding: 12px;
+    padding:
+        12px;
 
-    font-size: 14px;
+    font-size:
+        14px;
 }
 
 
 #chat-send {
 
-    border: none;
+    border:
+        none;
 
     background:
         #111827;
 
-    color: white;
+    color:
+        white;
 
-    width: 46px;
+    width:
+        46px;
 
-    height: 42px;
+    height:
+        42px;
 
-    border-radius: 10px;
+    border-radius:
+        10px;
 
-    cursor: pointer;
+    cursor:
+        pointer;
 
-    font-size: 18px;
+    font-size:
+        18px;
 }
 
 
@@ -2140,15 +2800,20 @@ body {
 
     #chat-container {
 
-        right: 10px;
+        right:
+            10px;
 
-        left: 10px;
+        left:
+            10px;
 
-        bottom: 85px;
+        bottom:
+            85px;
 
-        width: auto;
+        width:
+            auto;
 
-        height: 70vh;
+        height:
+            70vh;
     }
 
 }
@@ -2330,12 +2995,43 @@ window.onload = () => {
 
 
 # ============================================================
+# HEALTH CHECK
+# ============================================================
+
+@app.route(
+    "/health"
+)
+def health():
+
+    return {
+
+        "ok":
+            True,
+
+        "service":
+            "Asistente Virtual de Estilista Diego",
+
+        "google_calendar":
+            bool(
+                GOOGLE_REFRESH_TOKEN
+            ),
+
+        "whatsapp":
+            bool(
+                WHATSAPP_TOKEN
+                and WHATSAPP_PHONE_NUMBER_ID
+            ),
+    }
+
+
+# ============================================================
 # ARRANQUE
 # ============================================================
 
 if __name__ == "__main__":
 
     port = int(
+
         os.environ.get(
             "PORT",
             5000
@@ -2343,6 +3039,7 @@ if __name__ == "__main__":
     )
 
     debug = (
+
         os.getenv(
             "FLASK_ENV"
         )
@@ -2350,7 +3047,13 @@ if __name__ == "__main__":
     )
 
     app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=debug
+
+        host=
+            "0.0.0.0",
+
+        port=
+            port,
+
+        debug=
+            debug
     )
