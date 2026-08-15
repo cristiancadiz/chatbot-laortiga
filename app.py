@@ -39,6 +39,11 @@ if not app.secret_key:
 
 app.permanent_session_lifetime = timedelta(days=30)
 
+
+# ============================================================
+# PROXY / HTTPS - RENDER
+# ============================================================
+
 app.wsgi_app = ProxyFix(
     app.wsgi_app,
     x_for=1,
@@ -111,20 +116,9 @@ HORAS_DISPONIBLES = list(
     )
 )
 
-DIAS_NOMBRES = [
-    "lunes",
-    "martes",
-    "miércoles",
-    "jueves",
-    "viernes",
-    "sábado",
-    "domingo",
-]
-
 
 # ============================================================
 # SERVICIOS
-# TODOS $20.000
 # ============================================================
 
 SERVICIOS = {
@@ -158,6 +152,7 @@ SERVICIOS = {
         "duracion": 60,
         "precio": 20000,
     },
+
 }
 
 
@@ -182,6 +177,7 @@ GOOGLE_REDIRECT_URI = os.getenv(
     "https://chatbot-laortiga-9.onrender.com/callback"
 )
 
+
 if not GOOGLE_CLIENT_ID:
     raise Exception("Falta GOOGLE_CLIENT_ID.")
 
@@ -205,9 +201,11 @@ def crear_google_flow():
         {
             "web": {
 
-                "client_id": GOOGLE_CLIENT_ID,
+                "client_id":
+                    GOOGLE_CLIENT_ID,
 
-                "client_secret": GOOGLE_CLIENT_SECRET,
+                "client_secret":
+                    GOOGLE_CLIENT_SECRET,
 
                 "auth_uri":
                     "https://accounts.google.com/o/oauth2/auth",
@@ -230,6 +228,153 @@ def crear_google_flow():
 
 
 # ============================================================
+# WHATSAPP
+# ============================================================
+
+WHATSAPP_TOKEN = os.getenv(
+    "WHATSAPP_TOKEN"
+)
+
+WHATSAPP_PHONE_NUMBER_ID = os.getenv(
+    "WHATSAPP_PHONE_NUMBER_ID"
+)
+
+WHATSAPP_VERIFY_TOKEN = os.getenv(
+    "WHATSAPP_VERIFY_TOKEN"
+)
+
+WA_SESSIONS = {}
+
+PROCESSED_MSG_IDS = {}
+
+DEDUP_TTL_SECONDS = 120
+
+
+# ============================================================
+# WHATSAPP ENVÍO
+# ============================================================
+
+def wa_send_text(
+    to_number,
+    text
+):
+
+    if (
+        not WHATSAPP_TOKEN
+        or not WHATSAPP_PHONE_NUMBER_ID
+    ):
+        return None
+
+    url = (
+        "https://graph.facebook.com/v20.0/"
+        f"{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    )
+
+    headers = {
+        "Authorization":
+            f"Bearer {WHATSAPP_TOKEN}",
+
+        "Content-Type":
+            "application/json",
+    }
+
+    payload = {
+
+        "messaging_product":
+            "whatsapp",
+
+        "to":
+            to_number,
+
+        "type":
+            "text",
+
+        "text": {
+            "body":
+                (text or "")[:3900]
+        },
+    }
+
+    try:
+
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=20
+        )
+
+        print(
+            "WhatsApp envío:",
+            response.status_code,
+            response.text[:500]
+        )
+
+        return response
+
+    except Exception as e:
+
+        print(
+            "Error WhatsApp:",
+            repr(e)
+        )
+
+        return None
+
+
+# ============================================================
+# SESIÓN WHATSAPP
+# ============================================================
+
+def nueva_reserva(
+    telefono=None
+):
+
+    return {
+
+        "estado":
+            "inicio",
+
+        "servicio":
+            None,
+
+        "fecha_hora":
+            None,
+
+        "opciones_horarios":
+            [],
+
+        "opcion_seleccionada":
+            None,
+
+        "nombre":
+            None,
+
+        "telefono":
+            telefono,
+    }
+
+
+def get_wa_session(
+    wa_id
+):
+
+    if wa_id not in WA_SESSIONS:
+
+        WA_SESSIONS[wa_id] = {
+
+            "historial": [],
+
+            "modo_agendar": False,
+
+            "datos_reserva":
+                nueva_reserva(wa_id),
+        }
+
+    return WA_SESSIONS[wa_id]
+
+
+# ============================================================
 # GOOGLE CREDENTIALS
 # ============================================================
 
@@ -245,22 +390,31 @@ def obtener_credentials_diego():
 
         token=None,
 
-        refresh_token=GOOGLE_REFRESH_TOKEN,
+        refresh_token=
+            GOOGLE_REFRESH_TOKEN,
 
         token_uri=
             "https://oauth2.googleapis.com/token",
 
-        client_id=GOOGLE_CLIENT_ID,
+        client_id=
+            GOOGLE_CLIENT_ID,
 
-        client_secret=GOOGLE_CLIENT_SECRET,
+        client_secret=
+            GOOGLE_CLIENT_SECRET,
 
         scopes=SCOPES,
     )
 
 
+# ============================================================
+# GOOGLE SERVICE
+# ============================================================
+
 def obtener_calendar_service():
 
-    credentials = obtener_credentials_diego()
+    credentials = (
+        obtener_credentials_diego()
+    )
 
     return build(
         "calendar",
@@ -294,13 +448,16 @@ def ahora_local():
 # NORMALIZAR TEXTO
 # ============================================================
 
-def normalizar_texto(texto):
+def normalizar_texto(
+    texto
+):
 
     texto = (
         texto or ""
     ).strip().lower()
 
     reemplazos = {
+
         "á": "a",
         "é": "e",
         "í": "i",
@@ -320,140 +477,50 @@ def normalizar_texto(texto):
 
 
 # ============================================================
-# DETECTAR INTENCIÓN GENERAL
+# PRECIO
 # ============================================================
 
-def detectar_intencion(texto):
+def precio_texto(
+    precio
+):
 
-    t = normalizar_texto(texto)
-
-    # ----------------------------
-    # SALIDA / NO
-    # ----------------------------
-
-    patrones_no = [
-        "no gracias",
-        "no, gracias",
-        "gracias no",
-        "no necesito",
-        "no quiero",
-        "por ahora no",
-        "nada mas",
-        "nada más",
-        "eso seria",
-        "eso sería",
-        "chao",
-        "chau",
-        "adios",
-        "hasta luego",
-        "nos vemos",
-        "dejalo",
-        "déjalo",
-    ]
-
-    for p in patrones_no:
-
-        if p in t:
-            return "salir"
+    return (
+        f"${precio:,.0f}"
+        .replace(",", ".")
+    )
 
 
-    # ----------------------------
-    # AGENDA
-    # ----------------------------
+# ============================================================
+# SERVICIOS TEXTO
+# ============================================================
 
-    patrones_agenda = [
+def servicios_texto():
 
-        "agendar",
-        "agenda",
-        "reservar",
-        "reserva",
-        "reservame",
-        "reservame una hora",
-        "quiero una hora",
-        "quiero agendar",
-        "quiero reservar",
-        "sacar hora",
-        "sacar una hora",
-        "pedir hora",
-        "quiero mi hora",
-        "quiero una cita",
-        "cita",
-        "turno",
-        "quiero cortarme",
-        "quiero cortar",
-        "quiero hacerme un corte",
-    ]
+    return (
 
-    for p in patrones_agenda:
+        "✂️ *Servicios de Diego*\n\n"
 
-        if p in t:
-            return "agenda"
+        "1️⃣ Corte de cabello — $20.000\n"
+        "2️⃣ Corte + barba — $20.000\n"
+        "3️⃣ Arreglo de barba — $20.000\n"
+        "4️⃣ Corte de niño — $20.000\n"
+        "5️⃣ Perfilado — $20.000\n\n"
 
+        "Todos los servicios tienen un valor de "
+        "$20.000.\n\n"
 
-    # ----------------------------
-    # SERVICIOS
-    # ----------------------------
-
-    patrones_servicios = [
-
-        "servicios",
-        "servicio",
-        "que haces",
-        "que hacen",
-        "que ofrecen",
-        "que tienes",
-        "que cortes haces",
-        "cortes",
-        "precios",
-        "precio",
-        "cuanto cuesta",
-        "cuanto valen",
-        "cuanto sale",
-        "valor",
-        "valores",
-        "tarifas",
-        "barberia",
-        "barbería",
-    ]
-
-    for p in patrones_servicios:
-
-        if p in t:
-            return "servicios"
-
-
-    # ----------------------------
-    # DISPONIBILIDAD
-    # ----------------------------
-
-    patrones_disponibilidad = [
-
-        "disponible",
-        "disponibilidad",
-        "que horas",
-        "qué horas",
-        "hay hora",
-        "tienes hora",
-        "tiene hora",
-        "queda hora",
-        "horas libres",
-        "horas disponibles",
-    ]
-
-    for p in patrones_disponibilidad:
-
-        if p in t:
-            return "agenda"
-
-
-    return "conversacion"
+        "Si quieres reservar, dime cuál te interesa "
+        "y te muestro las próximas horas disponibles 😊."
+    )
 
 
 # ============================================================
 # DETECTAR SERVICIO
 # ============================================================
 
-def detectar_servicio(texto):
+def detectar_servicio(
+    texto
+):
 
     texto_n = normalizar_texto(
         texto
@@ -491,7 +558,39 @@ def detectar_servicio(texto):
     return None
 
 
-def obtener_servicio(codigo):
+# ============================================================
+# DETECTAR SERVICIO POR NÚMERO
+# ============================================================
+
+def detectar_servicio_numero(
+    texto
+):
+
+    texto_n = normalizar_texto(
+        texto
+    )
+
+    mapa = {
+
+        "1": "corte",
+        "2": "corte_barba",
+        "3": "barba",
+        "4": "corte_nino",
+        "5": "perfilado",
+    }
+
+    return mapa.get(
+        texto_n
+    )
+
+
+# ============================================================
+# OBTENER SERVICIO
+# ============================================================
+
+def obtener_servicio(
+    codigo
+):
 
     return SERVICIOS.get(
         codigo
@@ -499,106 +598,12 @@ def obtener_servicio(codigo):
 
 
 # ============================================================
-# MOSTRAR SERVICIOS
+# DÍA DE ATENCIÓN
 # ============================================================
 
-def mostrar_servicios():
-
-    return (
-
-        "✂️ Estos son nuestros servicios:\n\n"
-
-        "• Corte de cabello — $20.000\n"
-        "• Corte + barba — $20.000\n"
-        "• Arreglo de barba — $20.000\n"
-        "• Corte de niño — $20.000\n"
-        "• Perfilado — $20.000\n\n"
-
-        "Todas las atenciones duran 1 hora.\n\n"
-
-        "Si quieres, puedo revisar una hora "
-        "disponible para ti 😊"
-    )
-
-
-# ============================================================
-# DESPEDIDA Y REINICIO
-# ============================================================
-
-def despedir_y_reiniciar():
-
-    return (
-        "Perfecto 😊\n\n"
-        "Cuando quieras volver, aquí estaré. "
-        "¡Que estés muy bien! 👋"
-    )
-
-
-def resetear_estado_web():
-
-    session["historial"] = [
-
-        {
-            "role":
-                "assistant",
-
-            "content":
-                (
-                    "¡Hola! 👋 "
-                    "Soy el Asistente Virtual "
-                    "de Estilista Diego ✂️\n\n"
-                    "¿Cómo estás?"
-                ),
-        }
-    ]
-
-    session["modo_agendar"] = False
-
-    session["datos_reserva"] = {
-
-        "servicio": None,
-        "fecha_hora": None,
-        "nombre": None,
-        "telefono": None,
-    }
-
-    session.modified = True
-
-
-def resetear_estado_wa(estado):
-
-    telefono = (
-        estado
-        .get("datos_reserva", {})
-        .get("telefono")
-    )
-
-    estado.clear()
-
-    estado.update({
-
-        "historial": [],
-
-        "modo_agendar": False,
-
-        "datos_reserva": {
-
-            "servicio": None,
-
-            "fecha_hora": None,
-
-            "nombre": None,
-
-            "telefono": telefono,
-        }
-    })
-
-
-# ============================================================
-# DÍAS
-# ============================================================
-
-def es_dia_atencion(fecha):
+def es_dia_atencion(
+    fecha
+):
 
     zona = obtener_zona()
 
@@ -606,133 +611,74 @@ def es_dia_atencion(fecha):
         zona
     )
 
-    return fecha.weekday() in DIAS_ATENCION
+    return (
+        fecha.weekday()
+        in DIAS_ATENCION
+    )
 
 
-def proximo_dia_semana(
-    fecha_base,
-    weekday_objetivo,
-    incluir_hoy=True
+# ============================================================
+# HORA DE ATENCIÓN
+# ============================================================
+
+def es_hora_atencion(
+    fecha
 ):
 
     zona = obtener_zona()
 
-    fecha_base = fecha_base.astimezone(
+    fecha = fecha.astimezone(
         zona
     )
 
-    diferencia = (
-        weekday_objetivo
-        - fecha_base.weekday()
-    ) % 7
+    return (
 
-    if (
-        diferencia == 0
-        and not incluir_hoy
-    ):
-        diferencia = 7
+        es_dia_atencion(fecha)
+
+        and fecha.minute == 0
+
+        and fecha.second == 0
+
+        and HORA_APERTURA
+        <= fecha.hour
+        < HORA_CIERRE
+    )
+
+
+# ============================================================
+# HORARIO
+# ============================================================
+
+def horario_atencion_texto():
 
     return (
-        fecha_base
-        + timedelta(
-            days=diferencia
-        )
+        "lunes a sábado, de 10:00 a 18:00 hrs"
     )
 
 
 # ============================================================
-# PARSEAR HORA
+# DÍAS
 # ============================================================
 
-def parse_hora_texto(texto):
+DIAS_NOMBRES = [
 
-    texto_n = normalizar_texto(
-        texto
-    )
-
-    # 15:00
-    match = re.search(
-        r"\b(\d{1,2})\s*:\s*(\d{2})\b",
-        texto_n
-    )
-
-    if match:
-
-        hora = int(
-            match.group(1)
-        )
-
-        minuto = int(
-            match.group(2)
-        )
-
-        return hora, minuto
-
-
-    # 3 pm
-    match = re.search(
-        r"\b(\d{1,2})\s*"
-        r"(am|pm|a\.m\.|p\.m\.)\b",
-        texto_n
-    )
-
-    if match:
-
-        hora = int(
-            match.group(1)
-        )
-
-        periodo = (
-            match.group(2)
-            .replace(".", "")
-        )
-
-        if periodo == "pm" and hora < 12:
-
-            hora += 12
-
-        if periodo == "am" and hora == 12:
-
-            hora = 0
-
-        return hora, 0
-
-
-    # a las 3
-    match = re.search(
-        r"\ba\s+las?\s+(\d{1,2})\b",
-        texto_n
-    )
-
-    if match:
-
-        hora = int(
-            match.group(1)
-        )
-
-        if 1 <= hora <= 6:
-
-            hora += 12
-
-        return hora, 0
-
-
-    return None
-
-
-def contiene_hora(texto):
-
-    return (
-        parse_hora_texto(texto)
-        is not None
-    )
+    "lunes",
+    "martes",
+    "miércoles",
+    "jueves",
+    "viernes",
+    "sábado",
+    "domingo",
+]
 
 
 # ============================================================
-# DÍA SEMANA
+# DETECTAR DÍA SEMANA
 # ============================================================
 
-def detectar_dia_semana(texto):
+def detectar_dia_semana(
+    texto
+):
 
     texto_n = normalizar_texto(
         texto
@@ -762,14 +708,201 @@ def detectar_dia_semana(texto):
 
 
 # ============================================================
-# DÍA + MES
+# PRÓXIMO DÍA
 # ============================================================
 
-def detectar_dia_mes(texto):
+def proximo_dia_semana(
+    fecha_base,
+    weekday_objetivo,
+    incluir_hoy=True
+):
+
+    diferencia = (
+        weekday_objetivo
+        - fecha_base.weekday()
+    ) % 7
+
+    if (
+        diferencia == 0
+        and not incluir_hoy
+    ):
+        diferencia = 7
+
+    return (
+        fecha_base
+        + timedelta(days=diferencia)
+    )
+
+
+# ============================================================
+# PARSEAR HORA
+# ============================================================
+
+def parse_hora_texto(
+    texto
+):
 
     texto_n = normalizar_texto(
         texto
     )
+
+    match = re.search(
+        r"\b(\d{1,2})\s*:\s*(\d{2})\b",
+        texto_n
+    )
+
+    if match:
+
+        return (
+            int(match.group(1)),
+            int(match.group(2))
+        )
+
+    match = re.search(
+        r"\b(\d{1,2})\s*(am|pm)\b",
+        texto_n
+    )
+
+    if match:
+
+        hora = int(
+            match.group(1)
+        )
+
+        periodo = match.group(2)
+
+        if periodo == "pm" and hora < 12:
+            hora += 12
+
+        if periodo == "am" and hora == 12:
+            hora = 0
+
+        return hora, 0
+
+    match = re.search(
+        r"\ba\s+las?\s+(\d{1,2})\b",
+        texto_n
+    )
+
+    if match:
+
+        hora = int(
+            match.group(1)
+        )
+
+        if 1 <= hora <= 6:
+            hora += 12
+
+        return hora, 0
+
+    return None
+
+
+# ============================================================
+# CONTIENE HORA
+# ============================================================
+
+def contiene_hora(
+    texto
+):
+
+    return (
+        parse_hora_texto(texto)
+        is not None
+    )
+
+
+# ============================================================
+# CONSTRUIR FECHA
+# ============================================================
+
+def construir_fecha_desde_texto(
+    texto
+):
+
+    zona = obtener_zona()
+
+    ahora = ahora_local()
+
+    texto_n = normalizar_texto(
+        texto
+    )
+
+    if re.search(
+        r"\bmanana\b",
+        texto_n
+    ):
+
+        return (
+            ahora
+            + timedelta(days=1)
+        ).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0
+        )
+
+    if re.search(
+        r"\bpasado manana\b",
+        texto_n
+    ):
+
+        return (
+            ahora
+            + timedelta(days=2)
+        ).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0
+        )
+
+    weekday = detectar_dia_semana(
+        texto
+    )
+
+    if weekday is not None:
+
+        proximo = bool(
+            re.search(
+                r"\b(proximo|siguiente)\b",
+                texto_n
+            )
+        )
+
+        fecha = proximo_dia_semana(
+
+            ahora,
+
+            weekday,
+
+            incluir_hoy=not proximo
+        )
+
+        return fecha.replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0
+        )
+
+    meses = {
+
+        "enero": 1,
+        "febrero": 2,
+        "marzo": 3,
+        "abril": 4,
+        "mayo": 5,
+        "junio": 6,
+        "julio": 7,
+        "agosto": 8,
+        "septiembre": 9,
+        "setiembre": 9,
+        "octubre": 10,
+        "noviembre": 11,
+        "diciembre": 12,
+    }
 
     match = re.search(
 
@@ -787,145 +920,9 @@ def detectar_dia_mes(texto):
             match.group(1)
         )
 
-        meses = {
-
-            "enero": 1,
-            "febrero": 2,
-            "marzo": 3,
-            "abril": 4,
-            "mayo": 5,
-            "junio": 6,
-            "julio": 7,
-            "agosto": 8,
-            "septiembre": 9,
-            "setiembre": 9,
-            "octubre": 10,
-            "noviembre": 11,
-            "diciembre": 12,
-        }
-
-        return (
-            dia,
-            meses[match.group(2)]
-        )
-
-
-    # 17/08
-    match = re.search(
-        r"\b(\d{1,2})[/-](\d{1,2})\b",
-        texto_n
-    )
-
-    if match:
-
-        return (
-            int(match.group(1)),
-            int(match.group(2))
-        )
-
-    return None
-
-
-# ============================================================
-# CONSTRUIR FECHA
-# ============================================================
-
-def construir_fecha_desde_texto(texto):
-
-    zona = obtener_zona()
-
-    ahora = ahora_local()
-
-    texto_n = normalizar_texto(
-        texto
-    )
-
-
-    # IMPORTANTE:
-    # primero pasado mañana
-    if re.search(
-        r"\bpasado manana\b",
-        texto_n
-    ):
-
-        fecha = ahora + timedelta(days=2)
-
-        return fecha.replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0
-        )
-
-
-    if re.search(
-        r"\bmanana\b",
-        texto_n
-    ):
-
-        fecha = ahora + timedelta(days=1)
-
-        return fecha.replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0
-        )
-
-
-    # HOY
-    if re.search(
-        r"\bhoy\b",
-        texto_n
-    ):
-
-        return ahora.replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0
-        )
-
-
-    # DÍA DE SEMANA
-    weekday = detectar_dia_semana(
-        texto
-    )
-
-    if weekday is not None:
-
-        siguiente = bool(
-            re.search(
-                r"\b(proximo|siguiente)\b",
-                texto_n
-            )
-        )
-
-        fecha = proximo_dia_semana(
-
-            ahora,
-
-            weekday,
-
-            incluir_hoy=not siguiente
-        )
-
-        return fecha.replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0
-        )
-
-
-    # DÍA + MES
-    dia_mes = detectar_dia_mes(
-        texto
-    )
-
-    if dia_mes:
-
-        dia, mes = dia_mes
+        mes = meses[
+            match.group(2)
+        ]
 
         anio = ahora.year
 
@@ -944,45 +941,75 @@ def construir_fecha_desde_texto(texto):
 
         if fecha.date() < ahora.date():
 
-            try:
-
-                fecha = datetime(
-                    anio + 1,
-                    mes,
-                    dia,
-                    tzinfo=zona
-                )
-
-            except ValueError:
-
-                return None
+            fecha = datetime(
+                anio + 1,
+                mes,
+                dia,
+                tzinfo=zona
+            )
 
         return fecha
 
+    match = re.search(
+        r"\b(\d{1,2})[/-](\d{1,2})\b",
+        texto_n
+    )
+
+    if match:
+
+        dia = int(
+            match.group(1)
+        )
+
+        mes = int(
+            match.group(2)
+        )
+
+        anio = ahora.year
+
+        try:
+
+            fecha = datetime(
+                anio,
+                mes,
+                dia,
+                tzinfo=zona
+            )
+
+        except ValueError:
+
+            return None
+
+        if fecha.date() < ahora.date():
+
+            fecha = datetime(
+                anio + 1,
+                mes,
+                dia,
+                tzinfo=zona
+            )
+
+        return fecha
 
     return None
 
 
 # ============================================================
-# PARSEAR FECHA + HORA
+# PARSEAR FECHA HORA
 # ============================================================
 
-def parse_fecha_hora(texto):
+def parse_fecha_hora(
+    texto
+):
 
     zona = obtener_zona()
 
     ahora = ahora_local()
 
-    if not texto:
-        return None
-
-
     fecha = construir_fecha_desde_texto(
         texto
     )
 
-
-    # fallback dateparser
     if fecha is None:
 
         try:
@@ -1009,53 +1036,47 @@ def parse_fecha_hora(texto):
 
                     "RELATIVE_BASE":
                         ahora,
-                }
+                },
             )
 
             if resultado:
 
                 if resultado.tzinfo is None:
 
-                    resultado = zona.localize(
+                    fecha = zona.localize(
                         resultado
                     )
 
                 else:
 
-                    resultado = (
+                    fecha = (
                         resultado
                         .astimezone(zona)
                     )
 
-                fecha = resultado
-
         except Exception as e:
 
             print(
-                "DATEPARSER ERROR:",
+                "Dateparser error:",
                 repr(e)
             )
-
 
     if fecha is None:
         return None
 
-
-    hora_info = parse_hora_texto(
+    hora = parse_hora_texto(
         texto
     )
 
-    if hora_info:
-
-        hora, minuto = hora_info
+    if hora:
 
         try:
 
             fecha = fecha.replace(
 
-                hour=hora,
+                hour=hora[0],
 
-                minute=minuto,
+                minute=hora[1],
 
                 second=0,
 
@@ -1079,7 +1100,6 @@ def parse_fecha_hora(texto):
             microsecond=0
         )
 
-
     return fecha.astimezone(
         zona
     )
@@ -1089,12 +1109,12 @@ def parse_fecha_hora(texto):
 # FORMATO FECHA
 # ============================================================
 
-def formato_fecha(fecha):
-
-    zona = obtener_zona()
+def formato_fecha(
+    fecha
+):
 
     fecha = fecha.astimezone(
-        zona
+        obtener_zona()
     )
 
     meses = [
@@ -1123,12 +1143,16 @@ def formato_fecha(fecha):
     )
 
 
-def formato_fecha_corta(fecha):
+# ============================================================
+# FORMATO CORTO
+# ============================================================
 
-    zona = obtener_zona()
+def formato_fecha_corta(
+    fecha
+):
 
     fecha = fecha.astimezone(
-        zona
+        obtener_zona()
     )
 
     return (
@@ -1139,20 +1163,8 @@ def formato_fecha_corta(fecha):
     )
 
 
-def formato_horas(horas):
-
-    if not horas:
-        return ""
-
-    return "\n".join(
-
-        f"• {h.strftime('%H:%M')}"
-        for h in horas
-    )
-
-
 # ============================================================
-# GOOGLE: DISPONIBILIDAD
+# GOOGLE DISPONIBILIDAD
 # ============================================================
 
 def verificar_disponibilidad(
@@ -1168,20 +1180,8 @@ def verificar_disponibilidad(
             zona
         )
 
-        if not es_dia_atencion(
+        if not es_hora_atencion(
             inicio
-        ):
-            return False
-
-        if (
-            inicio.minute != 0
-            or inicio.second != 0
-        ):
-            return False
-
-        if (
-            inicio.hour < HORA_APERTURA
-            or inicio.hour >= HORA_CIERRE
         ):
             return False
 
@@ -1192,14 +1192,21 @@ def verificar_disponibilidad(
             )
         )
 
-        if fin.hour > HORA_CIERRE:
+        cierre = inicio.replace(
+            hour=HORA_CIERRE,
+            minute=0,
+            second=0,
+            microsecond=0
+        )
 
+        if fin > cierre:
             return False
 
-        service = obtener_calendar_service()
+        service = (
+            obtener_calendar_service()
+        )
 
         resultado = (
-
             service
             .freebusy()
             .query(
@@ -1213,28 +1220,20 @@ def verificar_disponibilidad(
                         fin.isoformat(),
 
                     "items": [
-
                         {
                             "id":
                                 CALENDAR_ID
                         }
-                    ]
+                    ],
                 }
             )
             .execute()
         )
 
         calendario = (
-
             resultado
-            .get(
-                "calendars",
-                {}
-            )
-            .get(
-                CALENDAR_ID,
-                {}
-            )
+            .get("calendars", {})
+            .get(CALENDAR_ID, {})
         )
 
         bloques = calendario.get(
@@ -1247,7 +1246,7 @@ def verificar_disponibilidad(
     except Exception as e:
 
         print(
-            "CALENDAR AVAILABILITY ERROR:",
+            "Calendar availability error:",
             repr(e)
         )
 
@@ -1255,78 +1254,15 @@ def verificar_disponibilidad(
 
 
 # ============================================================
-# BUSCAR HORAS
+# BUSCAR PRÓXIMAS 10 HORAS
 # ============================================================
 
-def buscar_horas_disponibles(
-    fecha,
-    cantidad=5,
-    desde_hora=None
-):
-
-    zona = obtener_zona()
-
-    fecha = fecha.astimezone(
-        zona
-    )
-
-    ahora = ahora_local()
-
-    resultados = []
-
-    if not es_dia_atencion(
-        fecha
-    ):
-        return resultados
-
-    if desde_hora is None:
-
-        desde_hora = HORA_APERTURA
-
-    for hora in HORAS_DISPONIBLES:
-
-        if hora < desde_hora:
-            continue
-
-        inicio = fecha.replace(
-
-            hour=hora,
-            minute=0,
-            second=0,
-            microsecond=0
-        )
-
-        if inicio <= ahora:
-            continue
-
-        disponible = verificar_disponibilidad(
-            inicio
-        )
-
-        if disponible:
-
-            resultados.append(
-                inicio
-            )
-
-            if len(resultados) >= cantidad:
-                break
-
-    return resultados
-
-
 def buscar_proximas_horas(
-    fecha_inicial,
-    cantidad=5,
-    dias_maximos=14,
-    desde_hora=None
+    cantidad=10,
+    dias_maximos=30
 ):
 
     zona = obtener_zona()
-
-    fecha_inicial = fecha_inicial.astimezone(
-        zona
-    )
 
     ahora = ahora_local()
 
@@ -1337,12 +1273,11 @@ def buscar_proximas_horas(
     ):
 
         fecha = (
-            fecha_inicial
+            ahora
             + timedelta(days=offset)
         )
 
         fecha = fecha.replace(
-
             hour=0,
             minute=0,
             second=0,
@@ -1354,53 +1289,217 @@ def buscar_proximas_horas(
         ):
             continue
 
-        hora_inicio = HORA_APERTURA
+        for hora in HORAS_DISPONIBLES:
 
-        if offset == 0:
-
-            if fecha.date() == ahora.date():
-
-                hora_inicio = max(
-                    HORA_APERTURA,
-                    ahora.hour + 1
-                    if ahora.minute > 0
-                    else ahora.hour
-                )
-
-        if (
-            desde_hora is not None
-            and offset == 0
-        ):
-
-            hora_inicio = max(
-                hora_inicio,
-                desde_hora
+            inicio = fecha.replace(
+                hour=hora,
+                minute=0,
+                second=0,
+                microsecond=0
             )
 
-        horas = buscar_horas_disponibles(
+            if inicio <= ahora:
+                continue
 
-            fecha,
+            disponible = (
+                verificar_disponibilidad(
+                    inicio,
+                    DURACION_RESERVA
+                )
+            )
 
-            cantidad=(
-                cantidad
-                - len(resultados)
-            ),
+            if disponible is True:
 
-            desde_hora=hora_inicio
-        )
+                resultados.append(
+                    inicio
+                )
 
-        resultados.extend(
-            horas
-        )
+                if len(resultados) >= cantidad:
 
-        if len(resultados) >= cantidad:
-            break
+                    return resultados
 
-    return resultados[:cantidad]
+            elif disponible is None:
+
+                # Si Calendar falla, no inventamos.
+                continue
+
+    return resultados
 
 
 # ============================================================
-# OPENAI CONVERSACIONAL
+# MOSTRAR 10 OPCIONES
+# ============================================================
+
+def mostrar_opciones_horarios(
+    opciones
+):
+
+    if not opciones:
+
+        return (
+
+            "No encontré horas disponibles "
+            "en los próximos días 😕.\n\n"
+
+            "¿Quieres que revisemos más adelante?"
+        )
+
+    lineas = [
+
+        "📅 *Próximas horas disponibles*",
+        "",
+    ]
+
+    numeros = [
+
+        "1️⃣",
+        "2️⃣",
+        "3️⃣",
+        "4️⃣",
+        "5️⃣",
+        "6️⃣",
+        "7️⃣",
+        "8️⃣",
+        "9️⃣",
+        "🔟",
+    ]
+
+    for i, fecha in enumerate(
+        opciones
+    ):
+
+        lineas.append(
+
+            f"{numeros[i]} "
+            f"{formato_fecha(fecha)}"
+        )
+
+    lineas.extend([
+
+        "",
+
+        "Escribe el número de la hora "
+        "que prefieres 😊.",
+
+    ])
+
+    return "\n".join(
+        lineas
+    )
+
+
+# ============================================================
+# DETECTAR NÚMERO 1-10
+# ============================================================
+
+def detectar_opcion_horario(
+    texto
+):
+
+    texto_n = normalizar_texto(
+        texto
+    )
+
+    # Acepta:
+    # 1
+    # 2
+    # ...
+    # 10
+    # también "opción 3"
+
+    match = re.fullmatch(
+        r"(?:opcion\s*)?(\d{1,2})",
+        texto_n
+    )
+
+    if not match:
+        return None
+
+    numero = int(
+        match.group(1)
+    )
+
+    if 1 <= numero <= 10:
+        return numero
+
+    return None
+
+
+# ============================================================
+# INTENCIÓN AGENDA
+# ============================================================
+
+def es_intencion_agendar(
+    texto
+):
+
+    texto_n = normalizar_texto(
+        texto
+    )
+
+    patrones = [
+
+        "agendar",
+        "agenda",
+        "reservar",
+        "reserva",
+        "reservame",
+        "quiero una hora",
+        "quiero agendar",
+        "quiero reservar",
+        "sacar hora",
+        "sacar una hora",
+        "pedir hora",
+        "cita",
+        "turno",
+        "quiero cortarme",
+        "quiero corte",
+        "quiero barba",
+        "quiero perfilado",
+    ]
+
+    return any(
+        patron in texto_n
+        for patron in patrones
+    )
+
+
+# ============================================================
+# INTENCIÓN SERVICIOS
+# ============================================================
+
+def pregunta_servicios(
+    texto
+):
+
+    texto_n = normalizar_texto(
+        texto
+    )
+
+    palabras = [
+
+        "servicios",
+        "servicio",
+        "que haces",
+        "que ofrecen",
+        "que tienes",
+        "precios",
+        "precio",
+        "cuanto sale",
+        "cuanto cuesta",
+        "valor",
+        "valores",
+        "costo",
+    ]
+
+    return any(
+        palabra in texto_n
+        for palabra in palabras
+    )
+
+
+# ============================================================
+# RESPUESTA GPT
 # ============================================================
 
 def responder_openai(
@@ -1411,121 +1510,126 @@ def responder_openai(
     try:
 
         system_prompt = f"""
+
 Eres el Asistente Virtual de {NEGOCIO_NOMBRE}.
 
-Tu nombre es:
+Tu nombre funcional es:
 "Asistente Virtual de Estilista {ESTILISTA_NOMBRE}".
 
-IMPORTANTE:
-NO eres LaOrtiga.
+Eres un asistente conversacional para una barbería/
+estilista.
 
-Tu trabajo principal es atender clientes de una barbería/
-estilista y conducir naturalmente la conversación hacia
-dos posibles acciones:
-
-1. Conocer los servicios y precios.
-2. Agendar una hora.
-
-Pero NO debes comenzar todas las conversaciones hablando
-de reservas.
-
-La conversación debe sentirse como conversar con ChatGPT:
-natural, fluida, humana y contextual.
+Hablas español de Chile.
 
 PERSONALIDAD:
 
-- chileno
-- amable
-- simpático
-- cercano
-- profesional
-- relajado
-- breve
 - natural
+- amable
+- cercano
+- simpático
+- profesional
+- breve
+- conversacional
 
-EJEMPLO:
+IMPORTANTE:
 
-Cliente:
-Hola
+La conversación debe sentirse como conversar
+con ChatGPT.
 
-Asistente:
-¡Hola! 👋 ¿Cómo estás?
+NO debes empujar agresivamente una reserva.
 
-Cliente:
-Bien, ¿y tú?
+Si el cliente dice:
 
-Asistente:
-¡Muy bien también! 😄
-¿Qué tal? Cuéntame, ¿qué te gustaría hacer?
+"Hola"
 
-Si el cliente sigue conversando:
-responde naturalmente.
+puedes responder:
 
-Después puedes orientar suavemente:
+"¡Hola! 👋 ¿Cómo estás?"
 
-"Por cierto, si quieres también puedo contarte
-los servicios que hacemos o revisar una hora para ti ✂️"
+Si responde:
 
-NO fuerces una reserva.
+"Bien"
 
-Si el cliente pregunta por servicios, precios o cortes,
-la aplicación se encargará de mostrar los servicios.
+puedes continuar naturalmente:
 
-Si el cliente quiere agendar,
-la aplicación inicia el proceso de reserva.
+"¡Qué bueno! 😊 ¿En qué te puedo ayudar?"
 
-HORARIO:
+Puedes conversar normalmente.
 
-Lunes a sábado
-10:00 a 18:00
+Pero cuando tenga sentido, puedes mencionar
+suavemente que puedes:
 
-Las reservas son de 1 hora.
-
-ÚLTIMA HORA DE INICIO:
-17:00
-
-DOMINGO:
-cerrado.
+- mostrar los servicios
+- mostrar precios
+- buscar horas disponibles
+- ayudar a reservar
 
 SERVICIOS:
 
-Corte de cabello — $20.000
-Corte + barba — $20.000
-Arreglo de barba — $20.000
-Corte de niño — $20.000
-Perfilado — $20.000
+Todos cuestan exactamente $20.000.
 
-No inventes otros precios.
+1. Corte de cabello — $20.000
+2. Corte + barba — $20.000
+3. Arreglo de barba — $20.000
+4. Corte de niño — $20.000
+5. Perfilado — $20.000
 
-No inventes disponibilidad.
+HORARIO:
 
-La disponibilidad real se consulta directamente
-en Google Calendar.
+Lunes a sábado.
+10:00 a 18:00.
 
-La agenda utilizada es solamente la de
-{ESTILISTA_NOMBRE}.
+Cada atención dura 1 hora.
 
-El cliente nunca necesita iniciar sesión en Google.
+La última hora de inicio es 17:00.
 
-Cuando corresponda, invita naturalmente a conocer
-los servicios o agendar.
+Domingo cerrado.
 
-Nunca digas que eres una IA a menos que el cliente
-lo pregunte directamente.
+GOOGLE CALENDAR:
+
+La disponibilidad real la consulta el sistema
+directamente en Google Calendar.
+
+Nunca inventes horarios.
+
+Nunca digas que una hora está disponible
+si el sistema no la comprobó.
+
+El cliente NO necesita Google Calendar.
+
+La agenda utilizada es solamente la agenda
+de {ESTILISTA_NOMBRE}.
+
+Cuando el cliente manifieste claramente que
+quiere reservar, el sistema se encargará del
+flujo de agenda.
+
+NO debes inventar una reserva.
+
+Si el cliente pregunta por servicios o precios,
+entrega la información.
+
+Si el cliente dice que no quiere reservar,
+no insistas.
+
+Puedes despedirte amablemente.
+
 """
 
         mensajes = [
+
             {
-                "role": "system",
-                "content": system_prompt
+                "role":
+                    "system",
+
+                "content":
+                    system_prompt,
             }
         ]
 
-        if historial:
-
-            mensajes.extend(
-                historial[-14:]
-            )
+        mensajes.extend(
+            historial[-14:]
+        )
 
         mensajes.append({
 
@@ -1533,11 +1637,10 @@ lo pregunte directamente.
                 "user",
 
             "content":
-                pregunta
+                pregunta,
         })
 
         completion = (
-
             client
             .chat
             .completions
@@ -1549,7 +1652,7 @@ lo pregunte directamente.
 
                 max_tokens=300,
 
-                temperature=0.8
+                temperature=0.7,
             )
         )
 
@@ -1563,9 +1666,8 @@ lo pregunte directamente.
         if not respuesta:
 
             return (
-                "Cuéntame 😊 "
-                "¿Quieres conocer nuestros servicios "
-                "o te gustaría agendar una hora?"
+                "¡Claro! 😊 "
+                "Cuéntame, ¿en qué te puedo ayudar?"
             )
 
         return respuesta.strip()
@@ -1579,30 +1681,100 @@ lo pregunte directamente.
 
         return (
             "¡Claro! 😊 "
-            "Cuéntame, ¿qué te gustaría hacer?"
+            "Cuéntame qué necesitas y te ayudo."
         )
 
 
 # ============================================================
-# PREGUNTAR SERVICIO
+# CONFIRMACIONES
 # ============================================================
 
-def preguntar_servicio():
+def respuesta_es_si(
+    texto
+):
+
+    texto_n = normalizar_texto(
+        texto
+    )
+
+    return texto_n in [
+
+        "si",
+        "sí",
+        "sipo",
+        "sip",
+        "yes",
+        "dale",
+        "ok",
+        "okay",
+        "bueno",
+        "confirmo",
+        "confirmar",
+        "confirmemos",
+        "perfecto",
+        "ya",
+    ]
+
+
+def respuesta_es_no(
+    texto
+):
+
+    texto_n = normalizar_texto(
+        texto
+    )
+
+    return texto_n in [
+
+        "no",
+        "nop",
+        "no gracias",
+        "mejor no",
+        "dejalo",
+        "déjalo",
+        "cancelar",
+        "cancela",
+        "cancelalo",
+        "cancelarlo",
+    ]
+
+
+# ============================================================
+# REINICIAR RESERVA
+# ============================================================
+
+def cancelar_reserva(
+    estado
+):
+
+    telefono = (
+        estado["datos_reserva"]
+        .get("telefono")
+    )
+
+    estado[
+        "modo_agendar"
+    ] = False
+
+    estado[
+        "datos_reserva"
+    ] = nueva_reserva(
+        telefono
+    )
 
     return (
 
-        "¡Claro! ✂️ ¿Qué servicio te gustaría reservar?\n\n"
+        "No hay problema 😊\n\n"
 
-        "• Corte de cabello — $20.000\n"
-        "• Corte + barba — $20.000\n"
-        "• Arreglo de barba — $20.000\n"
-        "• Corte de niño — $20.000\n"
-        "• Perfilado — $20.000"
+        "Cuando quieras reservar o conocer "
+        "los servicios de Diego, aquí estaré.\n\n"
+
+        "¡Que tengas un excelente día! ✂️"
     )
 
 
 # ============================================================
-# PROCESAR RESERVA
+# PROCESAR AGENDA
 # ============================================================
 
 def procesar_reserva(
@@ -1618,6 +1790,24 @@ def procesar_reserva(
         texto or ""
     ).strip()
 
+    estado_actual = datos.get(
+        "estado",
+        "inicio"
+    )
+
+
+    # ========================================================
+    # CANCELACIÓN
+    # ========================================================
+
+    if respuesta_es_no(
+        texto
+    ):
+
+        return cancelar_reserva(
+            estado
+        )
+
 
     # ========================================================
     # SERVICIO
@@ -1629,13 +1819,36 @@ def procesar_reserva(
             texto
         )
 
+        if not servicio:
+
+            servicio = (
+                detectar_servicio_numero(
+                    texto
+                )
+            )
+
         if servicio:
 
-            datos["servicio"] = servicio
+            datos[
+                "servicio"
+            ] = servicio
 
         else:
 
-            return preguntar_servicio()
+            return (
+
+                "Perfecto 😊 Antes de buscar tu hora, "
+                "¿qué servicio quieres?\n\n"
+
+                "1️⃣ Corte de cabello — $20.000\n"
+                "2️⃣ Corte + barba — $20.000\n"
+                "3️⃣ Arreglo de barba — $20.000\n"
+                "4️⃣ Corte de niño — $20.000\n"
+                "5️⃣ Perfilado — $20.000\n\n"
+
+                "Puedes escribir el nombre o "
+                "el número."
+            )
 
 
     servicio = obtener_servicio(
@@ -1644,7 +1857,101 @@ def procesar_reserva(
 
 
     # ========================================================
-    # FECHA + HORA
+    # SI YA HAY UNA OPCIÓN GUARDADA
+    # ========================================================
+
+    opciones = datos.get(
+        "opciones_horarios",
+        []
+    )
+
+
+    # ========================================================
+    # SELECCIÓN 1-10
+    # ========================================================
+
+    if opciones:
+
+        opcion = detectar_opcion_horario(
+            texto
+        )
+
+        if opcion is not None:
+
+            indice = opcion - 1
+
+            if indice >= len(opciones):
+
+                return (
+
+                    "Esa opción no está disponible 😕.\n\n"
+
+                    f"Elige un número entre 1 y "
+                    f"{len(opciones)}."
+                )
+
+            fecha = opciones[
+                indice
+            ]
+
+            disponible = (
+                verificar_disponibilidad(
+                    fecha,
+                    DURACION_RESERVA
+                )
+            )
+
+            if disponible is not True:
+
+                datos[
+                    "opciones_horarios"
+                ] = []
+
+                nuevas = (
+                    buscar_proximas_horas(
+                        cantidad=10
+                    )
+                )
+
+                datos[
+                    "opciones_horarios"
+                ] = nuevas
+
+                return (
+
+                    "Justo esa hora acaba de ocuparse 😕.\n\n"
+
+                    + mostrar_opciones_horarios(
+                        nuevas
+                    )
+                )
+
+            datos[
+                "fecha_hora"
+            ] = fecha.isoformat()
+
+            datos[
+                "opcion_seleccionada"
+            ] = opcion
+
+            datos[
+                "opciones_horarios"
+            ] = []
+
+            return (
+
+                "¡Perfecto! 👍\n\n"
+
+                f"✂️ {servicio['nombre']}\n"
+                f"📅 {formato_fecha(fecha)}\n"
+                f"💰 {precio_texto(servicio['precio'])}\n\n"
+
+                "¿Quieres confirmar esta hora?"
+            )
+
+
+    # ========================================================
+    # SI NO HAY FECHA Y HORA
     # ========================================================
 
     if not datos["fecha_hora"]:
@@ -1653,309 +1960,149 @@ def procesar_reserva(
             texto
         )
 
-        tiene_hora = contiene_hora(
+        # ----------------------------------------------------
+        # Si el cliente dio una fecha/hora específica
+        # ----------------------------------------------------
+
+        if fecha and contiene_hora(
             texto
-        )
-
-
-        if fecha is None:
-
-            return (
-
-                f"Perfecto 👍\n\n"
-
-                f"Para {servicio['nombre']} "
-                f"($20.000), ¿qué día y hora "
-                f"te gustaría venir?\n\n"
-
-                "Por ejemplo:\n"
-                "• mañana a las 10\n"
-                "• lunes a las 15:00\n"
-                "• viernes a las 5 pm"
-            )
-
-
-        if not tiene_hora:
+        ):
 
             if not es_dia_atencion(
                 fecha
             ):
 
-                proximas = buscar_proximas_horas(
-                    fecha,
-                    cantidad=5
-                )
-
-                if proximas:
-
-                    return (
-
-                        "Ese día no tenemos atención 😕.\n\n"
-
-                        "Puedo ofrecerte estas próximas horas:\n\n"
-
-                        f"{formato_horas(proximas)}\n\n"
-
-                        "¿Cuál te acomoda?"
+                nuevas = (
+                    buscar_proximas_horas(
+                        cantidad=10
                     )
-
-                return (
-                    "Ese día no tenemos atención 😕.\n\n"
-                    "Atendemos lunes a sábado, "
-                    "de 10:00 a 18:00."
                 )
 
-
-            horas = buscar_horas_disponibles(
-                fecha,
-                cantidad=5
-            )
-
-            if horas:
-
-                return (
-
-                    f"Perfecto 👍 Para "
-                    f"{formato_fecha_corta(fecha)} "
-                    "tengo estas horas disponibles:\n\n"
-
-                    f"{formato_horas(horas)}\n\n"
-
-                    "¿Cuál prefieres?"
-                )
-
-
-            proximas = buscar_proximas_horas(
-                fecha,
-                cantidad=5
-            )
-
-            if proximas:
-
-                return (
-
-                    "Ese día ya no tengo horas "
-                    "disponibles 😕.\n\n"
-
-                    "Estas son las próximas:\n\n"
-
-                    f"{formato_horas(proximas)}\n\n"
-
-                    "¿Cuál te acomoda?"
-                )
-
-            return (
-                "No encontré disponibilidad cercana 😕.\n"
-                "¿Quieres probar con otro día?"
-            )
-
-
-        # ----------------------------------------------------
-        # DÍA
-        # ----------------------------------------------------
-
-        if not es_dia_atencion(
-            fecha
-        ):
-
-            proximas = buscar_proximas_horas(
-                fecha,
-                cantidad=5
-            )
-
-            if proximas:
+                datos[
+                    "opciones_horarios"
+                ] = nuevas
 
                 return (
 
                     "Ese día no tenemos atención 😕.\n\n"
 
-                    "Te puedo ofrecer:\n\n"
-
-                    f"{formato_horas(proximas)}\n\n"
-
-                    "¿Cuál te acomoda?"
+                    + mostrar_opciones_horarios(
+                        nuevas
+                    )
                 )
 
-            return (
-                "Ese día no tenemos atención 😕.\n"
-                "Atendemos lunes a sábado."
+            disponible = (
+                verificar_disponibilidad(
+                    fecha,
+                    DURACION_RESERVA
+                )
             )
 
+            if disponible is True:
 
-        # ----------------------------------------------------
-        # HORA EXACTA
-        # ----------------------------------------------------
-
-        if fecha.minute != 0:
-
-            proximas = buscar_proximas_horas(
-                fecha,
-                cantidad=5,
-                dias_maximos=7
-            )
-
-            if proximas:
+                datos[
+                    "fecha_hora"
+                ] = fecha.isoformat()
 
                 return (
 
-                    "Trabajamos con horas exactas 🕐.\n\n"
+                    "¡Perfecto! 👍\n\n"
 
-                    "Por ejemplo: 10:00, 11:00, "
-                    "12:00, 13:00, 14:00, 15:00, "
-                    "16:00 o 17:00.\n\n"
+                    f"✂️ {servicio['nombre']}\n"
+                    f"📅 {formato_fecha(fecha)}\n"
+                    f"💰 {precio_texto(servicio['precio'])}\n\n"
 
-                    "Tengo estas disponibles:\n\n"
-
-                    f"{formato_horas(proximas)}\n\n"
-
-                    "¿Cuál prefieres?"
+                    "¿Quieres confirmar esta hora?"
                 )
 
-            return (
-                "Trabajamos con horas exactas 🕐."
-            )
-
-
-        # ----------------------------------------------------
-        # HORARIO
-        # ----------------------------------------------------
-
-        if (
-            fecha.hour < HORA_APERTURA
-            or fecha.hour >= HORA_CIERRE
-        ):
-
-            proximas = buscar_proximas_horas(
-                fecha,
-                cantidad=5
-            )
-
-            if proximas:
+            if disponible is False:
 
                 return (
 
-                    "Ese horario está fuera "
-                    "de atención 😕.\n\n"
+                    "Esa hora está ocupada 😕.\n\n"
 
-                    "Nuestro horario es lunes a sábado, "
-                    "de 10:00 a 18:00.\n\n"
+                    "Te muestro las próximas "
+                    "10 horas disponibles:\n\n"
 
-                    "Tengo estas opciones:\n\n"
-
-                    f"{formato_horas(proximas)}\n\n"
-
-                    "¿Cuál te acomoda?"
+                    + mostrar_opciones_horarios(
+                        buscar_proximas_horas(
+                            cantidad=10
+                        )
+                    )
                 )
 
             return (
-                "Nuestro horario es lunes a sábado, "
-                "de 10:00 a 18:00."
-            )
 
-
-        # ----------------------------------------------------
-        # PASADO
-        # ----------------------------------------------------
-
-        if fecha <= ahora_local():
-
-            proximas = buscar_proximas_horas(
-                fecha,
-                cantidad=5
-            )
-
-            if proximas:
-
-                return (
-
-                    "Esa hora ya pasó 😕.\n\n"
-
-                    "Te puedo ofrecer:\n\n"
-
-                    f"{formato_horas(proximas)}\n\n"
-
-                    "¿Cuál te acomoda?"
-                )
-
-            return (
-                "Esa hora ya pasó 😕.\n"
-                "Dime otro día y horario."
-            )
-
-
-        # ----------------------------------------------------
-        # GOOGLE
-        # ----------------------------------------------------
-
-        disponible = verificar_disponibilidad(
-            fecha
-        )
-
-        if disponible is None:
-
-            return (
-                "No pude consultar la agenda de Diego "
+                "No pude consultar la agenda "
                 "en este momento 😕.\n\n"
                 "Intenta nuevamente en unos segundos."
             )
 
 
-        if not disponible:
+        # ----------------------------------------------------
+        # Buscar automáticamente 10 próximas
+        # ----------------------------------------------------
 
-            proximas = buscar_proximas_horas(
+        nuevas = (
+            buscar_proximas_horas(
+                cantidad=10
+            )
+        )
 
-                fecha,
+        datos[
+            "opciones_horarios"
+        ] = nuevas
 
-                cantidad=5,
+        if not nuevas:
 
-                dias_maximos=14,
+            return (
 
-                desde_hora=fecha.hour
+                "No encontré horas disponibles "
+                "en los próximos días 😕.\n\n"
+
+                "¿Quieres que revisemos más adelante?"
             )
 
-            datos["fecha_hora"] = None
+        return mostrar_opciones_horarios(
+            nuevas
+        )
 
-            if proximas:
+
+    # ========================================================
+    # CONFIRMACIÓN
+    # ========================================================
+
+    if datos["fecha_hora"]:
+
+        if respuesta_es_si(
+            texto
+        ):
+
+            if not datos["nombre"]:
 
                 return (
 
-                    "Esa hora ya está ocupada 😕.\n\n"
+                    "¡Perfecto! 🙌\n\n"
 
-                    "Te puedo ofrecer estas alternativas:\n\n"
-
-                    f"{formato_horas(proximas)}\n\n"
-
-                    "¿Cuál prefieres?"
+                    "¿Me indicas tu nombre?"
                 )
 
+        else:
+
+            # Si escribió otra cosa en vez de sí,
+            # preguntar nuevamente sin perder la hora.
+
             return (
-                "Esa hora está ocupada 😕.\n"
-                "¿Quieres probar con otro día?"
+
+                "¿Confirmamos esta hora? 😊\n\n"
+
+                f"✂️ {servicio['nombre']}\n"
+                f"📅 {formato_fecha(datetime.fromisoformat(datos['fecha_hora']))}\n"
+                f"💰 {precio_texto(servicio['precio'])}\n\n"
+
+                "Responde *sí* para confirmar "
+                "o *no* para cancelar."
             )
-
-
-        # ----------------------------------------------------
-        # GUARDAR
-        # ----------------------------------------------------
-
-        datos["fecha_hora"] = (
-            fecha.isoformat()
-        )
-
-
-        # ----------------------------------------------------
-        # NOMBRE
-        # ----------------------------------------------------
-
-        return (
-
-            "¡Perfecto! 🙌\n\n"
-
-            f"Tengo disponible "
-            f"{formato_fecha(fecha)}.\n\n"
-
-            "¿Me indicas tu nombre?"
-        )
 
 
     # ========================================================
@@ -1970,9 +2117,11 @@ def procesar_reserva(
                 "¿Me indicas tu nombre, por favor? 😊"
             )
 
-        datos["nombre"] = texto
+        datos[
+            "nombre"
+        ] = texto
 
-        # WhatsApp ya tiene teléfono
+        # WhatsApp ya trae teléfono.
         if datos.get("telefono"):
 
             return completar_reserva(
@@ -1980,7 +2129,9 @@ def procesar_reserva(
             )
 
         return (
+
             f"Perfecto, {datos['nombre']} 👍\n\n"
+
             "¿Cuál es tu número de teléfono?"
         )
 
@@ -1989,10 +2140,13 @@ def procesar_reserva(
     # TELÉFONO
     # ========================================================
 
-    if not datos["telefono"]:
+    if not datos.get(
+        "telefono"
+    ):
 
-        datos["telefono"] = texto
-
+        datos[
+            "telefono"
+        ] = texto
 
     return completar_reserva(
         estado
@@ -2014,15 +2168,13 @@ def completar_reserva(
     if not datos["fecha_hora"]:
 
         return (
-            "Me falta confirmar el día y "
-            "la hora 😊."
+            "Me falta confirmar la hora 😊."
         )
 
     if not datos["servicio"]:
 
         return (
-            "Me falta saber qué servicio quieres "
-            "reservar ✂️."
+            "Me falta saber qué servicio quieres ✂️."
         )
 
     if not datos["nombre"]:
@@ -2037,7 +2189,6 @@ def completar_reserva(
             "Me falta tu teléfono 📞."
         )
 
-
     try:
 
         inicio = datetime.fromisoformat(
@@ -2049,31 +2200,60 @@ def completar_reserva(
         datos["fecha_hora"] = None
 
         return (
-            "Necesito volver a confirmar "
-            "el día y la hora 😊."
+            "Necesito volver a confirmar la hora 😊."
         )
 
+    servicio = obtener_servicio(
+        datos["servicio"]
+    )
 
-    disponible = verificar_disponibilidad(
-        inicio
+    # ========================================================
+    # SEGUNDA COMPROBACIÓN
+    # ========================================================
+
+    disponible = (
+        verificar_disponibilidad(
+            inicio,
+            DURACION_RESERVA
+        )
     )
 
     if disponible is None:
 
         return (
+
             "No pude comprobar nuevamente "
-            "la disponibilidad 😕."
+            "la disponibilidad 😕.\n\n"
+
+            "Intenta nuevamente en unos segundos."
         )
 
     if not disponible:
 
         datos["fecha_hora"] = None
 
-        return (
-            "Justo esa hora se ocupó 😕.\n\n"
-            "Dime otra hora y vuelvo a revisar."
+        nuevas = (
+            buscar_proximas_horas(
+                cantidad=10
+            )
         )
 
+        datos[
+            "opciones_horarios"
+        ] = nuevas
+
+        return (
+
+            "Justo esa hora se ocupó 😕.\n\n"
+
+            + mostrar_opciones_horarios(
+                nuevas
+            )
+        )
+
+    # ========================================================
+    # CREAR EVENTO
+    # ========================================================
 
     resultado = crear_evento_diego(
 
@@ -2086,9 +2266,8 @@ def completar_reserva(
             datos["nombre"],
 
         telefono_cliente=
-            datos["telefono"]
+            datos["telefono"],
     )
-
 
     if not resultado["ok"]:
 
@@ -2098,16 +2277,12 @@ def completar_reserva(
         )
 
         return (
+
             "No pude completar la reserva "
             "en este momento 😕.\n\n"
+
             "Intenta nuevamente en unos segundos."
         )
-
-
-    servicio = obtener_servicio(
-        datos["servicio"]
-    )
-
 
     nombre = datos["nombre"]
     telefono = datos["telefono"]
@@ -2116,39 +2291,35 @@ def completar_reserva(
         inicio
     )
 
+    servicio_nombre = servicio[
+        "nombre"
+    ]
 
-    # Guardar teléfono
+    precio = precio_texto(
+        servicio["precio"]
+    )
+
+    # Mantener teléfono para futuras reservas
     telefono_guardar = telefono
 
+    estado[
+        "datos_reserva"
+    ] = nueva_reserva(
+        telefono_guardar
+    )
 
-    # Limpiar flujo
-    estado["datos_reserva"] = {
-
-        "servicio": None,
-
-        "fecha_hora": None,
-
-        "nombre": None,
-
-        "telefono":
-            telefono_guardar,
-    }
-
-    estado["modo_agendar"] = False
-
+    estado[
+        "modo_agendar"
+    ] = False
 
     return (
 
         "✅ ¡Reserva confirmada!\n\n"
 
-        f"✂️ Servicio: {servicio['nombre']}\n"
-
-        f"💰 Valor: $20.000\n"
-
+        f"✂️ Servicio: {servicio_nombre}\n"
+        f"💰 Valor: {precio}\n"
         f"👤 Cliente: {nombre}\n"
-
         f"📞 Teléfono: {telefono}\n"
-
         f"📅 {fecha_texto}\n\n"
 
         f"Tu hora quedó agendada directamente "
@@ -2167,14 +2338,19 @@ def completar_reserva(
 def crear_evento_diego(
 
     inicio,
+
     servicio_codigo,
+
     nombre_cliente,
+
     telefono_cliente
 ):
 
     try:
 
-        service = obtener_calendar_service()
+        service = (
+            obtener_calendar_service()
+        )
 
         servicio = obtener_servicio(
             servicio_codigo
@@ -2202,15 +2378,10 @@ def crear_evento_diego(
                     f"Estilista {ESTILISTA_NOMBRE}.\n\n"
 
                     f"Cliente: {nombre_cliente}\n"
-
                     f"Teléfono: {telefono_cliente}\n"
-
                     f"Servicio: {servicio['nombre']}\n"
-
-                    "Valor: $20.000\n"
-
-                    "Duración: 60 minutos\n"
-
+                    f"Valor: {precio_texto(servicio['precio'])}\n"
+                    f"Duración: {DURACION_RESERVA} minutos\n"
                     "Origen: Asistente Virtual"
                 ),
 
@@ -2246,10 +2417,10 @@ def crear_evento_diego(
                         servicio["nombre"],
 
                     "precio":
-                        "20000",
+                        str(servicio["precio"]),
 
                     "duracion":
-                        "60",
+                        str(DURACION_RESERVA),
 
                     "origen":
                         (
@@ -2261,7 +2432,6 @@ def crear_evento_diego(
         }
 
         resultado = (
-
             service
             .events()
             .insert(
@@ -2281,7 +2451,8 @@ def crear_evento_diego(
 
         return {
 
-            "ok": True,
+            "ok":
+                True,
 
             "evento_id":
                 resultado.get("id"),
@@ -2299,9 +2470,11 @@ def crear_evento_diego(
 
         return {
 
-            "ok": False,
+            "ok":
+                False,
 
-            "error": str(e)
+            "error":
+                str(e)
         }
 
 
@@ -2329,7 +2502,6 @@ def chat():
 
     session.permanent = True
 
-
     if "historial" not in session:
 
         session["historial"] = [
@@ -2344,26 +2516,21 @@ def chat():
                         "Soy el Asistente Virtual "
                         "de Estilista Diego ✂️\n\n"
                         "¿Cómo estás?"
-                    )
+                    ),
             }
         ]
 
-
     if "modo_agendar" not in session:
 
-        session["modo_agendar"] = False
-
+        session[
+            "modo_agendar"
+        ] = False
 
     if "datos_reserva" not in session:
 
-        session["datos_reserva"] = {
-
-            "servicio": None,
-            "fecha_hora": None,
-            "nombre": None,
-            "telefono": None,
-        }
-
+        session[
+            "datos_reserva"
+        ] = nueva_reserva()
 
     if request.method == "POST":
 
@@ -2378,146 +2545,120 @@ def chat():
 
         if pregunta:
 
-            intencion = detectar_intencion(
-                pregunta
+            historial = session[
+                "historial"
+            ]
+
+            historial.append({
+
+                "role":
+                    "user",
+
+                "content":
+                    pregunta,
+            })
+
+            iniciar = (
+
+                es_intencion_agendar(
+                    pregunta
+                )
+
+                or pregunta_servicios(
+                    pregunta
+                )
+
+                or session.get(
+                    "modo_agendar",
+                    False
+                )
             )
 
+            # =================================================
+            # SERVICIOS
+            # =================================================
+
+            if (
+                pregunta_servicios(
+                    pregunta
+                )
+                and not session.get(
+                    "modo_agendar",
+                    False
+                )
+            ):
+
+                respuesta = servicios_texto()
 
             # =================================================
-            # SALIR
+            # AGENDA
             # =================================================
 
-            if intencion == "salir":
+            elif iniciar:
 
-                respuesta = despedir_y_reiniciar()
+                session[
+                    "modo_agendar"
+                ] = True
 
-                session["historial"].append({
+                estado = {
 
-                    "role":
-                        "user",
+                    "modo_agendar":
+                        True,
 
-                    "content":
-                        pregunta
-                })
-
-                session["historial"].append({
-
-                    "role":
-                        "assistant",
-
-                    "content":
-                        respuesta
-                })
-
-                # mostrar despedida una vez
-                # y dejar limpio para siguiente mensaje
-                session["modo_agendar"] = False
-
-                session["datos_reserva"] = {
-
-                    "servicio": None,
-                    "fecha_hora": None,
-                    "nombre": None,
-                    "telefono": None,
+                    "datos_reserva":
+                        session[
+                            "datos_reserva"
+                        ],
                 }
 
-                session.modified = True
-
-
-            else:
-
-                session["historial"].append({
-
-                    "role":
-                        "user",
-
-                    "content":
-                        pregunta
-                })
-
-
-                # =============================================
-                # SERVICIOS
-                # =============================================
-
-                if intencion == "servicios":
-
-                    respuesta = mostrar_servicios()
-
-
-                # =============================================
-                # AGENDA
-                # =============================================
-
-                elif (
-
-                    intencion == "agenda"
-                    or session.get(
-                        "modo_agendar",
-                        False
-                    )
-                ):
-
-                    session["modo_agendar"] = True
-
-                    estado = {
-
-                        "modo_agendar":
-                            True,
-
-                        "datos_reserva":
-                            session[
-                                "datos_reserva"
-                            ],
-                    }
-
-                    respuesta = procesar_reserva(
+                respuesta = (
+                    procesar_reserva(
 
                         estado,
 
                         pregunta
                     )
+                )
 
-                    session[
-                        "datos_reserva"
-                    ] = estado[
-                        "datos_reserva"
-                    ]
+                session[
+                    "datos_reserva"
+                ] = estado[
+                    "datos_reserva"
+                ]
 
-                    session[
-                        "modo_agendar"
-                    ] = estado[
-                        "modo_agendar"
-                    ]
+                session[
+                    "modo_agendar"
+                ] = estado[
+                    "modo_agendar"
+                ]
 
+            # =================================================
+            # GPT NORMAL
+            # =================================================
 
-                # =============================================
-                # CONVERSACIÓN NORMAL
-                # =============================================
+            else:
 
-                else:
+                respuesta = (
+                    responder_openai(
 
-                    respuesta = responder_openai(
-
-                        session[
-                            "historial"
-                        ],
+                        historial,
 
                         pregunta
                     )
+                )
 
+            session[
+                "historial"
+            ].append({
 
-                session["historial"].append({
+                "role":
+                    "assistant",
 
-                    "role":
-                        "assistant",
+                "content":
+                    respuesta,
+            })
 
-                    "content":
-                        respuesta
-                })
-
-                session.modified = True
-
+            session.modified = True
 
     return render_template_string(
 
@@ -2526,133 +2667,6 @@ def chat():
         historial=
             session["historial"]
     )
-
-
-# ============================================================
-# WHATSAPP SESSIONS
-# ============================================================
-
-WHATSAPP_TOKEN = os.getenv(
-    "WHATSAPP_TOKEN"
-)
-
-WHATSAPP_PHONE_NUMBER_ID = os.getenv(
-    "WHATSAPP_PHONE_NUMBER_ID"
-)
-
-WHATSAPP_VERIFY_TOKEN = os.getenv(
-    "WHATSAPP_VERIFY_TOKEN"
-)
-
-WA_SESSIONS = {}
-
-PROCESSED_MSG_IDS = {}
-
-DEDUP_TTL_SECONDS = 120
-
-
-def get_wa_session(wa_id):
-
-    if wa_id not in WA_SESSIONS:
-
-        WA_SESSIONS[wa_id] = {
-
-            "historial": [],
-
-            "modo_agendar": False,
-
-            "datos_reserva": {
-
-                "servicio": None,
-
-                "fecha_hora": None,
-
-                "nombre": None,
-
-                "telefono": wa_id,
-            },
-        }
-
-    return WA_SESSIONS[wa_id]
-
-
-# ============================================================
-# WHATSAPP ENVÍO
-# ============================================================
-
-def wa_send_text(
-    to_number,
-    text
-):
-
-    if (
-        not WHATSAPP_TOKEN
-        or not WHATSAPP_PHONE_NUMBER_ID
-    ):
-        return None
-
-    url = (
-
-        "https://graph.facebook.com/v20.0/"
-        f"{WHATSAPP_PHONE_NUMBER_ID}/messages"
-    )
-
-    headers = {
-
-        "Authorization":
-            f"Bearer {WHATSAPP_TOKEN}",
-
-        "Content-Type":
-            "application/json",
-    }
-
-    payload = {
-
-        "messaging_product":
-            "whatsapp",
-
-        "to":
-            to_number,
-
-        "type":
-            "text",
-
-        "text": {
-
-            "body":
-                (text or "")[:3900]
-        }
-    }
-
-    try:
-
-        response = requests.post(
-
-            url,
-
-            headers=headers,
-
-            json=payload,
-
-            timeout=20
-        )
-
-        print(
-            "WhatsApp envío:",
-            response.status_code,
-            response.text[:500]
-        )
-
-        return response
-
-    except Exception as e:
-
-        print(
-            "ERROR WHATSAPP:",
-            repr(e)
-        )
-
-        return None
 
 
 # ============================================================
@@ -2724,11 +2738,8 @@ def whatsapp_webhook():
             or {}
         )
 
-
         if value.get("statuses"):
-
             return "ok", 200
-
 
         messages = (
             value.get("messages")
@@ -2736,9 +2747,7 @@ def whatsapp_webhook():
         )
 
         if not messages:
-
             return "ok", 200
-
 
         msg = messages[0]
 
@@ -2755,11 +2764,8 @@ def whatsapp_webhook():
             ""
         ).strip()
 
-
         if not wa_id:
-
             return "ok", 200
-
 
         if not text:
 
@@ -2767,11 +2773,13 @@ def whatsapp_webhook():
 
                 wa_id,
 
-                "Por ahora puedo ayudarte por mensaje de texto 😊."
+                (
+                    "Por ahora puedo ayudarte "
+                    "por mensaje de texto 😊."
+                )
             )
 
             return "ok", 200
-
 
         # ====================================================
         # DEDUP
@@ -2806,7 +2814,6 @@ def whatsapp_webhook():
                 msg_id
             ] = ahora_timestamp
 
-
         # ====================================================
         # SESIÓN
         # ====================================================
@@ -2821,128 +2828,96 @@ def whatsapp_webhook():
             "telefono"
         ] = wa_id
 
-
-        intencion = detectar_intencion(
-            text
-        )
-
-
-        # ====================================================
-        # SALIR
-        # ====================================================
-
-        if intencion == "salir":
-
-            respuesta = despedir_y_reiniciar()
-
-            estado["historial"].append({
-
-                "role":
-                    "user",
-
-                "content":
-                    text
-            })
-
-            estado["historial"].append({
-
-                "role":
-                    "assistant",
-
-                "content":
-                    respuesta
-            })
-
-            resetear_estado_wa(
-                estado
-            )
-
-            # No borramos la respuesta enviada
-            wa_send_text(
-                wa_id,
-                respuesta
-            )
-
-            return "ok", 200
-
-
-        estado["historial"].append({
+        estado[
+            "historial"
+        ].append({
 
             "role":
                 "user",
 
             "content":
-                text
+                text,
         })
 
+        iniciar = (
+
+            es_intencion_agendar(
+                text
+            )
+
+            or pregunta_servicios(
+                text
+            )
+
+            or estado[
+                "modo_agendar"
+            ]
+        )
 
         # ====================================================
         # SERVICIOS
         # ====================================================
 
-        if intencion == "servicios":
+        if (
+            pregunta_servicios(text)
+            and not estado[
+                "modo_agendar"
+            ]
+        ):
 
-            respuesta = mostrar_servicios()
-
+            respuesta = servicios_texto()
 
         # ====================================================
         # AGENDA
         # ====================================================
 
-        elif (
-
-            intencion == "agenda"
-
-            or estado[
-                "modo_agendar"
-            ]
-        ):
+        elif iniciar:
 
             estado[
                 "modo_agendar"
             ] = True
 
-            respuesta = procesar_reserva(
+            respuesta = (
+                procesar_reserva(
 
-                estado,
+                    estado,
 
-                text
+                    text
+                )
             )
 
-
         # ====================================================
-        # CONVERSACIÓN
+        # GPT NORMAL
         # ====================================================
 
         else:
 
-            respuesta = responder_openai(
+            respuesta = (
+                responder_openai(
 
-                estado[
-                    "historial"
-                ],
+                    estado[
+                        "historial"
+                    ],
 
-                text
+                    text
+                )
             )
 
-
-        estado["historial"].append({
+        estado[
+            "historial"
+        ].append({
 
             "role":
                 "assistant",
 
             "content":
-                respuesta
+                respuesta,
         })
 
-
         wa_send_text(
-
             wa_id,
-
             respuesta
         )
-
 
     except Exception as e:
 
@@ -2950,7 +2925,6 @@ def whatsapp_webhook():
             "WHATSAPP ERROR:",
             repr(e)
         )
-
 
     return "ok", 200
 
@@ -2990,6 +2964,35 @@ def admin_login():
         ] = flow.code_verifier
 
         session.modified = True
+
+        print(
+            "========================================"
+        )
+
+        print(
+            "GOOGLE OAUTH INICIADO"
+        )
+
+        print(
+            "STATE:",
+            state
+        )
+
+        print(
+            "CODE VERIFIER:",
+            "GUARDADO"
+            if flow.code_verifier
+            else "NO GENERADO"
+        )
+
+        print(
+            "REDIRECT URI:",
+            GOOGLE_REDIRECT_URI
+        )
+
+        print(
+            "========================================"
+        )
 
         return redirect(
             authorization_url
@@ -3040,7 +3043,6 @@ def callback():
                 f"Google respondió: {error}"
         )
 
-
     code = request.args.get(
         "code"
     )
@@ -3058,7 +3060,6 @@ def callback():
                 "Google no entregó el parámetro code."
         )
 
-
     try:
 
         state = session.get(
@@ -3069,7 +3070,6 @@ def callback():
             "google_code_verifier"
         )
 
-
         if not state:
 
             raise Exception(
@@ -3077,7 +3077,6 @@ def callback():
                 "Se perdió la sesión OAuth. "
                 "Vuelve a iniciar desde /admin/login."
             )
-
 
         if not code_verifier:
 
@@ -3087,18 +3086,17 @@ def callback():
                 "Vuelve a iniciar desde /admin/login."
             )
 
-
         flow = crear_google_flow()
 
         flow.state = state
 
-        flow.code_verifier = code_verifier
-
+        flow.code_verifier = (
+            code_verifier
+        )
 
         authorization_response = (
             request.url
         )
-
 
         if not authorization_response.startswith(
             "https://"
@@ -3111,16 +3109,15 @@ def callback():
                 + request.full_path
             )
 
-
         flow.fetch_token(
 
             authorization_response=
                 authorization_response
         )
 
-
-        credentials = flow.credentials
-
+        credentials = (
+            flow.credentials
+        )
 
         if not credentials:
 
@@ -3128,11 +3125,9 @@ def callback():
                 "Google no entregó credenciales."
             )
 
-
         refresh_token = (
             credentials.refresh_token
         )
-
 
         if not refresh_token:
 
@@ -3146,11 +3141,9 @@ def callback():
                 mensaje=
                     (
                         "Google autorizó la aplicación, "
-                        "pero no entregó refresh_token.\n\n"
-                        "Vuelve a /admin/login."
+                        "pero no entregó refresh_token."
                     )
             )
-
 
         session.pop(
             "google_oauth_state",
@@ -3164,7 +3157,6 @@ def callback():
 
         session.modified = True
 
-
         return render_template_string(
 
             TOKEN_TEMPLATE,
@@ -3172,7 +3164,6 @@ def callback():
             token=
                 refresh_token
         )
-
 
     except Exception as e:
 
@@ -3216,6 +3207,7 @@ def logout():
 TOKEN_TEMPLATE = """
 
 <!DOCTYPE html>
+
 <html lang="es">
 
 <head>
@@ -3227,42 +3219,28 @@ TOKEN_TEMPLATE = """
 <style>
 
 body {
-
     font-family: Arial, sans-serif;
-
     max-width: 850px;
-
     margin: 50px auto;
-
     padding: 20px;
-
     background: #f5f5f5;
 }
 
 .box {
-
     background: white;
-
     padding: 30px;
-
     border-radius: 15px;
-
     box-shadow: 0 5px 25px rgba(0,0,0,.10);
 }
 
 textarea {
-
     width: 100%;
-
     height: 120px;
-
     margin-top: 15px;
-
     font-size: 14px;
 }
 
 .success {
-
     color: #087f23;
 }
 
@@ -3295,20 +3273,15 @@ Este es tu <b>GOOGLE_REFRESH_TOKEN</b>:
 <li>Ve a Environment.</li>
 
 <li>
-Busca <b>GOOGLE_REFRESH_TOKEN</b>.
+Busca:
+<b>GOOGLE_REFRESH_TOKEN</b>
 </li>
 
-<li>
-Pega el token.
-</li>
+<li>Pega el token.</li>
 
-<li>
-Guarda los cambios.
-</li>
+<li>Guarda los cambios.</li>
 
-<li>
-Espera el nuevo deploy.
-</li>
+<li>Espera el nuevo deploy.</li>
 
 </ol>
 
@@ -3344,31 +3317,21 @@ ERROR_TEMPLATE = """
 <style>
 
 body {
-
     font-family: Arial, sans-serif;
-
     max-width: 800px;
-
     margin: 50px auto;
-
     padding: 20px;
 }
 
 .box {
-
     padding: 30px;
-
     border-radius: 15px;
-
     background: #fff3f3;
-
     border: 1px solid #ffcccc;
 }
 
 pre {
-
     white-space: pre-wrap;
-
     word-break: break-word;
 }
 
@@ -3389,11 +3352,9 @@ pre {
 <hr>
 
 <p>
-
 <a href="/admin/login">
 Volver a iniciar autorización con Google
 </a>
-
 </p>
 
 </div>
@@ -3441,7 +3402,6 @@ body {
     background: #f3f4f6;
 }
 
-
 #chat-container {
 
     position: fixed;
@@ -3469,7 +3429,6 @@ body {
     overflow: hidden;
 }
 
-
 #chat-header {
 
     padding: 18px;
@@ -3479,14 +3438,12 @@ body {
     color: white;
 }
 
-
 .name {
 
     font-weight: bold;
 
     font-size: 16px;
 }
-
 
 .subtitle {
 
@@ -3496,7 +3453,6 @@ body {
 
     margin-top: 4px;
 }
-
 
 #chat-messages {
 
@@ -3508,7 +3464,6 @@ body {
 
     background: #f9fafb;
 }
-
 
 .msg {
 
@@ -3527,7 +3482,6 @@ body {
     font-size: 14px;
 }
 
-
 .bot {
 
     background: #111827;
@@ -3536,7 +3490,6 @@ body {
 
     margin-right: auto;
 }
-
 
 .user {
 
@@ -3547,7 +3500,6 @@ body {
     margin-left: auto;
 }
 
-
 #chat-input-form {
 
     display: flex;
@@ -3556,7 +3508,6 @@ body {
 
     border-top: 1px solid #ddd;
 }
-
 
 #chat-input {
 
@@ -3568,7 +3519,6 @@ body {
 
     padding: 12px;
 }
-
 
 button {
 
@@ -3583,23 +3533,6 @@ button {
     border-radius: 10px;
 
     cursor: pointer;
-}
-
-
-@media(max-width: 600px) {
-
-    #chat-container {
-
-        width: 100%;
-
-        height: 100%;
-
-        bottom: 0;
-
-        right: 0;
-
-        border-radius: 0;
-    }
 }
 
 </style>
@@ -3617,11 +3550,10 @@ button {
 </div>
 
 <div class="subtitle">
-Lunes a sábado · 10:00 a 18:00
+Lunes a sábado · 10:00 a 18:00 · Servicios $20.000
 </div>
 
 </div>
-
 
 <div id="chat-messages">
 
@@ -3643,7 +3575,6 @@ bot
 
 </div>
 
-
 <form
 id="chat-input-form"
 method="POST"
@@ -3664,7 +3595,6 @@ required
 </form>
 
 </div>
-
 
 <script>
 
