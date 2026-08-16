@@ -14,6 +14,9 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 
+APP_VERSION = "2026-08-16-TWILIO-CHATCOMPLETIONS-V3"
+
+
 # ============================================================
 # CONFIGURACIÓN GENERAL
 # ============================================================
@@ -495,13 +498,20 @@ def preguntar_gpt(telefono, mensaje, contexto_extra=""):
     })
 
     try:
-        # Responses API
-        response = client.responses.create(
+        # Chat Completions API
+        # Compatible con versiones del SDK OpenAI donde
+        # client.responses todavía no está disponible.
+        response = client.chat.completions.create(
             model=OPENAI_MODEL,
-            input=input_messages,
+            messages=input_messages,
         )
 
-        texto = response.output_text.strip()
+        texto = (
+            response.choices[0]
+            .message
+            .content
+            or ""
+        ).strip()
 
         if not texto:
             return "¿En qué te puedo ayudar? 😊"
@@ -841,6 +851,7 @@ def home():
 def health():
     return jsonify({
         "status": "ok",
+        "app_version": APP_VERSION,
         "openai": bool(OPENAI_API_KEY),
         "openai_model": OPENAI_MODEL,
         "twilio_account_sid": bool(TWILIO_ACCOUNT_SID),
@@ -868,6 +879,9 @@ def test():
 # ============================================================
 # RUN
 # ============================================================
+
+print("APP_VERSION:", APP_VERSION)
+print("OPENAI SDK MODE: chat.completions")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
