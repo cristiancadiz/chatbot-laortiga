@@ -1,52 +1,96 @@
 import os
-import re
-import hashlib
-import requests
+import json
+import uuid
+import traceback
+from datetime import datetime, timedelta, time
+
 import pytz
-import openai
 import psycopg2
-import psycopg2.extras
+from psycopg2.extras import RealDictCursor
 
 from flask import (
     Flask,
+    request,
+    jsonify,
+    render_template_string,
     redirect,
     url_for,
     session,
-    request,
-    render_template_string,
 )
 
-from datetime import timedelta, datetime
-from dotenv import load_dotenv
+from twilio.twiml.messaging_response import MessagingResponse
+from twilio.request_validator import RequestValidator
 
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
+from openai import OpenAI
+
 from google.oauth2.credentials import Credentials
-
-from werkzeug.middleware.proxy_fix import ProxyFix
+from googleapiclient.discovery import build
 
 
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
 
-load_dotenv()
-
 app = Flask(__name__)
 
-app.secret_key = os.getenv("SECRET_KEY")
+app.secret_key = os.environ.get(
+    "FLASK_SECRET_KEY",
+    "cambiar-esta-clave-en-render"
+)
 
-if not app.secret_key:
-    raise Exception("Falta SECRET_KEY en las variables de entorno.")
+TZ = pytz.timezone(
+    os.environ.get("TIMEZONE", "America/Santiago")
+)
 
-app.permanent_session_lifetime = timedelta(days=30)
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_MODEL = os.environ.get(
+    "OPENAI_MODEL",
+    "gpt-5-mini"
+)
 
-app.wsgi_app = ProxyFix(
-    app.wsgi_app,
-    x_for=1,
-    x_proto=1,
-    x_host=1,
-    x_port=1,
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+# ------------------------------------------------------------
+# TWILIO
+# ------------------------------------------------------------
+
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+
+TWILIO_WHATSAPP_FROM = os.environ.get(
+    "TWILIO_WHATSAPP_FROM",
+    "whatsapp:+14155238886"
+)
+
+# ------------------------------------------------------------
+# GOOGLE CALENDAR
+# ------------------------------------------------------------
+
+GOOGLE_REFRESH_TOKEN = os.environ.get("GOOGLE_REFRESH_TOKEN")
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+
+GOOGLE_CALENDAR_ID = os.environ.get(
+    "GOOGLE_CALENDAR_ID",
+    "primary"
+)
+
+GOOGLE_REDIRECT_URI = os.environ.get(
+    "GOOGLE_REDIRECT_URI"
+)
+
+# ------------------------------------------------------------
+# ADMIN
+# ------------------------------------------------------------
+
+ADMIN_USER = os.environ.get(
+    "ADMIN_USER",
+    "admin"
+)
+
+ADMIN_PASSWORD = os.environ.get(
+    "ADMIN_PASSWORD",
+    "cambiar-password"
 )
 
 
@@ -54,549 +98,12 @@ app.wsgi_app = ProxyFix(
 # OPENAI
 # ============================================================
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-if not OPENAI_API_KEY:
-    print("ADVERTENCIA: falta OPENAI_API_KEY.")
-
 client = None
 
 if OPENAI_API_KEY:
-    client = openai.OpenAI(
+    client = OpenAI(
         api_key=OPENAI_API_KEY
     )
-
-
-# ============================================================
-# POSTGRESQL
-# ============================================================
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-if not DATABASE_URL:
-    print(
-        "ADVERTENCIA: falta DATABASE_URL. "
-        "Las conversaciones no podrán guardarse."
-    )
-
-
-def db_connect():
-    if not DATABASE_URL:
-        return None
-
-    return psycopg2.connect(
-        DATABASE_URL,
-        sslmode="require"
-    )
-
-
-def init_database():
-
-    if not DATABASE_URL:
-        print(
-            "DATABASE_URL no configurada. "
-            "Se omitirá PostgreSQL."
-        )
-        return
-
-    conn = None
-
-    try:
-
-        conn = db_connect()
-
-        cur = conn.cursor()
-
-        # ====================================================
-        # CONVERSACIONES
-        # ====================================================
-
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS conversaciones (
-                id SERIAL PRIMARY KEY,
-                cliente_id VARCHAR(120) NOT NULL,
-                canal VARCHAR(30) NOT NULL DEFAULT 'web',
-                nombre VARCHAR(255),
-                telefono VARCHAR(100),
-                correo VARCHAR(255),
-                servicio VARCHAR(255),
-                fecha_reserva TIMESTAMPTZ,
-                meet_url TEXT,
-                estado VARCHAR(50) DEFAULT 'activa',
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            );
-        """)
-
-        # ====================================================
-        # MENSAJES
-        # ====================================================
-
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS mensajes (
-                id SERIAL PRIMARY KEY,
-                conversacion_id INTEGER
-                    REFERENCES conversaciones(id)
-                    ON DELETE CASCADE,
-                role VARCHAR(30) NOT NULL,
-                contenido TEXT NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            );
-        """)
-
-        # ====================================================
-        # RESERVAS
-        # ====================================================
-
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS reservas (
-                id SERIAL PRIMARY KEY,
-                conversacion_id INTEGER
-                    REFERENCES conversaciones(id)
-                    ON DELETE SET NULL,
-                cliente_id VARCHAR(120),
-                nombre VARCHAR(255),
-                telefono VARCHAR(100),
-                correo VARCHAR(255),
-                servicio VARCHAR(255),
-                servicio_codigo VARCHAR(100),
-                inicio TIMESTAMPTZ,
-                fin TIMESTAMPTZ,
-                google_event_id VARCHAR(255),
-                meet_url TEXT,
-                estado VARCHAR(50) DEFAULT 'confirmada',
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            );
-        """)
-
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_conversaciones_cliente
-            ON conversaciones(cliente_id);
-        """)
-
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_mensajes_conversacion
-            ON mensajes(conversacion_id);
-        """)
-
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_reservas_inicio
-            ON reservas(inicio);
-        """)
-
-        conn.commit()
-
-        cur.close()
-
-        print("PostgreSQL inicializado correctamente.")
-
-    except Exception as e:
-
-        print(
-            "ERROR INICIALIZANDO POSTGRES:",
-            repr(e)
-        )
-
-        if conn:
-            conn.rollback()
-
-    finally:
-
-        if conn:
-            conn.close()
-
-
-# ============================================================
-# BASE DE DATOS - CONVERSACIONES
-# ============================================================
-
-def obtener_conversacion(
-    cliente_id,
-    canal="web"
-):
-
-    if not DATABASE_URL:
-        return None
-
-    conn = None
-
-    try:
-
-        conn = db_connect()
-
-        cur = conn.cursor(
-            cursor_factory=psycopg2.extras.RealDictCursor
-        )
-
-        cur.execute(
-            """
-            SELECT *
-            FROM conversaciones
-            WHERE cliente_id = %s
-              AND canal = %s
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (
-                cliente_id,
-                canal,
-            )
-        )
-
-        row = cur.fetchone()
-
-        cur.close()
-
-        return row
-
-    except Exception as e:
-
-        print(
-            "ERROR OBTENIENDO CONVERSACIÓN:",
-            repr(e)
-        )
-
-        return None
-
-    finally:
-
-        if conn:
-            conn.close()
-
-
-def crear_conversacion(
-    cliente_id,
-    canal="web"
-):
-
-    if not DATABASE_URL:
-        return None
-
-    conn = None
-
-    try:
-
-        conn = db_connect()
-
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            INSERT INTO conversaciones
-            (
-                cliente_id,
-                canal
-            )
-            VALUES (%s, %s)
-            RETURNING id
-            """,
-            (
-                cliente_id,
-                canal,
-            )
-        )
-
-        conversation_id = cur.fetchone()[0]
-
-        conn.commit()
-
-        cur.close()
-
-        return conversation_id
-
-    except Exception as e:
-
-        print(
-            "ERROR CREANDO CONVERSACIÓN:",
-            repr(e)
-        )
-
-        if conn:
-            conn.rollback()
-
-        return None
-
-    finally:
-
-        if conn:
-            conn.close()
-
-
-def asegurar_conversacion(
-    cliente_id,
-    canal="web"
-):
-
-    existente = obtener_conversacion(
-        cliente_id,
-        canal
-    )
-
-    if existente:
-        return existente["id"]
-
-    return crear_conversacion(
-        cliente_id,
-        canal
-    )
-
-
-def guardar_mensaje(
-    cliente_id,
-    canal,
-    role,
-    contenido
-):
-
-    if not DATABASE_URL:
-        return
-
-    try:
-
-        conversation_id = asegurar_conversacion(
-            cliente_id,
-            canal
-        )
-
-        if not conversation_id:
-            return
-
-        conn = db_connect()
-
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            INSERT INTO mensajes
-            (
-                conversacion_id,
-                role,
-                contenido
-            )
-            VALUES (%s, %s, %s)
-            """,
-            (
-                conversation_id,
-                role,
-                contenido,
-            )
-        )
-
-        cur.execute(
-            """
-            UPDATE conversaciones
-            SET updated_at = NOW()
-            WHERE id = %s
-            """,
-            (
-                conversation_id,
-            )
-        )
-
-        conn.commit()
-
-        cur.close()
-        conn.close()
-
-    except Exception as e:
-
-        print(
-            "ERROR GUARDANDO MENSAJE:",
-            repr(e)
-        )
-
-
-def actualizar_conversacion_datos(
-    cliente_id,
-    canal,
-    nombre=None,
-    telefono=None,
-    correo=None,
-    servicio=None,
-    fecha_reserva=None,
-    meet_url=None,
-    estado=None
-):
-
-    if not DATABASE_URL:
-        return
-
-    try:
-
-        conversation_id = asegurar_conversacion(
-            cliente_id,
-            canal
-        )
-
-        conn = db_connect()
-
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            UPDATE conversaciones
-            SET
-                nombre = COALESCE(%s, nombre),
-                telefono = COALESCE(%s, telefono),
-                correo = COALESCE(%s, correo),
-                servicio = COALESCE(%s, servicio),
-                fecha_reserva = COALESCE(%s, fecha_reserva),
-                meet_url = COALESCE(%s, meet_url),
-                estado = COALESCE(%s, estado),
-                updated_at = NOW()
-            WHERE id = %s
-            """,
-            (
-                nombre,
-                telefono,
-                correo,
-                servicio,
-                fecha_reserva,
-                meet_url,
-                estado,
-                conversation_id,
-            )
-        )
-
-        conn.commit()
-
-        cur.close()
-        conn.close()
-
-    except Exception as e:
-
-        print(
-            "ERROR ACTUALIZANDO CONVERSACIÓN:",
-            repr(e)
-        )
-
-
-def guardar_reserva_db(
-    cliente_id,
-    canal,
-    datos,
-    inicio,
-    fin,
-    evento_id,
-    meet_url
-):
-
-    if not DATABASE_URL:
-        return
-
-    try:
-
-        conversation_id = asegurar_conversacion(
-            cliente_id,
-            canal
-        )
-
-        servicio = obtener_servicio(
-            datos["servicio"]
-        )
-
-        conn = db_connect()
-
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            INSERT INTO reservas
-            (
-                conversacion_id,
-                cliente_id,
-                nombre,
-                telefono,
-                correo,
-                servicio,
-                servicio_codigo,
-                inicio,
-                fin,
-                google_event_id,
-                meet_url
-            )
-            VALUES
-            (
-                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
-            )
-            """,
-            (
-                conversation_id,
-                cliente_id,
-                datos["nombre"],
-                datos["telefono"],
-                datos["correo"],
-                servicio["nombre"],
-                datos["servicio"],
-                inicio,
-                fin,
-                evento_id,
-                meet_url,
-            )
-        )
-
-        conn.commit()
-
-        cur.close()
-        conn.close()
-
-    except Exception as e:
-
-        print(
-            "ERROR GUARDANDO RESERVA:",
-            repr(e)
-        )
-
-
-# ============================================================
-# CONFIGURACIÓN DEL NEGOCIO
-# ============================================================
-
-ESTILISTA_NOMBRE = os.getenv(
-    "ESTILISTA_NOMBRE",
-    "Diego"
-)
-
-NEGOCIO_NOMBRE = os.getenv(
-    "NEGOCIO_NOMBRE",
-    "Estilista Diego"
-)
-
-TIMEZONE = os.getenv(
-    "TIMEZONE",
-    "America/Santiago"
-)
-
-CALENDAR_ID = os.getenv(
-    "GOOGLE_CALENDAR_ID",
-    "primary"
-)
-
-
-# ============================================================
-# HORARIO
-# ============================================================
-
-HORA_APERTURA = 10
-HORA_CIERRE = 18
-
-DURACION_RESERVA = 60
-
-DIAS_ATENCION = {
-    0: "lunes",
-    1: "martes",
-    2: "miércoles",
-    3: "jueves",
-    4: "viernes",
-    5: "sábado",
-}
-
-HORAS_DISPONIBLES = list(
-    range(
-        HORA_APERTURA,
-        HORA_CIERRE
-    )
-)
 
 
 # ============================================================
@@ -604,2992 +111,1221 @@ HORAS_DISPONIBLES = list(
 # ============================================================
 
 SERVICIOS = {
-
-    "corte": {
-        "numero": 1,
-        "nombre": "Corte de cabello",
-        "duracion": 60,
-        "precio": 20000,
-    },
-
-    "corte_barba": {
-        "numero": 2,
-        "nombre": "Corte + barba",
-        "duracion": 60,
-        "precio": 20000,
-    },
-
-    "barba": {
-        "numero": 3,
-        "nombre": "Arreglo de barba",
-        "duracion": 60,
-        "precio": 20000,
-    },
-
-    "corte_nino": {
-        "numero": 4,
-        "nombre": "Corte de niño",
-        "duracion": 60,
-        "precio": 20000,
-    },
-
-    "perfilado": {
-        "numero": 5,
-        "nombre": "Perfilado",
-        "duracion": 60,
-        "precio": 20000,
-    },
-}
-
-SERVICIO_POR_NUMERO = {
-    1: "corte",
-    2: "corte_barba",
-    3: "barba",
-    4: "corte_nino",
-    5: "perfilado",
+    "corte de cabello": 20000,
+    "corte": 20000,
+    "barba": 20000,
+    "corte y barba": 20000,
+    "perfilado de barba": 20000,
 }
 
 
-# ============================================================
-# GOOGLE
-# ============================================================
-
-GOOGLE_CLIENT_ID = os.getenv(
-    "GOOGLE_CLIENT_ID"
-)
-
-GOOGLE_CLIENT_SECRET = os.getenv(
-    "GOOGLE_CLIENT_SECRET"
-)
-
-GOOGLE_REFRESH_TOKEN = os.getenv(
-    "GOOGLE_REFRESH_TOKEN"
-)
-
-GOOGLE_REDIRECT_URI = os.getenv(
-    "GOOGLE_REDIRECT_URI",
-    "https://chatbot-laortiga-9.onrender.com/callback"
-)
-
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar"
-]
+PRECIO_SERVICIO = 20000
+DURACION_CITA = 60
 
 
 # ============================================================
-# GOOGLE FLOW
+# BASE DE DATOS
 # ============================================================
 
-def crear_google_flow():
+def get_db():
+    if not DATABASE_URL:
+        raise Exception(
+            "DATABASE_URL no está configurada"
+        )
 
-    return Flow.from_client_config(
-        {
-            "web": {
-                "client_id": GOOGLE_CLIENT_ID,
-                "client_secret": GOOGLE_CLIENT_SECRET,
-                "auth_uri":
-                    "https://accounts.google.com/o/oauth2/auth",
-                "token_uri":
-                    "https://oauth2.googleapis.com/token",
-                "redirect_uris": [
-                    GOOGLE_REDIRECT_URI
-                ],
-            }
-        },
-        scopes=SCOPES,
-        redirect_uri=GOOGLE_REDIRECT_URI
+    return psycopg2.connect(
+        DATABASE_URL,
+        sslmode="require"
     )
 
 
-def obtener_credentials_diego():
+def init_db():
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS clientes (
+            id SERIAL PRIMARY KEY,
+            telefono VARCHAR(100) UNIQUE NOT NULL,
+            nombre VARCHAR(255),
+            creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            actualizado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS mensajes (
+            id SERIAL PRIMARY KEY,
+            telefono VARCHAR(100) NOT NULL,
+            rol VARCHAR(30) NOT NULL,
+            mensaje TEXT NOT NULL,
+            creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS reservas (
+            id SERIAL PRIMARY KEY,
+            telefono VARCHAR(100),
+            nombre VARCHAR(255),
+            servicio VARCHAR(255),
+            precio INTEGER,
+            inicio TIMESTAMP,
+            fin TIMESTAMP,
+            google_event_id VARCHAR(255),
+            meet_url TEXT,
+            creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+
+# ============================================================
+# CLIENTES
+# ============================================================
+
+def guardar_cliente(telefono, nombre=None):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO clientes
+        (telefono, nombre)
+        VALUES (%s, %s)
+        ON CONFLICT (telefono)
+        DO UPDATE SET
+            nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
+            actualizado_en = CURRENT_TIMESTAMP
+    """, (
+        telefono,
+        nombre
+    ))
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+
+def obtener_cliente(telefono):
+
+    conn = get_db()
+    cur = conn.cursor(
+        cursor_factory=RealDictCursor
+    )
+
+    cur.execute("""
+        SELECT *
+        FROM clientes
+        WHERE telefono = %s
+    """, (telefono,))
+
+    cliente = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    return cliente
+
+
+# ============================================================
+# MEMORIA DE CONVERSACIÓN
+# ============================================================
+
+def guardar_mensaje(
+    telefono,
+    rol,
+    mensaje
+):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO mensajes
+        (telefono, rol, mensaje)
+        VALUES (%s, %s, %s)
+    """, (
+        telefono,
+        rol,
+        mensaje
+    ))
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+
+def obtener_historial(
+    telefono,
+    limite=20
+):
+
+    conn = get_db()
+
+    cur = conn.cursor(
+        cursor_factory=RealDictCursor
+    )
+
+    cur.execute("""
+        SELECT rol, mensaje
+        FROM mensajes
+        WHERE telefono = %s
+        ORDER BY creado_en DESC
+        LIMIT %s
+    """, (
+        telefono,
+        limite
+    ))
+
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    rows.reverse()
+
+    return rows
+
+
+# ============================================================
+# GOOGLE CALENDAR
+# ============================================================
+
+def get_calendar_service():
 
     if not GOOGLE_REFRESH_TOKEN:
         raise Exception(
-            "Falta GOOGLE_REFRESH_TOKEN."
+            "GOOGLE_REFRESH_TOKEN no está configurado"
         )
 
-    return Credentials(
+    if not GOOGLE_CLIENT_ID:
+        raise Exception(
+            "GOOGLE_CLIENT_ID no está configurado"
+        )
+
+    if not GOOGLE_CLIENT_SECRET:
+        raise Exception(
+            "GOOGLE_CLIENT_SECRET no está configurado"
+        )
+
+    credentials = Credentials(
         token=None,
         refresh_token=GOOGLE_REFRESH_TOKEN,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=GOOGLE_CLIENT_ID,
         client_secret=GOOGLE_CLIENT_SECRET,
-        scopes=SCOPES,
+        scopes=[
+            "https://www.googleapis.com/auth/calendar"
+        ]
     )
-
-
-def obtener_calendar_service():
-
-    credentials = obtener_credentials_diego()
 
     return build(
         "calendar",
         "v3",
         credentials=credentials,
-        cache_discovery=False,
+        cache_discovery=False
     )
 
 
 # ============================================================
-# FECHA / HORA
+# HORARIOS
 # ============================================================
 
-def obtener_zona():
-    return pytz.timezone(TIMEZONE)
+def es_horario_valido(inicio):
+
+    inicio = inicio.astimezone(TZ)
+
+    # Lunes = 0
+    # Domingo = 6
+
+    if inicio.weekday() == 6:
+        return False
+
+    hora = inicio.time()
+
+    apertura = time(10, 0)
+    cierre = time(18, 0)
+
+    if hora < apertura:
+        return False
+
+    if hora >= cierre:
+        return False
+
+    return True
 
 
-def ahora_local():
+def redondear_hora(inicio):
 
-    return datetime.now(
-        obtener_zona()
-    )
+    inicio = inicio.astimezone(TZ)
 
+    minuto = inicio.minute
 
-def normalizar_texto(texto):
+    if minuto < 30:
+        minuto = 30
+    else:
+        inicio = inicio + timedelta(hours=1)
+        minuto = 0
 
-    texto = (
-        texto or ""
-    ).strip().lower()
-
-    reemplazos = {
-        "á": "a",
-        "é": "e",
-        "í": "i",
-        "ó": "o",
-        "ú": "u",
-        "ü": "u",
-    }
-
-    for a, b in reemplazos.items():
-        texto = texto.replace(a, b)
-
-    return texto
-
-
-DIAS_NOMBRES = [
-    "lunes",
-    "martes",
-    "miércoles",
-    "jueves",
-    "viernes",
-    "sábado",
-    "domingo",
-]
-
-
-def es_dia_atencion(fecha):
-
-    fecha = fecha.astimezone(
-        obtener_zona()
-    )
-
-    return fecha.weekday() in DIAS_ATENCION
-
-
-def formato_fecha_corta(fecha):
-
-    fecha = fecha.astimezone(
-        obtener_zona()
-    )
-
-    return (
-        f"{DIAS_NOMBRES[fecha.weekday()]} "
-        f"{fecha.day}/{fecha.month} "
-        f"{fecha.strftime('%H:%M')}"
-    )
-
-
-def formato_fecha_larga(fecha):
-
-    fecha = fecha.astimezone(
-        obtener_zona()
-    )
-
-    meses = [
-        "enero",
-        "febrero",
-        "marzo",
-        "abril",
-        "mayo",
-        "junio",
-        "julio",
-        "agosto",
-        "septiembre",
-        "octubre",
-        "noviembre",
-        "diciembre",
-    ]
-
-    return (
-        f"{DIAS_NOMBRES[fecha.weekday()]} "
-        f"{fecha.day} de "
-        f"{meses[fecha.month - 1]} "
-        f"a las {fecha.strftime('%H:%M')}"
+    return inicio.replace(
+        minute=minuto,
+        second=0,
+        microsecond=0
     )
 
 
 # ============================================================
-# SERVICIOS
+# DISPONIBILIDAD GOOGLE CALENDAR
 # ============================================================
 
-def obtener_servicio(codigo):
+def obtener_eventos_dia(fecha):
 
-    return SERVICIOS.get(
-        codigo,
-        {
-            "nombre": "Servicio",
-            "duracion": 60,
-            "precio": 20000,
-        }
+    service = get_calendar_service()
+
+    inicio = TZ.localize(
+        datetime.combine(
+            fecha,
+            time(0, 0)
+        )
+    )
+
+    fin = inicio + timedelta(days=1)
+
+    eventos = service.events().list(
+        calendarId=GOOGLE_CALENDAR_ID,
+        timeMin=inicio.isoformat(),
+        timeMax=fin.isoformat(),
+        singleEvents=True,
+        orderBy="startTime"
+    ).execute()
+
+    return eventos.get(
+        "items",
+        []
     )
 
 
-def mostrar_servicios():
+def esta_disponible(inicio):
 
-    return (
-        "Claro 😊 Estos son nuestros servicios:\n\n"
-        "1. Corte de cabello — $20.000\n"
-        "2. Corte + barba — $20.000\n"
-        "3. Arreglo de barba — $20.000\n"
-        "4. Corte de niño — $20.000\n"
-        "5. Perfilado — $20.000\n\n"
-        "Si quieres reservar, escríbeme el número "
-        "del servicio que prefieres. ✂️"
+    inicio = inicio.astimezone(TZ)
+
+    fin = inicio + timedelta(
+        minutes=DURACION_CITA
     )
 
+    if not es_horario_valido(inicio):
+        return False
 
-def detectar_servicio_por_numero(texto):
+    if fin.time() > time(18, 0):
+        return False
 
-    match = re.fullmatch(
-        r"\s*([1-5])\s*",
-        texto or ""
+    eventos = obtener_eventos_dia(
+        inicio.date()
     )
 
-    if match:
+    for evento in eventos:
 
-        numero = int(
-            match.group(1)
+        start_data = evento.get(
+            "start",
+            {}
         )
 
-        return SERVICIO_POR_NUMERO.get(
-            numero
+        end_data = evento.get(
+            "end",
+            {}
         )
 
-    return None
-
-
-def detectar_servicio(texto):
-
-    texto_n = normalizar_texto(texto)
-
-    servicio_numero = detectar_servicio_por_numero(
-        texto
-    )
-
-    if servicio_numero:
-        return servicio_numero
-
-    if (
-        "corte" in texto_n
-        and "barba" in texto_n
-    ):
-        return "corte_barba"
-
-    if (
-        "corte de nino" in texto_n
-        or "corte nino" in texto_n
-        or "nino" in texto_n
-    ):
-        return "corte_nino"
-
-    if "barba" in texto_n:
-        return "barba"
-
-    if (
-        "perfilado" in texto_n
-        or "perfil" in texto_n
-    ):
-        return "perfilado"
-
-    if (
-        "corte" in texto_n
-        or "cortar" in texto_n
-    ):
-        return "corte"
-
-    return None
-
-
-# ============================================================
-# GOOGLE CALENDAR DISPONIBILIDAD
-# ============================================================
-
-def verificar_disponibilidad(
-    inicio,
-    duracion=60
-):
-
-    try:
-
-        zona = obtener_zona()
-
-        inicio = inicio.astimezone(zona)
-
-        if not es_dia_atencion(inicio):
-            return False
-
-        if inicio.minute != 0:
-            return False
-
-        if (
-            inicio.hour < HORA_APERTURA
-            or inicio.hour >= HORA_CIERRE
-        ):
-            return False
-
-        fin = inicio + timedelta(
-            minutes=duracion
+        start_str = (
+            start_data.get("dateTime")
         )
 
-        limite = inicio.replace(
-            hour=HORA_CIERRE,
-            minute=0,
-            second=0,
-            microsecond=0
+        end_str = (
+            end_data.get("dateTime")
         )
 
-        if fin > limite:
-            return False
+        if not start_str or not end_str:
+            continue
 
-        service = obtener_calendar_service()
-
-        resultado = (
-            service
-            .freebusy()
-            .query(
-                body={
-                    "timeMin": inicio.isoformat(),
-                    "timeMax": fin.isoformat(),
-                    "items": [
-                        {
-                            "id": CALENDAR_ID
-                        }
-                    ],
-                }
+        start = datetime.fromisoformat(
+            start_str.replace(
+                "Z",
+                "+00:00"
             )
-            .execute()
-        )
+        ).astimezone(TZ)
 
-        calendario = (
-            resultado
-            .get("calendars", {})
-            .get(CALENDAR_ID, {})
-        )
+        end = datetime.fromisoformat(
+            end_str.replace(
+                "Z",
+                "+00:00"
+            )
+        ).astimezone(TZ)
 
-        busy = calendario.get(
-            "busy",
-            []
-        )
+        if inicio < end and fin > start:
+            return False
 
-        return len(busy) == 0
-
-    except Exception as e:
-
-        print(
-            "ERROR FREEBUSY:",
-            repr(e)
-        )
-
-        return None
+    return True
 
 
-# ============================================================
-# 10 PRÓXIMAS HORAS
-# ============================================================
-
-def buscar_proximas_10_horas():
-
-    ahora = ahora_local()
+def buscar_horarios_disponibles(
+    fecha,
+    cantidad=5
+):
 
     resultados = []
 
-    for offset in range(31):
-
-        fecha = (
-            ahora
-            + timedelta(days=offset)
-        ).replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0
+    hora = TZ.localize(
+        datetime.combine(
+            fecha,
+            time(10, 0)
         )
+    )
 
-        if not es_dia_atencion(fecha):
-            continue
+    cierre = TZ.localize(
+        datetime.combine(
+            fecha,
+            time(18, 0)
+        )
+    )
 
-        for hora in HORAS_DISPONIBLES:
+    while hora < cierre:
 
-            inicio = fecha.replace(
-                hour=hora,
-                minute=0,
-                second=0,
-                microsecond=0
+        if (
+            hora + timedelta(
+                minutes=DURACION_CITA
             )
+            <= cierre
+        ):
 
-            if inicio <= ahora:
-                continue
-
-            disponible = verificar_disponibilidad(
-                inicio,
-                DURACION_RESERVA
-            )
-
-            print(
-                "HORA:",
-                inicio,
-                "DISPONIBLE:",
-                disponible
-            )
-
-            if disponible is True:
+            if esta_disponible(hora):
 
                 resultados.append(
-                    inicio
+                    hora
                 )
 
-                if len(resultados) == 10:
-                    return resultados
+                if len(resultados) >= cantidad:
+                    break
+
+        hora += timedelta(
+            minutes=30
+        )
 
     return resultados
 
 
-def formatear_opciones_horas(horas):
-
-    lineas = []
-
-    for i, hora in enumerate(
-        horas,
-        start=1
-    ):
-
-        lineas.append(
-            f"{i}. {formato_fecha_corta(hora)}"
-        )
-
-    return "\n".join(lineas)
-
-
 # ============================================================
-# DETECTAR INTENCIONES
+# CREAR EVENTO GOOGLE CALENDAR
 # ============================================================
 
-def pregunta_servicios(texto):
-
-    texto_n = normalizar_texto(texto)
-
-    patrones = [
-        "servicios",
-        "servicio",
-        "precios",
-        "precio",
-        "cuanto cuesta",
-        "cuanto sale",
-        "valor",
-        "valores",
-        "tarifa",
-        "cortes",
-        "barberia",
-    ]
-
-    return any(
-        p in texto_n
-        for p in patrones
-    )
-
-
-def es_intencion_agendar(texto):
-
-    texto_n = normalizar_texto(texto)
-
-    patrones = [
-        "agendar",
-        "agenda",
-        "reservar",
-        "reserva",
-        "reservame",
-        "quiero una hora",
-        "quiero agendar",
-        "quiero reservar",
-        "sacar hora",
-        "sacar una hora",
-        "pedir hora",
-        "cita",
-        "turno",
-        "hora para corte",
-        "hora para barba",
-        "quiero cortarme",
-        "quiero corte",
-        "me quiero cortar",
-    ]
-
-    return any(
-        p in texto_n
-        for p in patrones
-    )
-
-
-def usuario_no_quiere(texto):
-
-    texto_n = normalizar_texto(texto)
-
-    patrones = [
-        "no quiero",
-        "no gracias",
-        "gracias no",
-        "dejalo",
-        "olvidalo",
-        "cancelar",
-        "cancela",
-        "no por ahora",
-        "despues",
-        "no necesito",
-    ]
-
-    return any(
-        p in texto_n
-        for p in patrones
-    )
-
-
-# ============================================================
-# OPENAI - CONVERSACIÓN NATURAL
-# ============================================================
-
-def responder_openai(
-    historial,
-    pregunta
+def crear_reserva_google(
+    nombre,
+    telefono,
+    servicio,
+    inicio
 ):
 
-    if not client:
+    service = get_calendar_service()
 
-        return (
-            "¡Hola! 😊 Qué gusto saludarte. "
-            "Si quieres, puedo mostrarte los servicios "
-            "o ayudarte a reservar una hora."
+    fin = inicio + timedelta(
+        minutes=DURACION_CITA
+    )
+
+    titulo = (
+        f"Cita - {nombre} - "
+        f"{servicio}"
+    )
+
+    descripcion = (
+        "Reserva realizada mediante "
+        "Asistente Virtual de Estilista Diego.\n\n"
+        f"Cliente: {nombre}\n"
+        f"WhatsApp: {telefono}\n"
+        f"Servicio: {servicio}\n"
+        f"Precio: ${PRECIO_SERVICIO:,}".replace(",", ".")
+    )
+
+    evento = {
+        "summary": titulo,
+        "description": descripcion,
+        "start": {
+            "dateTime": inicio.isoformat(),
+            "timeZone": str(TZ)
+        },
+        "end": {
+            "dateTime": fin.isoformat(),
+            "timeZone": str(TZ)
+        },
+        "conferenceData": {
+            "createRequest": {
+                "requestId": str(uuid.uuid4()),
+                "conferenceSolutionKey": {
+                    "type": "hangoutsMeet"
+                }
+            }
+        }
+    }
+
+    creado = service.events().insert(
+        calendarId=GOOGLE_CALENDAR_ID,
+        body=evento,
+        conferenceDataVersion=1,
+        sendUpdates="all"
+    ).execute()
+
+    meet_url = None
+
+    conference = creado.get(
+        "conferenceData",
+        {}
+    )
+
+    for entry in conference.get(
+        "entryPoints",
+        []
+    ):
+
+        if entry.get(
+            "entryPointType"
+        ) == "video":
+
+            meet_url = entry.get(
+                "uri"
+            )
+
+            break
+
+    return creado, meet_url
+
+
+# ============================================================
+# GUARDAR RESERVA
+# ============================================================
+
+def guardar_reserva(
+    telefono,
+    nombre,
+    servicio,
+    inicio,
+    evento,
+    meet_url
+):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    fin = inicio + timedelta(
+        minutes=DURACION_CITA
+    )
+
+    cur.execute("""
+        INSERT INTO reservas
+        (
+            telefono,
+            nombre,
+            servicio,
+            precio,
+            inicio,
+            fin,
+            google_event_id,
+            meet_url
         )
+        VALUES
+        (%s,%s,%s,%s,%s,%s,%s,%s)
+    """, (
+        telefono,
+        nombre,
+        servicio,
+        PRECIO_SERVICIO,
+        inicio,
+        fin,
+        evento.get("id"),
+        meet_url
+    ))
 
-    system_prompt = f"""
-Eres el Asistente Virtual de Estilista {ESTILISTA_NOMBRE}.
+    conn.commit()
 
-Atiendes clientes en español de Chile.
+    cur.close()
+    conn.close()
 
-Tu conversación debe sentirse NATURAL, como ChatGPT.
 
-No repitas automáticamente la misma respuesta.
+# ============================================================
+# GPT
+# ============================================================
+
+SYSTEM_PROMPT = """
+Eres el Asistente Virtual de Estilista Diego.
+
+Tu objetivo principal es atender naturalmente a los clientes
+por WhatsApp y ayudarlos a agendar una hora con Diego.
+
+Hablas español natural de Chile, de manera cercana, amable,
+simple y humana.
+
+NO debes sonar como un robot.
+
+Puedes conversar libremente sobre cualquier tema relacionado
+con la atención del cliente.
+
+Cuando el cliente quiera reservar una hora, debes obtener:
+
+1. Nombre del cliente.
+2. Servicio.
+3. Día.
+4. Hora.
+
+Las reservas duran 1 hora.
+
+Horario de atención:
+
+Lunes a sábado:
+10:00 a 18:00.
+
+Domingo:
+cerrado.
+
+Todos los servicios disponibles tienen un valor de $20.000.
+
+No inventes disponibilidad.
+
+La disponibilidad real será entregada por el sistema.
+
+Si el cliente pregunta por disponibilidad, utiliza la
+información proporcionada por el sistema.
+
+La reserva se realiza SOLAMENTE en el calendario de Diego.
+
+No necesitas crear ni modificar un calendario del cliente.
+
+Cuando una reserva sea creada correctamente, informa:
+
+- nombre
+- servicio
+- fecha
+- hora
+- precio
+- confirmación de que quedó agendada
+
+Si existe un enlace de Google Meet, también puedes entregarlo.
+
+Mantén el contexto de la conversación.
+
+Nunca pidas nuevamente información que el cliente ya entregó.
+
+Si el cliente simplemente saluda o conversa, conversa
+normalmente.
+
+No fuerces el agendamiento.
+
+No digas que eres una IA salvo que el cliente lo pregunte.
 
 IMPORTANTE:
 
-Si el cliente dice "hola":
-
-Responde algo natural como:
-"¡Hola! 👋 ¿Cómo estás?"
-
-Si dice:
-"bien y tú?"
-
-NO vuelvas a decir:
-"¡Hola! ¿Cómo estás?"
-
-Debes continuar la conversación.
-
-Ejemplo:
-
-Cliente:
-Hola
-
-Asistente:
-¡Hola! 👋 ¿Cómo estás?
-
-Cliente:
-Bien y tú?
-
-Asistente:
-¡Muy bien también! 😊
-¿Qué te gustaría hacer? Puedo contarte sobre los
-servicios de Diego o, si quieres, podemos buscarte
-una hora.
-
-Si el cliente responde "sí" de manera ambigua,
-NO repitas la respuesta anterior.
-Pregunta de manera natural qué desea.
-
-OBJETIVO:
-
-Conducir naturalmente al cliente hacia:
-
-1. Conocer los servicios.
-2. Reservar una hora.
-
-SERVICIOS:
-
-1. Corte de cabello — $20.000
-2. Corte + barba — $20.000
-3. Arreglo de barba — $20.000
-4. Corte de niño — $20.000
-5. Perfilado — $20.000
-
-HORARIO:
-
-Lunes a sábado.
-10:00 a 18:00.
-Reservas de 1 hora.
-Última hora de inicio: 17:00.
-Domingo cerrado.
-
-Si el cliente quiere reservar, el sistema se encargará
-del proceso de agenda.
-
-No inventes horarios disponibles.
-
-No hables de APIs, programación, Google, bases de datos
-ni sistemas internos.
-
-Si el cliente no quiere reservar:
-despídete amablemente y deja abierta la posibilidad
-de volver.
-
-Sé breve y natural.
-
-No repitas literalmente la misma respuesta del mensaje
-anterior.
-
-Nombre del estilista:
-{ESTILISTA_NOMBRE}
+Cuando necesites ejecutar una reserva o consultar
+disponibilidad, el sistema externo proporcionará los datos.
+No inventes acciones realizadas.
 """
 
-    try:
 
-        mensajes = [
-            {
-                "role": "system",
-                "content": system_prompt
-            }
-        ]
+def preguntar_gpt(
+    telefono,
+    mensaje,
+    contexto_extra=""
+):
 
-        # Evitamos mandar mensajes duplicados.
-        ultimos = historial[-15:]
+    if not client:
+        return (
+            "Hola 😊 En este momento estoy teniendo "
+            "un problema técnico. Escríbeme nuevamente "
+            "en unos minutos."
+        )
 
-        for m in ultimos:
+    historial = obtener_historial(
+        telefono,
+        limite=20
+    )
 
-            if (
-                m.get("role") in
-                ["user", "assistant"]
-                and m.get("content")
-            ):
+    mensajes = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT
+        }
+    ]
 
-                mensajes.append({
-                    "role": m["role"],
-                    "content": m["content"]
-                })
+    if contexto_extra:
 
-        # Si el último mensaje ya es la pregunta,
-        # no la agregamos nuevamente.
-        if not (
-            mensajes
-            and mensajes[-1]["role"] == "user"
-            and mensajes[-1]["content"] == pregunta
+        mensajes.append({
+            "role": "system",
+            "content": contexto_extra
+        })
+
+    for item in historial:
+
+        rol = item["rol"]
+
+        if rol not in (
+            "user",
+            "assistant"
         ):
+            continue
 
-            mensajes.append({
-                "role": "user",
-                "content": pregunta
-            })
+        mensajes.append({
+            "role": rol,
+            "content": item["mensaje"]
+        })
 
-        completion = (
-            client
-            .chat
-            .completions
-            .create(
-                model="gpt-4o-mini",
-                messages=mensajes,
-                max_tokens=250,
-                temperature=0.8,
-            )
-        )
+    mensajes.append({
+        "role": "user",
+        "content": mensaje
+    })
 
-        respuesta = (
-            completion
-            .choices[0]
-            .message
-            .content
-        )
+    respuesta = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=mensajes,
+        temperature=0.7
+    )
 
-        if respuesta:
-            return respuesta.strip()
+    return respuesta.choices[0].message.content.strip()
 
-    except Exception as e:
 
-        print(
-            "OPENAI ERROR:",
-            repr(e)
-        )
+# ============================================================
+# DETECCIÓN SIMPLE DE INTENCIÓN
+# ============================================================
 
-    return (
-        "¡Muy bien! 😊 "
-        "¿Te gustaría conocer los servicios "
-        "o reservar una hora con Diego?"
+def parece_agendamiento(texto):
+
+    texto = texto.lower()
+
+    palabras = [
+        "reservar",
+        "reserva",
+        "agendar",
+        "agenda",
+        "hora",
+        "cita",
+        "turno",
+        "disponibilidad",
+        "disponible"
+    ]
+
+    return any(
+        palabra in texto
+        for palabra in palabras
     )
 
 
 # ============================================================
-# ESTADO DE RESERVA
+# DETECCIÓN DE FECHA
 # ============================================================
 
-def resetear_reserva(estado):
+import dateparser
 
-    telefono = (
-        estado
-        .get("datos_reserva", {})
-        .get("telefono")
+
+def detectar_fecha(texto):
+
+    ahora = datetime.now(TZ)
+
+    fecha = dateparser.parse(
+        texto,
+        languages=["es"],
+        settings={
+            "TIMEZONE": "America/Santiago",
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "PREFER_DATES_FROM": "future",
+            "RELATIVE_BASE": ahora
+        }
     )
 
-    estado["modo_agendar"] = False
-    estado["paso"] = "inicio"
-    estado["horas_ofrecidas"] = []
+    if not fecha:
+        return None
 
-    estado["datos_reserva"] = {
-        "servicio": None,
-        "fecha_hora": None,
-        "nombre": None,
-        "telefono": telefono,
-        "correo": None,
-    }
+    return fecha.astimezone(TZ)
 
 
 # ============================================================
-# GOOGLE MEET + CALENDAR
+# FORMATEAR HORARIOS
 # ============================================================
 
-def crear_evento_diego(
-    inicio,
-    servicio_codigo,
-    nombre_cliente,
-    telefono_cliente,
-    correo_cliente
+def formatear_horarios(
+    horarios
 ):
 
-    try:
-
-        service = obtener_calendar_service()
-
-        servicio = obtener_servicio(
-            servicio_codigo
+    if not horarios:
+        return (
+            "No encontré horas disponibles "
+            "para ese día 😕"
         )
 
-        fin = inicio + timedelta(
-            minutes=DURACION_RESERVA
+    textos = []
+
+    for hora in horarios:
+
+        textos.append(
+            hora.strftime("%H:%M")
         )
 
-        evento = {
-
-            "summary":
-                f"{servicio['nombre']} - {nombre_cliente}",
-
-            "description":
-                (
-                    "Reserva creada por el "
-                    "Asistente Virtual de "
-                    f"Estilista {ESTILISTA_NOMBRE}.\n\n"
-                    f"Cliente: {nombre_cliente}\n"
-                    f"Teléfono: {telefono_cliente}\n"
-                    f"Correo: {correo_cliente}\n"
-                    f"Servicio: {servicio['nombre']}\n"
-                    f"Valor: ${servicio['precio']}\n"
-                    f"Duración: {DURACION_RESERVA} minutos\n"
-                    "Origen: Asistente Virtual"
-                ),
-
-            "start": {
-                "dateTime": inicio.isoformat(),
-                "timeZone": TIMEZONE,
-            },
-
-            "end": {
-                "dateTime": fin.isoformat(),
-                "timeZone": TIMEZONE,
-            },
-
-            "attendees": [
-                {
-                    "email": correo_cliente,
-                    "displayName": nombre_cliente,
-                }
-            ],
-
-            "conferenceData": {
-
-                "createRequest": {
-
-                    "requestId":
-                        hashlib.sha256(
-                            (
-                                str(inicio)
-                                + correo_cliente
-                                + str(datetime.now())
-                            ).encode()
-                        ).hexdigest()[:32],
-
-                    "conferenceSolutionKey": {
-                        "type": "hangoutsMeet"
-                    }
-                }
-            },
-
-            "extendedProperties": {
-
-                "private": {
-
-                    "cliente":
-                        nombre_cliente,
-
-                    "telefono":
-                        telefono_cliente,
-
-                    "correo":
-                        correo_cliente,
-
-                    "servicio":
-                        servicio["nombre"],
-
-                    "origen":
-                        (
-                            f"Asistente Virtual "
-                            f"{ESTILISTA_NOMBRE}"
-                        ),
-                }
-            },
-        }
-
-        resultado = (
-            service
-            .events()
-            .insert(
-                calendarId=CALENDAR_ID,
-                body=evento,
-                conferenceDataVersion=1,
-                sendUpdates="all",
-            )
-            .execute()
-        )
-
-        meet_url = None
-
-        conference_data = resultado.get(
-            "conferenceData",
-            {}
-        )
-
-        entry_points = conference_data.get(
-            "entryPoints",
-            []
-        )
-
-        for entry in entry_points:
-
-            if (
-                entry.get("entryPointType")
-                == "video"
-            ):
-
-                meet_url = entry.get(
-                    "uri"
-                )
-
-                break
-
-        if not meet_url:
-
-            meet_url = (
-                resultado
-                .get("hangoutLink")
-            )
-
-        print(
-            "EVENTO GOOGLE CREADO:",
-            resultado.get("id")
-        )
-
-        print(
-            "GOOGLE MEET:",
-            meet_url
-        )
-
-        return {
-            "ok": True,
-            "evento_id":
-                resultado.get("id"),
-            "link":
-                resultado.get("htmlLink"),
-            "meet_url":
-                meet_url,
-        }
-
-    except Exception as e:
-
-        print(
-            "ERROR GOOGLE EVENT:",
-            repr(e)
-        )
-
-        return {
-            "ok": False,
-            "error": str(e)
-        }
+    return ", ".join(textos)
 
 
 # ============================================================
-# RESERVA CON PROTECCIÓN DE CONCURRENCIA
+# PROCESAR MENSAJE
 # ============================================================
 
-def crear_reserva_segura(
-    inicio,
-    datos,
-    cliente_id,
-    canal
+def procesar_mensaje(
+    telefono,
+    mensaje
 ):
 
-    """
-    PostgreSQL advisory lock evita que dos clientes
-    puedan intentar reservar simultáneamente la misma
-    hora desde nuestra aplicación.
-    """
+    cliente = obtener_cliente(
+        telefono
+    )
 
-    if not DATABASE_URL:
+    nombre_actual = None
 
-        return {
-            "ok": False,
-            "error":
-                "DATABASE_URL no configurada."
-        }
-
-    conn = None
-
-    try:
-
-        conn = db_connect()
-
-        conn.autocommit = False
-
-        cur = conn.cursor()
-
-        # ====================================================
-        # LOCK POR HORA
-        # ====================================================
-
-        clave = int(
-            hashlib.sha256(
-                inicio.isoformat().encode()
-            ).hexdigest()[:15],
-            16
+    if cliente:
+        nombre_actual = cliente.get(
+            "nombre"
         )
 
-        cur.execute(
-            "SELECT pg_advisory_xact_lock(%s)",
-            (clave,)
+    # --------------------------------------------------------
+    # SALUDOS / CONVERSACIÓN NORMAL
+    # --------------------------------------------------------
+
+    # Primero dejamos que GPT converse.
+    # No forzamos reserva.
+    # --------------------------------------------------------
+
+    if not parece_agendamiento(
+        mensaje
+    ):
+
+        respuesta = preguntar_gpt(
+            telefono,
+            mensaje
         )
 
-        # ====================================================
-        # VOLVER A COMPROBAR GOOGLE
-        # ====================================================
-
-        disponible = verificar_disponibilidad(
-            inicio,
-            DURACION_RESERVA
+        guardar_mensaje(
+            telefono,
+            "user",
+            mensaje
         )
 
-        if disponible is not True:
-
-            conn.rollback()
-
-            return {
-                "ok": False,
-                "ocupada": True,
-            }
-
-        # ====================================================
-        # CREAR EVENTO
-        # ====================================================
-
-        resultado = crear_evento_diego(
-            inicio=inicio,
-            servicio_codigo=datos["servicio"],
-            nombre_cliente=datos["nombre"],
-            telefono_cliente=datos["telefono"],
-            correo_cliente=datos["correo"],
+        guardar_mensaje(
+            telefono,
+            "assistant",
+            respuesta
         )
 
-        if not resultado["ok"]:
+        return respuesta
 
-            conn.rollback()
+    # --------------------------------------------------------
+    # INTENTO DE DETECTAR FECHA
+    # --------------------------------------------------------
 
-            return {
-                "ok": False,
-                "error":
-                    resultado.get("error")
-            }
+    fecha = detectar_fecha(
+        mensaje
+    )
 
-        fin = inicio + timedelta(
-            minutes=DURACION_RESERVA
-        )
+    if fecha:
 
-        servicio = obtener_servicio(
-            datos["servicio"]
-        )
+        if fecha.weekday() == 6:
 
-        conversation_id = asegurar_conversacion(
-            cliente_id,
-            canal
-        )
+            respuesta = (
+                "Los domingos no atiendo 😊 "
+                "Si quieres, podemos buscar una "
+                "hora de lunes a sábado."
+            )
 
-        # ====================================================
-        # GUARDAR RESERVA
-        # ====================================================
-
-        cur.execute(
-            """
-            INSERT INTO reservas
-            (
-                conversacion_id,
-                cliente_id,
-                nombre,
+            guardar_mensaje(
                 telefono,
-                correo,
-                servicio,
-                servicio_codigo,
-                inicio,
-                fin,
-                google_event_id,
-                meet_url
+                "user",
+                mensaje
             )
-            VALUES
-            (
-                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
+
+            guardar_mensaje(
+                telefono,
+                "assistant",
+                respuesta
             )
-            """,
-            (
-                conversation_id,
-                cliente_id,
-                datos["nombre"],
-                datos["telefono"],
-                datos["correo"],
-                servicio["nombre"],
-                datos["servicio"],
-                inicio,
-                fin,
-                resultado["evento_id"],
-                resultado["meet_url"],
+
+            return respuesta
+
+        horarios = buscar_horarios_disponibles(
+            fecha.date(),
+            cantidad=5
+        )
+
+        horarios_texto = (
+            formatear_horarios(
+                horarios
             )
         )
 
-        conn.commit()
+        contexto = f"""
+El cliente está interesado en agendar.
 
-        cur.close()
+Fecha detectada:
+{fecha.strftime("%A %d/%m/%Y")}
 
-        return {
-            "ok": True,
-            "evento_id":
-                resultado["evento_id"],
-            "meet_url":
-                resultado["meet_url"],
-        }
+Horarios reales disponibles:
+{horarios_texto}
 
-    except Exception as e:
+No inventes otros horarios.
+"""
 
-        print(
-            "ERROR RESERVA SEGURA:",
-            repr(e)
+        respuesta = preguntar_gpt(
+            telefono,
+            mensaje,
+            contexto
         )
 
-        if conn:
-            conn.rollback()
-
-        return {
-            "ok": False,
-            "error": str(e)
-        }
-
-    finally:
-
-        if conn:
-            conn.close()
-
-
-# ============================================================
-# PROCESAR AGENDA
-# ============================================================
-
-def procesar_agenda(
-    estado,
-    texto,
-    cliente_id,
-    canal
-):
-
-    datos = estado["datos_reserva"]
-
-    texto = (
-        texto or ""
-    ).strip()
-
-
-    # ========================================================
-    # CANCELAR
-    # ========================================================
-
-    if usuario_no_quiere(texto):
-
-        resetear_reserva(
-            estado
+        guardar_mensaje(
+            telefono,
+            "user",
+            mensaje
         )
 
-        return (
-            "No hay problema 😊 "
-            "Cuando quieras conocer los servicios "
-            "o reservar una hora con Diego, "
-            "aquí estaré. ¡Que estés muy bien! 👋"
+        guardar_mensaje(
+            telefono,
+            "assistant",
+            respuesta
         )
 
-
-    # ========================================================
-    # SERVICIO
-    # ========================================================
-
-    if not datos["servicio"]:
-
-        servicio = detectar_servicio(
-            texto
-        )
-
-        if servicio:
-
-            datos["servicio"] = servicio
-
-            servicio_info = obtener_servicio(
-                servicio
-            )
-
-            horas = buscar_proximas_10_horas()
-
-            if not horas:
-
-                return (
-                    f"Perfecto 😊 Elegiste "
-                    f"{servicio_info['nombre']}.\n\n"
-                    "Pero por ahora no encontré "
-                    "horas disponibles."
-                )
-
-            estado["horas_ofrecidas"] = [
-                h.isoformat()
-                for h in horas
-            ]
-
-            estado["paso"] = "seleccionar_hora"
-
-            precio = (
-                f"${servicio_info['precio']:,}"
-                .replace(",", ".")
-            )
-
-            return (
-                f"Perfecto 😊\n\n"
-                f"✂️ {servicio_info['nombre']}\n"
-                f"💰 {precio}\n\n"
-                "Estas son las próximas "
-                "10 horas disponibles:\n\n"
-                f"{formatear_opciones_horas(horas)}\n\n"
-                "Respóndeme con el número de la hora "
-                "que prefieras, del 1 al 10."
-            )
-
-        return mostrar_servicios()
-
-
-    # ========================================================
-    # HORA
-    # ========================================================
-
-    if estado["paso"] == "seleccionar_hora":
-
-        match = re.fullmatch(
-            r"\s*(\d{1,2})\s*",
-            texto
-        )
-
-        if not match:
-
-            return (
-                "Indícame el número de la hora "
-                "que prefieres 😊.\n\n"
-                "Por ejemplo: 1"
-            )
-
-        numero = int(
-            match.group(1)
-        )
-
-        horas_guardadas = (
-            estado
-            .get(
-                "horas_ofrecidas",
-                []
-            )
-        )
-
-        if (
-            numero < 1
-            or numero > len(horas_guardadas)
-        ):
-
-            return (
-                f"Elige un número entre 1 y "
-                f"{len(horas_guardadas)}, por favor 😊."
-            )
-
-        fecha_hora = datetime.fromisoformat(
-            horas_guardadas[numero - 1]
-        )
-
-        # ====================================================
-        # SEGUNDA COMPROBACIÓN
-        # ====================================================
-
-        disponible = verificar_disponibilidad(
-            fecha_hora,
-            DURACION_RESERVA
-        )
-
-        if disponible is None:
-
-            return (
-                "No pude comprobar la agenda "
-                "en este momento 😕.\n\n"
-                "Intenta nuevamente en unos segundos."
-            )
-
-        if not disponible:
-
-            horas = buscar_proximas_10_horas()
-
-            estado["horas_ofrecidas"] = [
-                h.isoformat()
-                for h in horas
-            ]
-
-            return (
-                "Esa hora acaba de ocuparse 😕.\n\n"
-                "Actualicé las horas disponibles:\n\n"
-                f"{formatear_opciones_horas(horas)}\n\n"
-                "¿Cuál prefieres?"
-            )
-
-        datos["fecha_hora"] = (
-            fecha_hora.isoformat()
-        )
-
-        estado["paso"] = "nombre"
-
-        return (
-            "¡Perfecto! 🙌\n\n"
-            f"Te reservamos "
-            f"{formato_fecha_larga(fecha_hora)}.\n\n"
-            "¿Me indicas tu nombre?"
-        )
-
-
-    # ========================================================
-    # NOMBRE
-    # ========================================================
-
-    if estado["paso"] == "nombre":
-
-        if len(texto) < 2:
-
-            return (
-                "¿Me indicas tu nombre, por favor? 😊"
-            )
-
-        datos["nombre"] = texto
-
-        actualizar_conversacion_datos(
-            cliente_id,
-            canal,
-            nombre=texto
-        )
-
-        estado["paso"] = "telefono"
-
-        return (
-            f"Perfecto, {texto} 👍\n\n"
-            "¿Cuál es tu número de teléfono? 📞"
-        )
-
-
-    # ========================================================
-    # TELÉFONO
-    # ========================================================
-
-    if estado["paso"] == "telefono":
-
-        telefono_limpio = re.sub(
-            r"[^\d+]",
-            "",
-            texto
-        )
-
-        if len(
-            re.sub(
-                r"\D",
-                "",
-                telefono_limpio
-            )
-        ) < 8:
-
-            return (
-                "¿Me indicas un número de teléfono "
-                "válido, por favor? 📞"
-            )
-
-        datos["telefono"] = telefono_limpio
-
-        actualizar_conversacion_datos(
-            cliente_id,
-            canal,
-            telefono=telefono_limpio
-        )
-
-        estado["paso"] = "correo"
-
-        return (
-            "Perfecto 👍\n\n"
-            "¿Cuál es tu correo electrónico? 📧\n\n"
-            "Lo usaremos para enviarte la invitación "
-            "de Google Calendar con la cita y el enlace "
-            "de Google Meet."
-        )
-
-
-    # ========================================================
-    # CORREO
-    # ========================================================
-
-    if estado["paso"] == "correo":
-
-        correo = texto.lower().strip()
-
-        patron_correo = (
-            r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
-        )
-
-        if not re.match(
-            patron_correo,
-            correo
-        ):
-
-            return (
-                "Parece que el correo no está correcto 😕.\n\n"
-                "Escríbelo nuevamente, por ejemplo:\n"
-                "nombre@gmail.com"
-            )
-
-        datos["correo"] = correo
-
-        actualizar_conversacion_datos(
-            cliente_id,
-            canal,
-            correo=correo
-        )
-
-        estado["paso"] = "confirmar"
-
-        return completar_reserva(
-            estado,
-            cliente_id,
-            canal
-        )
-
-
-    return completar_reserva(
-        estado,
-        cliente_id,
-        canal
+        return respuesta
+
+    # --------------------------------------------------------
+    # CONVERSACIÓN DE RESERVA
+    # --------------------------------------------------------
+
+    contexto = """
+El cliente está intentando agendar una cita.
+
+Recuerda:
+- Horario lunes a sábado 10:00-18:00.
+- Duración: 1 hora.
+- Precio: $20.000.
+- La reserva se realiza solamente en el calendario
+  de Estilista Diego.
+
+Si todavía falta información, pregunta de forma natural
+por el dato que falta.
+"""
+
+    respuesta = preguntar_gpt(
+        telefono,
+        mensaje,
+        contexto
     )
 
-
-# ============================================================
-# COMPLETAR RESERVA
-# ============================================================
-
-def completar_reserva(
-    estado,
-    cliente_id,
-    canal
-):
-
-    datos = estado["datos_reserva"]
-
-    if not datos["servicio"]:
-
-        estado["paso"] = "servicio"
-
-        return mostrar_servicios()
-
-    if not datos["fecha_hora"]:
-
-        estado["paso"] = "seleccionar_hora"
-
-        horas = buscar_proximas_10_horas()
-
-        estado["horas_ofrecidas"] = [
-            h.isoformat()
-            for h in horas
-        ]
-
-        return (
-            "Estas son las próximas horas disponibles:\n\n"
-            f"{formatear_opciones_horas(horas)}"
-        )
-
-    if not datos["nombre"]:
-
-        estado["paso"] = "nombre"
-
-        return (
-            "¿Me indicas tu nombre? 😊"
-        )
-
-    if not datos["telefono"]:
-
-        estado["paso"] = "telefono"
-
-        return (
-            "¿Cuál es tu número de teléfono? 📞"
-        )
-
-    if not datos["correo"]:
-
-        estado["paso"] = "correo"
-
-        return (
-            "¿Cuál es tu correo electrónico? 📧"
-        )
-
-    inicio = datetime.fromisoformat(
-        datos["fecha_hora"]
+    guardar_mensaje(
+        telefono,
+        "user",
+        mensaje
     )
 
-    # ========================================================
-    # RESERVA SEGURA
-    # ========================================================
-
-    resultado = crear_reserva_segura(
-        inicio=inicio,
-        datos=datos,
-        cliente_id=cliente_id,
-        canal=canal
-    )
-
-    if resultado.get("ocupada"):
-
-        datos["fecha_hora"] = None
-
-        estado["paso"] = "seleccionar_hora"
-
-        horas = buscar_proximas_10_horas()
-
-        estado["horas_ofrecidas"] = [
-            h.isoformat()
-            for h in horas
-        ]
-
-        return (
-            "Justo esa hora acaba de ocuparse 😕.\n\n"
-            "Estas son las nuevas próximas "
-            "horas disponibles:\n\n"
-            f"{formatear_opciones_horas(horas)}\n\n"
-            "¿Cuál prefieres?"
-        )
-
-    if not resultado["ok"]:
-
-        print(
-            "ERROR RESERVANDO:",
-            resultado.get("error")
-        )
-
-        return (
-            "No pude completar la reserva "
-            "en este momento 😕.\n\n"
-            "Intenta nuevamente en unos segundos."
-        )
-
-    servicio = obtener_servicio(
-        datos["servicio"]
-    )
-
-    meet_url = resultado.get(
-        "meet_url"
-    )
-
-    actualizar_conversacion_datos(
-        cliente_id,
-        canal,
-        nombre=datos["nombre"],
-        telefono=datos["telefono"],
-        correo=datos["correo"],
-        servicio=servicio["nombre"],
-        fecha_reserva=inicio,
-        meet_url=meet_url,
-        estado="reserva_confirmada"
-    )
-
-    fecha_texto = formato_fecha_larga(
-        inicio
-    )
-
-    # ========================================================
-    # GUARDAR MENSAJE DE CONFIRMACIÓN
-    # ========================================================
-
-    # Antes de resetear guardamos el estado.
-    telefono_guardar = datos["telefono"]
-
-    resetear_reserva(
-        estado
-    )
-
-    estado["datos_reserva"]["telefono"] = (
-        telefono_guardar
-    )
-
-    precio = (
-        f"${servicio['precio']:,}"
-        .replace(",", ".")
-    )
-
-    respuesta = (
-        "✅ ¡Reserva confirmada!\n\n"
-        f"✂️ Servicio: {servicio['nombre']}\n"
-        f"💰 Valor: {precio}\n"
-        f"👤 Cliente: {datos['nombre']}\n"
-        f"📞 Teléfono: {datos['telefono']}\n"
-        f"📧 Correo: {datos['correo']}\n"
-        f"📅 {fecha_texto}\n\n"
-        f"Tu hora quedó agendada directamente "
-        f"en la agenda de {ESTILISTA_NOMBRE}.\n\n"
-    )
-
-    if meet_url:
-
-        respuesta += (
-            "🎥 Google Meet:\n"
-            f"{meet_url}\n\n"
-            "La invitación de Google Calendar fue enviada "
-            "al correo indicado.\n\n"
-        )
-
-    else:
-
-        respuesta += (
-            "La invitación de Google Calendar fue enviada "
-            "al correo indicado.\n\n"
-        )
-
-    respuesta += (
-        "La atención dura 1 hora.\n\n"
-        "¡Te esperamos! 🙌"
+    guardar_mensaje(
+        telefono,
+        "assistant",
+        respuesta
     )
 
     return respuesta
 
 
 # ============================================================
-# SESIONES WHATSAPP
+# WEBHOOK WHATSAPP TWILIO
 # ============================================================
 
-WA_SESSIONS = {}
-
-PROCESSED_MSG_IDS = {}
-
-DEDUP_TTL_SECONDS = 120
-
-
-def get_wa_session(wa_id):
-
-    if wa_id not in WA_SESSIONS:
-
-        WA_SESSIONS[wa_id] = {
-
-            "historial": [],
-
-            "modo_agendar": False,
-
-            "paso": "inicio",
-
-            "horas_ofrecidas": [],
-
-            "datos_reserva": {
-
-                "servicio": None,
-                "fecha_hora": None,
-                "nombre": None,
-                "telefono": wa_id,
-                "correo": None,
-            },
-        }
-
-    return WA_SESSIONS[wa_id]
-
-
-# ============================================================
-# WHATSAPP
-# ============================================================
-
-WHATSAPP_TOKEN = os.getenv(
-    "WHATSAPP_TOKEN"
+@app.route(
+    "/webhook/whatsapp",
+    methods=["POST"]
 )
-
-WHATSAPP_PHONE_NUMBER_ID = os.getenv(
-    "WHATSAPP_PHONE_NUMBER_ID"
-)
-
-WHATSAPP_VERIFY_TOKEN = os.getenv(
-    "WHATSAPP_VERIFY_TOKEN"
-)
-
-
-def wa_send_text(
-    to_number,
-    text
-):
-
-    if (
-        not WHATSAPP_TOKEN
-        or not WHATSAPP_PHONE_NUMBER_ID
-    ):
-        return None
-
-    url = (
-        "https://graph.facebook.com/v20.0/"
-        f"{WHATSAPP_PHONE_NUMBER_ID}/messages"
-    )
-
-    headers = {
-        "Authorization":
-            f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type":
-            "application/json",
-    }
-
-    payload = {
-
-        "messaging_product":
-            "whatsapp",
-
-        "to":
-            to_number,
-
-        "type":
-            "text",
-
-        "text": {
-            "body":
-                (text or "")[:3900]
-        },
-    }
+def whatsapp_webhook():
 
     try:
 
-        response = requests.post(
-            url,
-            headers=headers,
-            json=payload,
-            timeout=20
+        telefono = request.form.get(
+            "From",
+            ""
         )
 
-        print(
-            "WhatsApp:",
-            response.status_code,
-            response.text[:500]
+        mensaje = request.form.get(
+            "Body",
+            ""
+        ).strip()
+
+        message_sid = request.form.get(
+            "MessageSid"
         )
 
-        return response
+        if not telefono:
+            return (
+                "Missing From",
+                400
+            )
+
+        if not mensaje:
+            return (
+                "Missing Body",
+                400
+            )
+
+        # ----------------------------------------------------
+        # GUARDAR CLIENTE
+        # ----------------------------------------------------
+
+        guardar_cliente(
+            telefono
+        )
+
+        # ----------------------------------------------------
+        # PROCESAR
+        # ----------------------------------------------------
+
+        respuesta = procesar_mensaje(
+            telefono,
+            mensaje
+        )
+
+        # ----------------------------------------------------
+        # RESPUESTA TWILIO
+        # ----------------------------------------------------
+
+        twiml = MessagingResponse()
+
+        twiml.message(
+            respuesta
+        )
+
+        return (
+            str(twiml),
+            200,
+            {
+                "Content-Type":
+                "application/xml"
+            }
+        )
 
     except Exception as e:
 
         print(
-            "ERROR WHATSAPP:",
-            repr(e)
+            "ERROR WEBHOOK WHATSAPP:"
         )
 
-        return None
+        print(
+            traceback.format_exc()
+        )
+
+        twiml = MessagingResponse()
+
+        twiml.message(
+            "Disculpa 🙏 Estoy teniendo un "
+            "pequeño problema técnico. "
+            "Por favor intenta nuevamente."
+        )
+
+        return (
+            str(twiml),
+            200,
+            {
+                "Content-Type":
+                "application/xml"
+            }
+        )
 
 
 # ============================================================
-# HOME
+# HEALTH CHECK
 # ============================================================
 
 @app.route("/")
 def home():
 
-    return redirect(
-        url_for("chat")
-    )
+    return """
+    <html>
+    <head>
+        <title>Asistente Virtual Estilista Diego</title>
+        <meta charset="UTF-8">
+    </head>
+
+    <body style="
+        font-family: Arial;
+        max-width: 800px;
+        margin: 50px auto;
+    ">
+
+        <h1>
+            💈 Asistente Virtual de Estilista Diego
+        </h1>
+
+        <p>
+            Sistema funcionando correctamente.
+        </p>
+
+        <p>
+            WhatsApp: Twilio
+        </p>
+
+        <p>
+            Agenda: Google Calendar
+        </p>
+
+        <p>
+            IA: OpenAI
+        </p>
+
+    </body>
+    </html>
+    """
+
+
+@app.route("/health")
+def health():
+
+    return jsonify({
+        "status": "ok",
+        "service": "estilista-diego"
+    })
 
 
 # ============================================================
-# CHAT WEB
+# LOGIN ADMIN
 # ============================================================
 
 @app.route(
-    "/chat",
+    "/admin/login",
     methods=["GET", "POST"]
-)
-def chat():
-
-    session.permanent = True
-
-    cliente_id = (
-        session.get("cliente_id")
-    )
-
-    if not cliente_id:
-
-        cliente_id = (
-            "web_"
-            + hashlib.sha256(
-                os.urandom(32)
-            ).hexdigest()[:30]
-        )
-
-        session["cliente_id"] = cliente_id
-
-
-    if "historial" not in session:
-
-        session["historial"] = [
-
-            {
-                "role":
-                    "assistant",
-
-                "content":
-                    (
-                        "¡Hola! 👋 "
-                        "Soy el Asistente Virtual "
-                        "de Estilista Diego ✂️\n\n"
-                        "¿Cómo estás?"
-                    ),
-            }
-        ]
-
-        guardar_mensaje(
-            cliente_id,
-            "web",
-            "assistant",
-            session["historial"][0]["content"]
-        )
-
-
-    if "modo_agendar" not in session:
-        session["modo_agendar"] = False
-
-    if "paso" not in session:
-        session["paso"] = "inicio"
-
-    if "horas_ofrecidas" not in session:
-        session["horas_ofrecidas"] = []
-
-    if "datos_reserva" not in session:
-
-        session["datos_reserva"] = {
-            "servicio": None,
-            "fecha_hora": None,
-            "nombre": None,
-            "telefono": None,
-            "correo": None,
-        }
-
-
-    if request.method == "POST":
-
-        pregunta = (
-            request.form
-            .get(
-                "pregunta",
-                ""
-            )
-            .strip()
-        )
-
-        if pregunta:
-
-            session["historial"].append({
-                "role":
-                    "user",
-                "content":
-                    pregunta,
-            })
-
-            guardar_mensaje(
-                cliente_id,
-                "web",
-                "user",
-                pregunta
-            )
-
-
-            # =================================================
-            # AGENDA ACTIVA
-            # =================================================
-
-            if session.get(
-                "modo_agendar",
-                False
-            ):
-
-                estado = {
-
-                    "modo_agendar":
-                        True,
-
-                    "paso":
-                        session.get(
-                            "paso",
-                            "inicio"
-                        ),
-
-                    "horas_ofrecidas":
-                        session.get(
-                            "horas_ofrecidas",
-                            []
-                        ),
-
-                    "datos_reserva":
-                        session["datos_reserva"],
-                }
-
-                respuesta = procesar_agenda(
-                    estado,
-                    pregunta,
-                    cliente_id,
-                    "web"
-                )
-
-                session["modo_agendar"] = (
-                    estado["modo_agendar"]
-                )
-
-                session["paso"] = (
-                    estado["paso"]
-                )
-
-                session["horas_ofrecidas"] = (
-                    estado["horas_ofrecidas"]
-                )
-
-                session["datos_reserva"] = (
-                    estado["datos_reserva"]
-                )
-
-
-            # =================================================
-            # INICIAR AGENDA
-            # =================================================
-
-            elif es_intencion_agendar(
-                pregunta
-            ):
-
-                session["modo_agendar"] = True
-                session["paso"] = "inicio"
-
-                estado = {
-
-                    "modo_agendar":
-                        True,
-
-                    "paso":
-                        "inicio",
-
-                    "horas_ofrecidas":
-                        [],
-
-                    "datos_reserva":
-                        session["datos_reserva"],
-                }
-
-                respuesta = procesar_agenda(
-                    estado,
-                    pregunta,
-                    cliente_id,
-                    "web"
-                )
-
-                session["paso"] = (
-                    estado["paso"]
-                )
-
-                session["horas_ofrecidas"] = (
-                    estado["horas_ofrecidas"]
-                )
-
-                session["datos_reserva"] = (
-                    estado["datos_reserva"]
-                )
-
-
-            # =================================================
-            # SERVICIOS
-            # =================================================
-
-            elif pregunta_servicios(
-                pregunta
-            ):
-
-                respuesta = mostrar_servicios()
-
-
-            # =================================================
-            # OPENAI
-            # =================================================
-
-            else:
-
-                respuesta = responder_openai(
-                    session["historial"],
-                    pregunta
-                )
-
-
-            session["historial"].append({
-                "role":
-                    "assistant",
-                "content":
-                    respuesta,
-            })
-
-            guardar_mensaje(
-                cliente_id,
-                "web",
-                "assistant",
-                respuesta
-            )
-
-            session.modified = True
-
-
-    return render_template_string(
-        TEMPLATE,
-        historial=session["historial"]
-    )
-
-
-# ============================================================
-# WHATSAPP VERIFY
-# ============================================================
-
-@app.route(
-    "/whatsapp/webhook",
-    methods=["GET"]
-)
-def whatsapp_verify():
-
-    mode = request.args.get(
-        "hub.mode"
-    )
-
-    token = request.args.get(
-        "hub.verify_token"
-    )
-
-    challenge = request.args.get(
-        "hub.challenge"
-    )
-
-    if (
-        mode == "subscribe"
-        and token == WHATSAPP_VERIFY_TOKEN
-    ):
-
-        return challenge, 200
-
-    return "Forbidden", 403
-
-
-# ============================================================
-# WHATSAPP WEBHOOK
-# ============================================================
-
-@app.route(
-    "/whatsapp/webhook",
-    methods=["POST"]
-)
-def whatsapp_webhook():
-
-    data = (
-        request.get_json(
-            silent=True
-        )
-        or {}
-    )
-
-    try:
-
-        entry = (
-            data.get("entry")
-            or []
-        )[0]
-
-        changes = (
-            entry.get("changes")
-            or []
-        )[0]
-
-        value = (
-            changes.get("value")
-            or {}
-        )
-
-        if value.get("statuses"):
-            return "ok", 200
-
-        messages = (
-            value.get("messages")
-            or []
-        )
-
-        if not messages:
-            return "ok", 200
-
-        msg = messages[0]
-
-        msg_id = msg.get("id")
-
-        wa_id = msg.get(
-            "from"
-        )
-
-        text = (
-            msg.get("text")
-            or {}
-        ).get(
-            "body",
-            ""
-        ).strip()
-
-        if not wa_id:
-            return "ok", 200
-
-        if not text:
-
-            wa_send_text(
-                wa_id,
-                (
-                    "Por ahora puedo ayudarte "
-                    "por mensaje de texto 😊."
-                )
-            )
-
-            return "ok", 200
-
-
-        # ====================================================
-        # DEDUP
-        # ====================================================
-
-        ahora_timestamp = (
-            datetime.now().timestamp()
-        )
-
-        if msg_id:
-
-            for old_id in list(
-                PROCESSED_MSG_IDS.keys()
-            ):
-
-                if (
-                    ahora_timestamp
-                    - PROCESSED_MSG_IDS[old_id]
-                    > DEDUP_TTL_SECONDS
-                ):
-
-                    del PROCESSED_MSG_IDS[
-                        old_id
-                    ]
-
-            if msg_id in PROCESSED_MSG_IDS:
-
-                return "ok", 200
-
-            PROCESSED_MSG_IDS[
-                msg_id
-            ] = ahora_timestamp
-
-
-        # ====================================================
-        # SESIÓN
-        # ====================================================
-
-        estado = get_wa_session(
-            wa_id
-        )
-
-        estado["datos_reserva"]["telefono"] = wa_id
-
-        estado["historial"].append({
-            "role":
-                "user",
-            "content":
-                text,
-        })
-
-        guardar_mensaje(
-            wa_id,
-            "whatsapp",
-            "user",
-            text
-        )
-
-
-        # ====================================================
-        # PROCESAR
-        # ====================================================
-
-        if estado["modo_agendar"]:
-
-            respuesta = procesar_agenda(
-                estado,
-                text,
-                wa_id,
-                "whatsapp"
-            )
-
-        elif es_intencion_agendar(
-            text
-        ):
-
-            estado["modo_agendar"] = True
-            estado["paso"] = "inicio"
-
-            respuesta = procesar_agenda(
-                estado,
-                text,
-                wa_id,
-                "whatsapp"
-            )
-
-        elif pregunta_servicios(
-            text
-        ):
-
-            respuesta = mostrar_servicios()
-
-        else:
-
-            respuesta = responder_openai(
-                estado["historial"],
-                text
-            )
-
-
-        estado["historial"].append({
-            "role":
-                "assistant",
-            "content":
-                respuesta,
-        })
-
-        guardar_mensaje(
-            wa_id,
-            "whatsapp",
-            "assistant",
-            respuesta
-        )
-
-        wa_send_text(
-            wa_id,
-            respuesta
-        )
-
-    except Exception as e:
-
-        print(
-            "WHATSAPP ERROR:",
-            repr(e)
-        )
-
-    return "ok", 200
-
-
-# ============================================================
-# ADMIN PASSWORD
-# ============================================================
-
-ADMIN_PASSWORD = os.getenv(
-    "ADMIN_PASSWORD"
-)
-
-
-def admin_autorizado():
-
-    return session.get(
-        "admin_auth",
-        False
-    )
-
-
-@app.route(
-    "/admin",
-    methods=["GET", "POST"]
-)
-def admin():
-
-    if request.method == "POST":
-
-        password = request.form.get(
-            "password",
-            ""
-        )
-
-        if (
-            ADMIN_PASSWORD
-            and password == ADMIN_PASSWORD
-        ):
-
-            session["admin_auth"] = True
-
-            return redirect(
-                url_for(
-                    "admin_conversaciones"
-                )
-            )
-
-        return render_template_string(
-            ADMIN_LOGIN_TEMPLATE,
-            error="Contraseña incorrecta."
-        )
-
-    if admin_autorizado():
-
-        return redirect(
-            url_for(
-                "admin_conversaciones"
-            )
-        )
-
-    return render_template_string(
-        ADMIN_LOGIN_TEMPLATE,
-        error=""
-    )
-
-
-# ============================================================
-# ADMIN CONVERSACIONES
-# ============================================================
-
-@app.route(
-    "/admin/conversaciones"
-)
-def admin_conversaciones():
-
-    if not admin_autorizado():
-
-        return redirect(
-            url_for("admin")
-        )
-
-    if not DATABASE_URL:
-
-        return (
-            "DATABASE_URL no está configurada.",
-            500
-        )
-
-    conn = None
-
-    try:
-
-        conn = db_connect()
-
-        cur = conn.cursor(
-            cursor_factory=psycopg2.extras.RealDictCursor
-        )
-
-        cur.execute(
-            """
-            SELECT
-                id,
-                cliente_id,
-                canal,
-                nombre,
-                telefono,
-                correo,
-                servicio,
-                fecha_reserva,
-                meet_url,
-                estado,
-                created_at,
-                updated_at
-            FROM conversaciones
-            ORDER BY updated_at DESC
-            """
-        )
-
-        conversaciones = cur.fetchall()
-
-        cur.close()
-
-        return render_template_string(
-            ADMIN_CONVERSACIONES_TEMPLATE,
-            conversaciones=conversaciones
-        )
-
-    except Exception as e:
-
-        print(
-            "ADMIN ERROR:",
-            repr(e)
-        )
-
-        return (
-            f"Error: {e}",
-            500
-        )
-
-    finally:
-
-        if conn:
-            conn.close()
-
-
-# ============================================================
-# DETALLE CONVERSACIÓN
-# ============================================================
-
-@app.route(
-    "/admin/conversaciones/<int:conversation_id>"
-)
-def admin_conversacion_detalle(
-    conversation_id
-):
-
-    if not admin_autorizado():
-
-        return redirect(
-            url_for("admin")
-        )
-
-    conn = None
-
-    try:
-
-        conn = db_connect()
-
-        cur = conn.cursor(
-            cursor_factory=psycopg2.extras.RealDictCursor
-        )
-
-        cur.execute(
-            """
-            SELECT *
-            FROM conversaciones
-            WHERE id = %s
-            """,
-            (
-                conversation_id,
-            )
-        )
-
-        conversacion = cur.fetchone()
-
-        if not conversacion:
-
-            return (
-                "Conversación no encontrada.",
-                404
-            )
-
-        cur.execute(
-            """
-            SELECT
-                role,
-                contenido,
-                created_at
-            FROM mensajes
-            WHERE conversacion_id = %s
-            ORDER BY created_at ASC
-            """,
-            (
-                conversation_id,
-            )
-        )
-
-        mensajes = cur.fetchall()
-
-        cur.close()
-
-        return render_template_string(
-            ADMIN_DETALLE_TEMPLATE,
-            conversacion=conversacion,
-            mensajes=mensajes
-        )
-
-    except Exception as e:
-
-        print(
-            "ADMIN DETALLE ERROR:",
-            repr(e)
-        )
-
-        return (
-            f"Error: {e}",
-            500
-        )
-
-    finally:
-
-        if conn:
-            conn.close()
-
-
-# ============================================================
-# LOGOUT ADMIN
-# ============================================================
-
-@app.route(
-    "/admin/logout"
-)
-def admin_logout():
-
-    session.pop(
-        "admin_auth",
-        None
-    )
-
-    return redirect(
-        url_for("admin")
-    )
-
-
-# ============================================================
-# GOOGLE LOGIN
-# ============================================================
-
-@app.route(
-    "/admin/login"
 )
 def admin_login():
 
-    try:
+    if request.method == "POST":
 
-        flow = crear_google_flow()
-
-        authorization_url, state = (
-            flow.authorization_url(
-                access_type="offline",
-                include_granted_scopes="true",
-                prompt="consent"
-            )
+        usuario = request.form.get(
+            "usuario"
         )
 
-        session.permanent = True
-
-        session["google_oauth_state"] = state
-
-        session["google_code_verifier"] = (
-            flow.code_verifier
+        password = request.form.get(
+            "password"
         )
 
-        session.modified = True
-
-        return redirect(
-            authorization_url
-        )
-
-    except Exception as e:
-
-        print(
-            "GOOGLE LOGIN ERROR:",
-            repr(e)
-        )
-
-        return render_template_string(
-            ERROR_TEMPLATE,
-            titulo="Error iniciando Google OAuth",
-            mensaje=str(e)
-        )
-
-
-# ============================================================
-# GOOGLE CALLBACK
-# ============================================================
-
-@app.route(
-    "/callback"
-)
-def callback():
-
-    error = request.args.get(
-        "error"
-    )
-
-    if error:
-
-        return render_template_string(
-            ERROR_TEMPLATE,
-            titulo="Google rechazó la autorización",
-            mensaje=f"Google respondió: {error}"
-        )
-
-    code = request.args.get(
-        "code"
-    )
-
-    if not code:
-
-        return render_template_string(
-            ERROR_TEMPLATE,
-            titulo="Falta código OAuth",
-            mensaje="Google no entregó el parámetro code."
-        )
-
-    try:
-
-        state = session.get(
-            "google_oauth_state"
-        )
-
-        code_verifier = session.get(
-            "google_code_verifier"
-        )
-
-        if not state:
-
-            raise Exception(
-                "Se perdió la sesión OAuth. "
-                "Vuelve a iniciar desde /admin/login."
-            )
-
-        if not code_verifier:
-
-            raise Exception(
-                "Se perdió el code_verifier OAuth. "
-                "Vuelve a iniciar desde /admin/login."
-            )
-
-        flow = crear_google_flow()
-
-        flow.state = state
-        flow.code_verifier = code_verifier
-
-        authorization_response = request.url
-
-        if not authorization_response.startswith(
-            "https://"
+        if (
+            usuario == ADMIN_USER
+            and password == ADMIN_PASSWORD
         ):
 
-            authorization_response = (
-                "https://"
-                + request.host
-                + request.full_path
+            session["admin"] = True
+
+            return redirect(
+                url_for("admin")
             )
-
-        flow.fetch_token(
-            authorization_response=
-                authorization_response
-        )
-
-        credentials = flow.credentials
-
-        if not credentials:
-
-            raise Exception(
-                "Google no entregó credenciales."
-            )
-
-        refresh_token = (
-            credentials.refresh_token
-        )
-
-        if not refresh_token:
-
-            return render_template_string(
-                ERROR_TEMPLATE,
-                titulo="Google no entregó refresh token",
-                mensaje=(
-                    "Google autorizó la aplicación, "
-                    "pero no entregó refresh_token. "
-                    "Vuelve a /admin/login."
-                )
-            )
-
-        session.pop(
-            "google_oauth_state",
-            None
-        )
-
-        session.pop(
-            "google_code_verifier",
-            None
-        )
-
-        session.modified = True
 
         return render_template_string(
-            TOKEN_TEMPLATE,
-            token=refresh_token
+            ADMIN_LOGIN_HTML,
+            error="Usuario o contraseña incorrectos"
         )
 
-    except Exception as e:
-
-        print(
-            "GOOGLE CALLBACK ERROR:",
-            repr(e)
-        )
-
-        return render_template_string(
-            ERROR_TEMPLATE,
-            titulo="Error autenticando con Google",
-            mensaje=str(e)
-        )
+    return render_template_string(
+        ADMIN_LOGIN_HTML
+    )
 
 
-# ============================================================
-# LOGOUT
-# ============================================================
-
-@app.route(
-    "/logout"
-)
-def logout():
+@app.route("/admin/logout")
+def admin_logout():
 
     session.clear()
 
     return redirect(
-        url_for("home")
+        url_for("admin_login")
     )
 
 
 # ============================================================
-# TEMPLATE CHAT
+# PANEL ADMIN
 # ============================================================
 
-TEMPLATE = """
+@app.route("/admin")
+def admin():
+
+    if not session.get("admin"):
+        return redirect(
+            url_for("admin_login")
+        )
+
+    conn = get_db()
+
+    cur = conn.cursor(
+        cursor_factory=RealDictCursor
+    )
+
+    cur.execute("""
+        SELECT *
+        FROM reservas
+        ORDER BY inicio DESC
+        LIMIT 100
+    """)
+
+    reservas = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return render_template_string(
+        ADMIN_HTML,
+        reservas=reservas
+    )
+
+
+# ============================================================
+# HTML ADMIN
+# ============================================================
+
+ADMIN_LOGIN_HTML = """
+
 <!DOCTYPE html>
 
-<html lang="es">
+<html>
 
 <head>
 
 <meta charset="UTF-8">
 
-<meta name="viewport"
-      content="width=device-width, initial-scale=1">
-
-<title>
-Asistente Virtual de Estilista Diego
-</title>
-
-<style>
-
-* {
-    box-sizing: border-box;
-}
-
-body {
-
-    margin: 0;
-
-    font-family:
-        Arial,
-        sans-serif;
-
-    background:
-        #f3f4f6;
-}
-
-#chat-container {
-
-    position: fixed;
-
-    bottom: 20px;
-
-    right: 20px;
-
-    width: 370px;
-
-    height: 560px;
-
-    background: white;
-
-    border-radius: 18px;
-
-    box-shadow:
-        0 10px 40px
-        rgba(0,0,0,.18);
-
-    display: flex;
-
-    flex-direction: column;
-
-    overflow: hidden;
-}
-
-#chat-header {
-
-    padding: 18px;
-
-    background: #111827;
-
-    color: white;
-}
-
-.name {
-
-    font-weight: bold;
-
-    font-size: 16px;
-}
-
-.subtitle {
-
-    font-size: 12px;
-
-    opacity: .7;
-
-    margin-top: 4px;
-}
-
-#chat-messages {
-
-    flex: 1;
-
-    overflow-y: auto;
-
-    padding: 15px;
-
-    background: #f9fafb;
-}
-
-.msg {
-
-    max-width: 84%;
-
-    margin-bottom: 10px;
-
-    padding: 10px 13px;
-
-    border-radius: 16px;
-
-    white-space: pre-wrap;
-
-    line-height: 1.4;
-
-    font-size: 14px;
-}
-
-.bot {
-
-    background: #111827;
-
-    color: white;
-
-    margin-right: auto;
-}
-
-.user {
-
-    background: #e5e7eb;
-
-    color: #111827;
-
-    margin-left: auto;
-}
-
-#chat-input-form {
-
-    display: flex;
-
-    padding: 8px;
-
-    border-top: 1px solid #ddd;
-}
-
-#chat-input {
-
-    flex: 1;
-
-    border: none;
-
-    outline: none;
-
-    padding: 12px;
-}
-
-button {
-
-    border: none;
-
-    background: #111827;
-
-    color: white;
-
-    padding: 0 18px;
-
-    border-radius: 10px;
-
-    cursor: pointer;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div id="chat-container">
-
-<div id="chat-header">
-
-<div class="name">
-✂️ Asistente Virtual de Estilista Diego
-</div>
-
-<div class="subtitle">
-Lunes a sábado · 10:00 a 18:00
-</div>
-
-</div>
-
-<div id="chat-messages">
-
-{% for m in historial %}
-
-<div class="msg
-{% if m['role'] == 'user' %}
-user
-{% else %}
-bot
-{% endif %}
-">
-
-{{ m['content'] | e }}
-
-</div>
-
-{% endfor %}
-
-</div>
-
-<form
-id="chat-input-form"
-method="POST"
->
-
-<input
-id="chat-input"
-name="pregunta"
-placeholder="Escribe tu mensaje..."
-autocomplete="off"
-required
->
-
-<button type="submit">
-➤
-</button>
-
-</form>
-
-</div>
-
-<script>
-
-window.onload = function() {
-
-    const box =
-        document.getElementById(
-            "chat-messages"
-        );
-
-    box.scrollTop =
-        box.scrollHeight;
-
-};
-
-</script>
-
-</body>
-
-</html>
-"""
-
-
-# ============================================================
-# ADMIN LOGIN TEMPLATE
-# ============================================================
-
-ADMIN_LOGIN_TEMPLATE = """
-
-<!DOCTYPE html>
-
-<html lang="es">
-
-<head>
-
-<meta charset="UTF-8">
-
-<title>Administrador</title>
+<title>Login</title>
 
 <style>
 
 body {
     font-family: Arial;
-    background: #f3f4f6;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    min-height:100vh;
+    background: #f4f4f4;
 }
 
 .box {
-    background:white;
-    padding:35px;
-    border-radius:16px;
-    width:350px;
-    box-shadow:0 10px 30px rgba(0,0,0,.15);
+    width: 350px;
+    margin: 100px auto;
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
 }
 
 input {
-    width:100%;
-    padding:12px;
-    margin:10px 0;
-    border:1px solid #ddd;
-    border-radius:8px;
+    width: 100%;
+    padding: 12px;
+    margin: 8px 0;
+    box-sizing: border-box;
 }
 
 button {
-    width:100%;
-    padding:12px;
-    border:0;
-    border-radius:8px;
-    background:#111827;
-    color:white;
+    width: 100%;
+    padding: 12px;
 }
 
 .error {
-    color:#b91c1c;
+    color: red;
 }
 
 </style>
@@ -3600,29 +1336,33 @@ button {
 
 <div class="box">
 
-<h2>💬 Conversaciones</h2>
-
-<p>
-Panel privado de Estilista Diego
-</p>
+<h2>💈 Administración</h2>
 
 {% if error %}
+
 <p class="error">
 {{ error }}
 </p>
+
 {% endif %}
 
 <form method="POST">
 
 <input
-type="password"
-name="password"
-placeholder="Contraseña"
-required
+    name="usuario"
+    placeholder="Usuario"
+    required
 >
 
-<button>
-Entrar
+<input
+    type="password"
+    name="password"
+    placeholder="Contraseña"
+    required
+>
+
+<button type="submit">
+Ingresar
 </button>
 
 </form>
@@ -3632,72 +1372,45 @@ Entrar
 </body>
 
 </html>
+
 """
 
 
-# ============================================================
-# ADMIN CONVERSACIONES TEMPLATE
-# ============================================================
-
-ADMIN_CONVERSACIONES_TEMPLATE = """
+ADMIN_HTML = """
 
 <!DOCTYPE html>
 
-<html lang="es">
+<html>
 
 <head>
 
 <meta charset="UTF-8">
 
-<meta name="viewport"
-content="width=device-width,initial-scale=1">
-
-<title>Conversaciones</title>
+<title>Reservas</title>
 
 <style>
 
 body {
-    font-family:Arial;
-    background:#f3f4f6;
-    margin:0;
-    padding:30px;
+    font-family: Arial;
+    margin: 30px;
 }
 
-.container {
-    max-width:1200px;
-    margin:auto;
+table {
+    border-collapse: collapse;
+    width: 100%;
 }
 
-.top {
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    margin-bottom:25px;
+th, td {
+    border: 1px solid #ddd;
+    padding: 10px;
 }
 
-.card {
-    background:white;
-    border-radius:14px;
-    padding:18px;
-    margin-bottom:12px;
-    box-shadow:0 4px 15px rgba(0,0,0,.08);
+th {
+    background: #eee;
 }
 
 a {
-    color:#111827;
-    text-decoration:none;
-}
-
-.badge {
-    display:inline-block;
-    padding:5px 9px;
-    border-radius:8px;
-    background:#e5e7eb;
-    font-size:12px;
-}
-
-.logout {
-    color:#b91c1c;
+    text-decoration: none;
 }
 
 </style>
@@ -3706,440 +1419,110 @@ a {
 
 <body>
 
-<div class="container">
-
-<div class="top">
-
 <h1>
-💬 Conversaciones
+💈 Reservas - Estilista Diego
 </h1>
 
-<a class="logout"
-href="/admin/logout">
+<p>
+<a href="/admin/logout">
 Cerrar sesión
 </a>
+</p>
 
-</div>
+<table>
 
-{% if not conversaciones %}
+<tr>
 
-<div class="card">
-No hay conversaciones todavía.
-</div>
+<th>Fecha</th>
+<th>Cliente</th>
+<th>WhatsApp</th>
+<th>Servicio</th>
+<th>Precio</th>
+<th>Meet</th>
 
-{% endif %}
+</tr>
 
-{% for c in conversaciones %}
+{% for reserva in reservas %}
 
-<div class="card">
+<tr>
 
-<h3>
+<td>
+{{ reserva.inicio }}
+</td>
 
-<a href="/admin/conversaciones/{{ c['id'] }}">
+<td>
+{{ reserva.nombre }}
+</td>
 
-{% if c['nombre'] %}
-{{ c['nombre'] }}
-{% else %}
-Cliente {{ c['cliente_id'] }}
-{% endif %}
+<td>
+{{ reserva.telefono }}
+</td>
 
+<td>
+{{ reserva.servicio }}
+</td>
+
+<td>
+${{ "{:,}".format(reserva.precio).replace(",", ".") }}
+</td>
+
+<td>
+
+{% if reserva.meet_url %}
+
+<a
+href="{{ reserva.meet_url }}"
+target="_blank"
+>
+Abrir Meet
 </a>
 
-</h3>
+{% else %}
 
-<p>
-
-<span class="badge">
-{{ c['canal'] }}
-</span>
-
-{% if c['estado'] %}
-
-<span class="badge">
-{{ c['estado'] }}
-</span>
+-
 
 {% endif %}
 
-</p>
+</td>
 
-<p>
-
-📱 {{ c['telefono'] or '-' }}
-
-<br>
-
-📧 {{ c['correo'] or '-' }}
-
-<br>
-
-✂️ {{ c['servicio'] or '-' }}
-
-</p>
-
-{% if c['fecha_reserva'] %}
-
-<p>
-📅 {{ c['fecha_reserva'] }}
-</p>
-
-{% endif %}
-
-<p>
-🕐 Actualizado:
-{{ c['updated_at'] }}
-</p>
-
-</div>
+</tr>
 
 {% endfor %}
 
-</div>
+</table>
 
 </body>
 
 </html>
+
 """
 
 
 # ============================================================
-# ADMIN DETALLE TEMPLATE
-# ============================================================
-
-ADMIN_DETALLE_TEMPLATE = """
-
-<!DOCTYPE html>
-
-<html lang="es">
-
-<head>
-
-<meta charset="UTF-8">
-
-<meta name="viewport"
-content="width=device-width,initial-scale=1">
-
-<title>Conversación</title>
-
-<style>
-
-body {
-    font-family:Arial;
-    background:#f3f4f6;
-    margin:0;
-    padding:25px;
-}
-
-.container {
-    max-width:850px;
-    margin:auto;
-}
-
-.card {
-    background:white;
-    border-radius:14px;
-    padding:20px;
-    margin-bottom:20px;
-}
-
-.message {
-    padding:12px;
-    margin:10px 0;
-    border-radius:12px;
-    white-space:pre-wrap;
-}
-
-.user {
-    background:#e5e7eb;
-    margin-left:60px;
-}
-
-.assistant {
-    background:#111827;
-    color:white;
-    margin-right:60px;
-}
-
-.small {
-    font-size:12px;
-    opacity:.7;
-}
-
-a {
-    color:#111827;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="container">
-
-<p>
-<a href="/admin/conversaciones">
-← Volver a conversaciones
-</a>
-</p>
-
-<div class="card">
-
-<h2>
-💬 Conversación #{{ conversacion['id'] }}
-</h2>
-
-<p>
-👤 <b>{{ conversacion['nombre'] or 'Sin nombre' }}</b>
-</p>
-
-<p>
-📱 {{ conversacion['telefono'] or '-' }}
-</p>
-
-<p>
-📧 {{ conversacion['correo'] or '-' }}
-</p>
-
-<p>
-✂️ {{ conversacion['servicio'] or '-' }}
-</p>
-
-{% if conversacion['fecha_reserva'] %}
-
-<p>
-📅 {{ conversacion['fecha_reserva'] }}
-</p>
-
-{% endif %}
-
-{% if conversacion['meet_url'] %}
-
-<p>
-🎥
-<a href="{{ conversacion['meet_url'] }}"
-target="_blank">
-Abrir Google Meet
-</a>
-</p>
-
-{% endif %}
-
-</div>
-
-<div class="card">
-
-<h2>
-Conversación
-</h2>
-
-{% for m in mensajes %}
-
-<div class="message
-{% if m['role'] == 'user' %}
-user
-{% else %}
-assistant
-{% endif %}
-">
-
-{{ m['contenido'] }}
-
-<div class="small">
-{{ m['created_at'] }}
-</div>
-
-</div>
-
-{% endfor %}
-
-</div>
-
-</div>
-
-</body>
-
-</html>
-"""
-
-
-# ============================================================
-# GOOGLE TOKEN TEMPLATE
-# ============================================================
-
-TOKEN_TEMPLATE = """
-
-<!DOCTYPE html>
-
-<html lang="es">
-
-<head>
-
-<meta charset="UTF-8">
-
-<title>Google Calendar autorizado</title>
-
-<style>
-
-body {
-    font-family:Arial;
-    max-width:850px;
-    margin:50px auto;
-    padding:20px;
-    background:#f5f5f5;
-}
-
-.box {
-    background:white;
-    padding:30px;
-    border-radius:15px;
-}
-
-textarea {
-    width:100%;
-    height:120px;
-    margin-top:15px;
-}
-
-.success {
-    color:#087f23;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="box">
-
-<h1 class="success">
-✅ Google Calendar autorizado
-</h1>
-
-<p>
-La autorización fue completada correctamente.
-</p>
-
-<p>
-Copia este valor en Render como:
-</p>
-
-<b>
-GOOGLE_REFRESH_TOKEN
-</b>
-
-<textarea readonly>{{ token }}</textarea>
-
-<h3>
-En Render:
-</h3>
-
-<ol>
-
-<li>Environment</li>
-
-<li>GOOGLE_REFRESH_TOKEN</li>
-
-<li>Pega el token</li>
-
-<li>Guarda</li>
-
-<li>Espera el deploy</li>
-
-</ol>
-
-<p>
-⚠️ No compartas este token.
-</p>
-
-</div>
-
-</body>
-
-</html>
-"""
-
-
-# ============================================================
-# ERROR TEMPLATE
-# ============================================================
-
-ERROR_TEMPLATE = """
-
-<!DOCTYPE html>
-
-<html lang="es">
-
-<head>
-
-<meta charset="UTF-8">
-
-<title>Error</title>
-
-<style>
-
-body {
-    font-family:Arial;
-    max-width:800px;
-    margin:50px auto;
-    padding:20px;
-}
-
-.box {
-    padding:30px;
-    border-radius:15px;
-    background:#fff3f3;
-    border:1px solid #ffcccc;
-}
-
-pre {
-    white-space:pre-wrap;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="box">
-
-<h1>
-❌ {{ titulo }}
-</h1>
-
-<pre>{{ mensaje }}</pre>
-
-<hr>
-
-<a href="/admin/login">
-Volver a iniciar autorización con Google
-</a>
-
-</div>
-
-</body>
-
-</html>
-"""
-
-
-# ============================================================
-# INICIALIZAR BASE DE DATOS
+# INICIALIZACIÓN
 # ============================================================
 
 try:
-    init_database()
-except Exception as e:
+
+    init_db()
+
     print(
-        "ERROR INIT DATABASE:",
-        repr(e)
+        "BASE DE DATOS INICIALIZADA"
+    )
+
+except Exception:
+
+    print(
+        "ERROR INICIALIZANDO BASE DE DATOS"
+    )
+
+    print(
+        traceback.format_exc()
     )
 
 
 # ============================================================
-# ARRANQUE
+# RUN
 # ============================================================
 
 if __name__ == "__main__":
@@ -4147,15 +1530,11 @@ if __name__ == "__main__":
     port = int(
         os.environ.get(
             "PORT",
-            5000
+            10000
         )
     )
 
     app.run(
         host="0.0.0.0",
-        port=port,
-        debug=(
-            os.getenv("FLASK_ENV")
-            == "development"
-        )
+        port=port
     )
