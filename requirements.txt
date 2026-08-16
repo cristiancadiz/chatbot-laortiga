@@ -13,3 +13,4 @@ dateparser
 pytz
 resend
 psycopg2-binary
+twilio
