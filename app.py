@@ -5,203 +5,72 @@ import traceback
 from datetime import datetime, timedelta, time
 
 import pytz
+import dateparser
 
-from flask import (
-    Flask,
-    request,
-    jsonify,
-    render_template_string,
-    redirect,
-    url_for,
-    session,
-)
-
+from flask import Flask, request, jsonify
 from twilio.twiml.messaging_response import MessagingResponse
-
 from openai import OpenAI
-
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-import dateparser
-
 
 # ============================================================
-# CONFIGURACIÓN
+# CONFIGURACIÓN GENERAL
 # ============================================================
 
 app = Flask(__name__)
 
-app.secret_key = os.environ.get(
-    "FLASK_SECRET_KEY",
-    "cambiar-esta-clave-en-render"
-)
+TZ = pytz.timezone(os.environ.get("TIMEZONE", "America/Santiago"))
 
-TZ = pytz.timezone(
-    os.environ.get(
-        "TIMEZONE",
-        "America/Santiago"
-    )
-)
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-mini")
 
-OPENAI_API_KEY = os.environ.get(
-    "OPENAI_API_KEY"
-)
-
-OPENAI_MODEL = os.environ.get(
-    "OPENAI_MODEL",
-    "gpt-5-mini"
-)
-
-
-
-# ============================================================
-# TWILIO
-# ============================================================
-
-TWILIO_ACCOUNT_SID = os.environ.get(
-    "TWILIO_ACCOUNT_SID"
-)
-
-TWILIO_AUTH_TOKEN = os.environ.get(
-    "TWILIO_AUTH_TOKEN"
-)
-
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_FROM = os.environ.get(
     "TWILIO_WHATSAPP_FROM",
     "whatsapp:+14155238886"
 )
 
-# Normalizamos el número
-if TWILIO_WHATSAPP_FROM:
-    if not TWILIO_WHATSAPP_FROM.startswith(
-        "whatsapp:"
-    ):
-        TWILIO_WHATSAPP_FROM = (
-            "whatsapp:"
-            + TWILIO_WHATSAPP_FROM
-        )
+GOOGLE_REFRESH_TOKEN = os.environ.get("GOOGLE_REFRESH_TOKEN")
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
 
+PRECIO_SERVICIO = 20000
+DURACION_CITA = 60
 
-# ============================================================
-# GOOGLE CALENDAR
-# ============================================================
-
-GOOGLE_REFRESH_TOKEN = os.environ.get(
-    "GOOGLE_REFRESH_TOKEN"
-)
-
-GOOGLE_CLIENT_ID = os.environ.get(
-    "GOOGLE_CLIENT_ID"
-)
-
-GOOGLE_CLIENT_SECRET = os.environ.get(
-    "GOOGLE_CLIENT_SECRET"
-)
-
-GOOGLE_CALENDAR_ID = os.environ.get(
-    "GOOGLE_CALENDAR_ID",
-    "primary"
-)
-
-
-# ============================================================
-# ADMIN
-# ============================================================
-
-ADMIN_USER = os.environ.get(
-    "ADMIN_USER",
-    "admin"
-)
-
-ADMIN_PASSWORD = os.environ.get(
-    "ADMIN_PASSWORD",
-    "cambiar-password"
-)
+if TWILIO_WHATSAPP_FROM and not TWILIO_WHATSAPP_FROM.startswith("whatsapp:"):
+    TWILIO_WHATSAPP_FROM = "whatsapp:" + TWILIO_WHATSAPP_FROM
 
 
 # ============================================================
 # OPENAI
 # ============================================================
 
-client = None
-
-if OPENAI_API_KEY:
-
-    try:
-
-        client = OpenAI(
-            api_key=OPENAI_API_KEY
-        )
-
-        print(
-            "OPENAI: cliente inicializado"
-        )
-
-    except Exception:
-
-        print(
-            "OPENAI: ERROR inicializando cliente"
-        )
-
-        print(
-            traceback.format_exc()
-        )
-
-else:
-
-    print(
-        "OPENAI: FALTA OPENAI_API_KEY"
-    )
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 
 # ============================================================
-# SERVICIOS
+# MEMORIA TEMPORAL
 # ============================================================
-
-SERVICIOS = {
-    "corte": "Corte de cabello",
-    "corte de cabello": "Corte de cabello",
-    "barba": "Barba",
-    "corte y barba": "Corte y barba",
-    "corte barba": "Corte y barba",
-    "perfilado": "Perfilado de barba",
-    "perfilado de barba": "Perfilado de barba",
-}
-
-
-PRECIO_SERVICIO = 20000
-
-DURACION_CITA = 60
-
-
-# ============================================================
-# ALMACENAMIENTO TEMPORAL EN MEMORIA
-# ============================================================
-
-# Esta versión no usa base de datos.
-# Los datos se conservan sólo mientras el proceso de Render esté activo.
-# Si el servicio se reinicia o redeploya, esta información se pierde.
+# Para probar en Render + Sandbox.
+# Si Render reinicia el proceso, esta memoria se reinicia.
+# Las reservas reales quedan en Google Calendar.
 
 CLIENTES = {}
-MENSAJES = {}
-RESERVAS = []
+HISTORIALES = {}
 
 
-# ============================================================
-# CLIENTES
-# ============================================================
-
-def guardar_cliente(
-    telefono,
-    nombre=None
-):
-
+def guardar_cliente(telefono, nombre=None):
     cliente = CLIENTES.get(
         telefono,
         {
             "telefono": telefono,
-            "nombre": None
+            "nombre": None,
+            "servicio": None,
+            "fecha": None,
+            "hora": None,
         }
     )
 
@@ -209,122 +78,20 @@ def guardar_cliente(
         cliente["nombre"] = nombre
 
     CLIENTES[telefono] = cliente
+    return cliente
 
 
-def obtener_cliente(
-    telefono
-):
-
-    return CLIENTES.get(
-        telefono
-    )
+def obtener_cliente(telefono):
+    return guardar_cliente(telefono)
 
 
-# ============================================================
-# MENSAJES
-# ============================================================
-
-def guardar_mensaje(
-    telefono,
-    rol,
-    mensaje
-):
-
-    if telefono not in MENSAJES:
-        MENSAJES[telefono] = []
-
-    MENSAJES[telefono].append({
-        "rol": rol,
-        "mensaje": mensaje
+def guardar_historial(telefono, rol, contenido):
+    HISTORIALES.setdefault(telefono, [])
+    HISTORIALES[telefono].append({
+        "role": rol,
+        "content": contenido
     })
-
-    # Dejamos sólo los últimos 50 mensajes por número.
-    MENSAJES[telefono] = MENSAJES[telefono][-50:]
-
-
-def obtener_historial(
-    telefono,
-    limite=20
-):
-
-    historial = MENSAJES.get(
-        telefono,
-        []
-    )
-
-    return historial[-limite:]
-
-
-# ============================================================
-# GOOGLE CALENDAR
-# ============================================================
-
-GOOGLE_REFRESH_TOKEN = os.environ.get(
-    "GOOGLE_REFRESH_TOKEN"
-)
-
-GOOGLE_CLIENT_ID = os.environ.get(
-    "GOOGLE_CLIENT_ID"
-)
-
-GOOGLE_CLIENT_SECRET = os.environ.get(
-    "GOOGLE_CLIENT_SECRET"
-)
-
-GOOGLE_CALENDAR_ID = os.environ.get(
-    "GOOGLE_CALENDAR_ID",
-    "primary"
-)
-
-
-# ============================================================
-# ADMIN
-# ============================================================
-
-ADMIN_USER = os.environ.get(
-    "ADMIN_USER",
-    "admin"
-)
-
-ADMIN_PASSWORD = os.environ.get(
-    "ADMIN_PASSWORD",
-    "cambiar-password"
-)
-
-
-# ============================================================
-# OPENAI
-# ============================================================
-
-client = None
-
-if OPENAI_API_KEY:
-
-    try:
-
-        client = OpenAI(
-            api_key=OPENAI_API_KEY
-        )
-
-        print(
-            "OPENAI: cliente inicializado"
-        )
-
-    except Exception:
-
-        print(
-            "OPENAI: ERROR inicializando cliente"
-        )
-
-        print(
-            traceback.format_exc()
-        )
-
-else:
-
-    print(
-        "OPENAI: FALTA OPENAI_API_KEY"
-    )
+    HISTORIALES[telefono] = HISTORIALES[telefono][-20:]
 
 
 # ============================================================
@@ -337,388 +104,170 @@ SERVICIOS = {
     "barba": "Barba",
     "corte y barba": "Corte y barba",
     "corte barba": "Corte y barba",
+    "corte más barba": "Corte y barba",
+    "corte mas barba": "Corte y barba",
     "perfilado": "Perfilado de barba",
     "perfilado de barba": "Perfilado de barba",
 }
 
 
-PRECIO_SERVICIO = 20000
+def detectar_servicio(texto):
+    texto = texto.lower().strip()
 
-DURACION_CITA = 60
-
-
-# ============================================================
-# BASE DE DATOS
-# ============================================================
-
-def get_db():
-
-    if not DATABASE_URL:
-
-        raise Exception(
-            "DATABASE_URL no está configurada"
-        )
-
-    return psycopg2.connect(
-        DATABASE_URL,
-        sslmode="require"
-    )
-
-
-def columna_mensajes():
-
-    """
-    Detecta si la tabla existente usa:
-
-    rol
-
-    o
-
-    role
-
-    Esto evita el error:
-    column "rol" does not exist
-    """
-
-    conn = get_db()
-
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_name = 'mensajes'
-        ORDER BY ordinal_position
-    """)
-
-    columnas = [
-        row[0]
-        for row in cur.fetchall()
-    ]
-
-    cur.close()
-    conn.close()
-
-    if "rol" in columnas:
-        return "rol"
-
-    if "role" in columnas:
-        return "role"
+    for clave in sorted(SERVICIOS.keys(), key=len, reverse=True):
+        if clave in texto:
+            return SERVICIOS[clave]
 
     return None
 
 
-def init_db():
+# ============================================================
+# NOMBRE
+# ============================================================
 
-    print(
-        "INICIANDO BASE DE DATOS..."
-    )
+def detectar_nombre(texto):
+    patrones = [
+        r"(?:me llamo|mi nombre es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ ]{2,40})",
+        r"(?:soy)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ ]{2,40})",
+    ]
 
-    conn = get_db()
+    for patron in patrones:
+        match = re.search(patron, texto, re.IGNORECASE)
 
-    cur = conn.cursor()
+        if match:
+            nombre = re.sub(r"\s+", " ", match.group(1)).strip()
+            palabras = nombre.split()
 
-    # --------------------------------------------------------
-    # CLIENTES
-    # --------------------------------------------------------
+            if len(palabras) > 4:
+                nombre = " ".join(palabras[:4])
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS clientes (
+            return nombre.title()
 
-            id SERIAL PRIMARY KEY,
-
-            telefono VARCHAR(100)
-                UNIQUE NOT NULL,
-
-            nombre VARCHAR(255),
-
-            creado_en TIMESTAMP
-                DEFAULT CURRENT_TIMESTAMP,
-
-            actualizado_en TIMESTAMP
-                DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-
-    # --------------------------------------------------------
-    # MENSAJES
-    # --------------------------------------------------------
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS mensajes (
-
-            id SERIAL PRIMARY KEY,
-
-            telefono VARCHAR(100)
-                NOT NULL,
-
-            rol VARCHAR(30)
-                NOT NULL,
-
-            mensaje TEXT
-                NOT NULL,
-
-            creado_en TIMESTAMP
-                DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-
-    # --------------------------------------------------------
-    # RESERVAS
-    # --------------------------------------------------------
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS reservas (
-
-            id SERIAL PRIMARY KEY,
-
-            telefono VARCHAR(100),
-
-            nombre VARCHAR(255),
-
-            servicio VARCHAR(255),
-
-            precio INTEGER,
-
-            inicio TIMESTAMP,
-
-            fin TIMESTAMP,
-
-            google_event_id VARCHAR(255),
-
-            meet_url TEXT,
-
-            creado_en TIMESTAMP
-                DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-
-    conn.commit()
-
-    cur.close()
-    conn.close()
-
-    print(
-        "BASE DE DATOS: OK"
-    )
+    return None
 
 
 # ============================================================
-# CLIENTES
+# FECHA
 # ============================================================
 
-def guardar_cliente(
-    telefono,
-    nombre=None
-):
+def detectar_fecha(texto):
+    ahora = datetime.now(TZ)
+    texto_lower = texto.lower()
 
-    conn = get_db()
+    # Atajos para evitar que dateparser interprete mensajes genéricos
+    indicadores = [
+        "hoy", "mañana", "pasado mañana",
+        "lunes", "martes", "miércoles", "miercoles",
+        "jueves", "viernes", "sábado", "sabado", "domingo",
+    ]
 
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO clientes
-        (
-            telefono,
-            nombre
-        )
-        VALUES
-        (
-            %s,
-            %s
-        )
-
-        ON CONFLICT (telefono)
-
-        DO UPDATE SET
-
-            nombre =
-                COALESCE(
-                    EXCLUDED.nombre,
-                    clientes.nombre
-                ),
-
-            actualizado_en =
-                CURRENT_TIMESTAMP
-    """, (
-        telefono,
-        nombre
-    ))
-
-    conn.commit()
-
-    cur.close()
-    conn.close()
-
-
-def obtener_cliente(
-    telefono
-):
-
-    conn = get_db()
-
-    cur = conn.cursor(
-        cursor_factory=RealDictCursor
+    tiene_fecha_explicita = any(x in texto_lower for x in indicadores)
+    tiene_fecha_numerica = bool(
+        re.search(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", texto_lower)
     )
 
-    cur.execute("""
-        SELECT *
-        FROM clientes
-        WHERE telefono = %s
-        LIMIT 1
-    """, (
-        telefono,
-    ))
+    if not tiene_fecha_explicita and not tiene_fecha_numerica:
+        return None
 
-    cliente = cur.fetchone()
+    try:
+        fecha = dateparser.parse(
+            texto,
+            languages=["es"],
+            settings={
+                "TIMEZONE": "America/Santiago",
+                "RETURN_AS_TIMEZONE_AWARE": True,
+                "PREFER_DATES_FROM": "future",
+                "RELATIVE_BASE": ahora,
+            },
+        )
 
-    cur.close()
-    conn.close()
+        if not fecha:
+            return None
 
-    return cliente
+        return fecha.astimezone(TZ)
+
+    except Exception:
+        print("ERROR detectar_fecha")
+        print(traceback.format_exc())
+        return None
 
 
 # ============================================================
-# MENSAJES
+# HORA
 # ============================================================
 
-def guardar_mensaje(
-    telefono,
-    rol,
-    mensaje
-):
+def detectar_hora(texto):
+    texto = texto.lower()
 
-    conn = get_db()
-
-    cur = conn.cursor()
-
-    columna = columna_mensajes()
-
-    if columna is None:
-
-        raise Exception(
-            "La tabla mensajes no tiene "
-            "columna rol ni role"
-        )
-
-    query = f"""
-        INSERT INTO mensajes
-        (
-            telefono,
-            {columna},
-            mensaje
-        )
-        VALUES
-        (
-            %s,
-            %s,
-            %s
-        )
-    """
-
-    cur.execute(
-        query,
-        (
-            telefono,
-            rol,
-            mensaje
-        )
+    # 10:00 / 10.30
+    match = re.search(
+        r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b",
+        texto
     )
 
-    conn.commit()
+    if match:
+        hora = int(match.group(1))
+        minuto = int(match.group(2))
 
-    cur.close()
-    conn.close()
+        if 0 <= hora <= 23:
+            return hora, minuto
 
-
-def obtener_historial(
-    telefono,
-    limite=20
-):
-
-    conn = get_db()
-
-    cur = conn.cursor(
-        cursor_factory=RealDictCursor
+    # 10 hrs / 10 horas
+    match = re.search(
+        r"\b([01]?\d|2[0-3])\s*(?:hrs?|horas?)\b",
+        texto
     )
 
-    columna = columna_mensajes()
+    if match:
+        return int(match.group(1)), 0
 
-    if columna is None:
-
-        raise Exception(
-            "No existe columna rol/role"
-        )
-
-    query = f"""
-        SELECT
-            {columna} AS rol,
-            mensaje
-        FROM mensajes
-        WHERE telefono = %s
-        ORDER BY creado_en DESC
-        LIMIT %s
-    """
-
-    cur.execute(
-        query,
-        (
-            telefono,
-            limite
-        )
+    # 3 pm / 3:30 pm
+    match = re.search(
+        r"\b(1[0-2]|[1-9])(?:[:.]([0-5]\d))?\s*(am|pm)\b",
+        texto
     )
 
-    rows = cur.fetchall()
+    if match:
+        hora = int(match.group(1))
+        minuto = int(match.group(2) or 0)
+        periodo = match.group(3)
 
-    cur.close()
-    conn.close()
+        if periodo == "pm" and hora < 12:
+            hora += 12
 
-    rows.reverse()
+        if periodo == "am" and hora == 12:
+            hora = 0
 
-    return rows
+        return hora, minuto
+
+    return None
 
 
 # ============================================================
 # GOOGLE CALENDAR
 # ============================================================
 
+def google_configurado():
+    return all([
+        GOOGLE_REFRESH_TOKEN,
+        GOOGLE_CLIENT_ID,
+        GOOGLE_CLIENT_SECRET,
+    ])
+
+
 def get_calendar_service():
-
-    if not GOOGLE_REFRESH_TOKEN:
-
-        raise Exception(
-            "GOOGLE_REFRESH_TOKEN no está configurado"
-        )
-
-    if not GOOGLE_CLIENT_ID:
-
-        raise Exception(
-            "GOOGLE_CLIENT_ID no está configurado"
-        )
-
-    if not GOOGLE_CLIENT_SECRET:
-
-        raise Exception(
-            "GOOGLE_CLIENT_SECRET no está configurado"
+    if not google_configurado():
+        raise RuntimeError(
+            "Faltan GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID o GOOGLE_CLIENT_SECRET"
         )
 
     credentials = Credentials(
-
         token=None,
-
         refresh_token=GOOGLE_REFRESH_TOKEN,
-
-        token_uri=(
-            "https://oauth2.googleapis.com/token"
-        ),
-
+        token_uri="https://oauth2.googleapis.com/token",
         client_id=GOOGLE_CLIENT_ID,
-
         client_secret=GOOGLE_CLIENT_SECRET,
-
-        scopes=[
-            "https://www.googleapis.com/auth/calendar"
-        ]
+        scopes=["https://www.googleapis.com/auth/calendar"],
     )
 
     return build(
@@ -729,590 +278,254 @@ def get_calendar_service():
     )
 
 
-# ============================================================
-# HORARIOS
-# ============================================================
+def es_horario_valido(inicio):
+    inicio = inicio.astimezone(TZ)
 
-def es_horario_valido(
-    inicio
-):
-
-    inicio = inicio.astimezone(
-        TZ
-    )
-
-    # Domingo cerrado
-
+    # domingo cerrado
     if inicio.weekday() == 6:
-
         return False
 
-    hora = inicio.time()
+    apertura = time(10, 0)
+    cierre = time(18, 0)
 
-    apertura = time(
-        10,
-        0
+    fin = inicio + timedelta(minutes=DURACION_CITA)
+
+    return (
+        apertura <= inicio.time() < cierre
+        and fin.time() <= cierre
     )
 
-    cierre = time(
-        18,
-        0
-    )
 
-    if hora < apertura:
-
-        return False
-
-    if hora >= cierre:
-
-        return False
-
-    return True
-
-
-# ============================================================
-# EVENTOS GOOGLE
-# ============================================================
-
-def obtener_eventos_dia(
-    fecha
-):
-
+def obtener_eventos_dia(fecha):
     service = get_calendar_service()
 
-    inicio = TZ.localize(
-        datetime.combine(
-            fecha,
-            time(
-                0,
-                0
-            )
-        )
-    )
+    inicio = TZ.localize(datetime.combine(fecha, time(0, 0)))
+    fin = inicio + timedelta(days=1)
 
-    fin = inicio + timedelta(
-        days=1
-    )
-
-    eventos = service.events().list(
-
+    resultado = service.events().list(
         calendarId=GOOGLE_CALENDAR_ID,
-
         timeMin=inicio.isoformat(),
-
         timeMax=fin.isoformat(),
-
         singleEvents=True,
-
-        orderBy="startTime"
-
+        orderBy="startTime",
     ).execute()
 
-    return eventos.get(
-        "items",
-        []
-    )
+    return resultado.get("items", [])
 
 
-# ============================================================
-# DISPONIBILIDAD
-# ============================================================
-
-def esta_disponible(
-    inicio
-):
-
-    inicio = inicio.astimezone(
-        TZ
-    )
-
-    fin = inicio + timedelta(
-        minutes=DURACION_CITA
-    )
-
-    if not es_horario_valido(
-        inicio
-    ):
-
+def esta_disponible(inicio):
+    if not es_horario_valido(inicio):
         return False
 
-    if fin.time() > time(
-        18,
-        0
-    ):
+    fin = inicio + timedelta(minutes=DURACION_CITA)
 
-        return False
+    for evento in obtener_eventos_dia(inicio.date()):
+        start_str = evento.get("start", {}).get("dateTime")
+        end_str = evento.get("end", {}).get("dateTime")
 
-    eventos = obtener_eventos_dia(
-        inicio.date()
-    )
-
-    for evento in eventos:
-
-        start_data = evento.get(
-            "start",
-            {}
-        )
-
-        end_data = evento.get(
-            "end",
-            {}
-        )
-
-        start_str = start_data.get(
-            "dateTime"
-        )
-
-        end_str = end_data.get(
-            "dateTime"
-        )
-
-        # Eventos de día completo
-
+        # Ignorar eventos de día completo
         if not start_str or not end_str:
-
             continue
 
-        start = datetime.fromisoformat(
-            start_str.replace(
-                "Z",
-                "+00:00"
-            )
+        inicio_evento = datetime.fromisoformat(
+            start_str.replace("Z", "+00:00")
         ).astimezone(TZ)
 
-        end = datetime.fromisoformat(
-            end_str.replace(
-                "Z",
-                "+00:00"
-            )
+        fin_evento = datetime.fromisoformat(
+            end_str.replace("Z", "+00:00")
         ).astimezone(TZ)
 
-        if (
-            inicio < end
-            and fin > start
-        ):
-
+        if inicio < fin_evento and fin > inicio_evento:
             return False
 
     return True
 
 
-def buscar_horarios_disponibles(
-    fecha,
-    cantidad=5
-):
+def buscar_horarios_disponibles(fecha, cantidad=5):
+    horarios = []
 
-    resultados = []
+    cursor = TZ.localize(datetime.combine(fecha, time(10, 0)))
+    cierre = TZ.localize(datetime.combine(fecha, time(18, 0)))
 
-    hora = TZ.localize(
-        datetime.combine(
-            fecha,
-            time(
-                10,
-                0
-            )
-        )
-    )
+    while cursor + timedelta(minutes=DURACION_CITA) <= cierre:
+        if esta_disponible(cursor):
+            horarios.append(cursor)
 
-    cierre = TZ.localize(
-        datetime.combine(
-            fecha,
-            time(
-                18,
-                0
-            )
-        )
-    )
+            if len(horarios) >= cantidad:
+                break
 
-    while hora < cierre:
+        cursor += timedelta(minutes=30)
 
-        fin = (
-            hora
-            + timedelta(
-                minutes=DURACION_CITA
-            )
-        )
-
-        if fin <= cierre:
-
-            if esta_disponible(
-                hora
-            ):
-
-                resultados.append(
-                    hora
-                )
-
-                if len(resultados) >= cantidad:
-
-                    break
-
-        hora += timedelta(
-            minutes=30
-        )
-
-    return resultados
+    return horarios
 
 
-# ============================================================
-# CREAR RESERVA GOOGLE
-# ============================================================
-
-def crear_reserva_google(
-    nombre,
-    telefono,
-    servicio,
-    inicio
-):
-
+def crear_reserva_google(nombre, telefono, servicio, inicio):
     service = get_calendar_service()
 
-    inicio = inicio.astimezone(
-        TZ
-    )
+    fin = inicio + timedelta(minutes=DURACION_CITA)
 
-    fin = inicio + timedelta(
-        minutes=DURACION_CITA
-    )
-
-    titulo = (
-        f"Cita - {nombre} - {servicio}"
-    )
-
-    precio_texto = (
-        f"${PRECIO_SERVICIO:,}"
-        .replace(
-            ",",
-            "."
-        )
-    )
-
-    descripcion = (
-        "Reserva realizada mediante "
-        "Asistente Virtual de Estilista Diego.\n\n"
-        f"Cliente: {nombre}\n"
-        f"WhatsApp: {telefono}\n"
-        f"Servicio: {servicio}\n"
-        f"Precio: {precio_texto}"
-    )
+    precio = f"${PRECIO_SERVICIO:,}".replace(",", ".")
 
     evento = {
-
-        "summary": titulo,
-
-        "description": descripcion,
-
+        "summary": f"Cita - {nombre} - {servicio}",
+        "description": (
+            "Reserva realizada por WhatsApp con el asistente virtual.\n\n"
+            f"Cliente: {nombre}\n"
+            f"WhatsApp: {telefono}\n"
+            f"Servicio: {servicio}\n"
+            f"Precio: {precio}"
+        ),
         "start": {
-
-            "dateTime":
-                inicio.isoformat(),
-
-            "timeZone":
-                str(TZ)
+            "dateTime": inicio.isoformat(),
+            "timeZone": str(TZ),
         },
-
         "end": {
-
-            "dateTime":
-                fin.isoformat(),
-
-            "timeZone":
-                str(TZ)
+            "dateTime": fin.isoformat(),
+            "timeZone": str(TZ),
         },
-
-        "conferenceData": {
-
-            "createRequest": {
-
-                "requestId":
-                    str(uuid.uuid4()),
-
-                "conferenceSolutionKey": {
-
-                    "type":
-                        "hangoutsMeet"
-                }
-            }
-        }
     }
 
     creado = service.events().insert(
-
-        calendarId=
-            GOOGLE_CALENDAR_ID,
-
+        calendarId=GOOGLE_CALENDAR_ID,
         body=evento,
-
-        conferenceDataVersion=1,
-
-        sendUpdates="all"
-
     ).execute()
 
-    meet_url = None
+    return creado
 
-    conference = creado.get(
-        "conferenceData",
-        {}
+
+# ============================================================
+# FORMATO
+# ============================================================
+
+DIAS = [
+    "lunes", "martes", "miércoles", "jueves",
+    "viernes", "sábado", "domingo"
+]
+
+
+def formatear_fecha(fecha):
+    return (
+        f"{DIAS[fecha.weekday()]} "
+        f"{fecha.day:02d}/{fecha.month:02d}/{fecha.year}"
     )
 
-    for entry in conference.get(
-        "entryPoints",
-        []
-    ):
 
-        if (
-            entry.get(
-                "entryPointType"
-            )
-            == "video"
-        ):
+def construir_inicio(fecha, hora_data):
+    if not fecha or not hora_data:
+        return None
 
-            meet_url = entry.get(
-                "uri"
-            )
+    hora, minuto = hora_data
 
-            break
-
-    return creado, meet_url
-
-
-# ============================================================
-# GUARDAR RESERVA
-# ============================================================
-
-def guardar_reserva(
-    telefono,
-    nombre,
-    servicio,
-    inicio,
-    evento,
-    meet_url
-):
-
-    fin = inicio + timedelta(
-        minutes=DURACION_CITA
+    naive = datetime.combine(
+        fecha.date(),
+        time(hora, minuto)
     )
 
-    RESERVAS.append({
-        "telefono": telefono,
-        "nombre": nombre,
-        "servicio": servicio,
-        "precio": PRECIO_SERVICIO,
-        "inicio": inicio,
-        "fin": fin,
-        "google_event_id": evento.get("id"),
-        "meet_url": meet_url
-    })
+    return TZ.localize(naive)
 
 
 # ============================================================
-# GPT
+# OPENAI
 # ============================================================
 
 SYSTEM_PROMPT = """
-Eres el Asistente Virtual de Estilista Diego.
+Eres el asistente virtual por WhatsApp de Estilista Diego en Chile.
 
-Atiendes clientes por WhatsApp.
-
-Hablas español natural de Chile.
-
-Eres amable, cercano, breve y humano.
-
+Tu tono es cercano, breve, natural y amable.
 No debes sonar como robot.
 
-Tu principal objetivo es ayudar al cliente a reservar
-una hora con Estilista Diego.
-
-HORARIO:
-
-Lunes a sábado:
-10:00 a 18:00.
-
-Domingo:
-cerrado.
-
-DURACIÓN:
-
-Cada cita dura 1 hora.
-
-PRECIO:
-
-Todos los servicios tienen un valor de $20.000.
-
-SERVICIOS:
-
+Servicios:
 - Corte de cabello
 - Barba
 - Corte y barba
 - Perfilado de barba
 
-IMPORTANTE:
+Precio:
+Todos los servicios cuestan $20.000.
 
-Puedes conversar normalmente.
+Horario:
+Lunes a sábado de 10:00 a 18:00.
+Domingo cerrado.
 
-Si el cliente solamente dice hola,
-saluda y conversa.
+Cada cita dura 1 hora.
 
-NO fuerces el agendamiento.
+Tu objetivo principal es ayudar a resolver preguntas y, cuando el cliente
+quiera, ayudarlo a reservar una hora.
 
-Si quiere agendar, necesitas:
-
-- nombre
-- servicio
-- día
-- hora
-
-Nunca inventes disponibilidad.
-
-Cuando el sistema te entregue horarios disponibles,
-solo puedes mencionar esos horarios.
-
-La reserva se realiza solamente en el calendario
-de Estilista Diego.
-
-No necesitas el calendario del cliente.
-
-Si falta un dato para reservar,
-pregúntalo de manera natural.
-
-No vuelvas a pedir información que el cliente
-ya entregó.
-
-Cuando el sistema confirme una reserva,
-informa:
-
+Para reservar necesitas:
 - nombre
 - servicio
 - fecha
 - hora
-- precio
-- confirmación
 
-Si existe Google Meet puedes mencionarlo.
-
-No digas que eres una IA salvo que el cliente
-pregunte directamente.
+Nunca inventes disponibilidad.
+Nunca confirmes una cita si el sistema no indicó expresamente que fue creada.
+Si el usuario solo saluda, saluda normalmente.
+No digas que eres una IA a menos que te lo pregunten directamente.
 """
 
 
-def preguntar_gpt(
-    telefono,
-    mensaje,
-    contexto_extra=""
-):
-
+def preguntar_gpt(telefono, mensaje, contexto_extra=""):
     if not client:
-
         return (
-            "Hola 😊 Estoy teniendo un problema "
-            "con el asistente en este momento. "
-            "Intenta nuevamente en unos minutos."
+            "Hola 😊 El asistente está activo, pero falta configurar "
+            "OPENAI_API_KEY en Render."
         )
 
-    historial = obtener_historial(
-        telefono,
-        20
-    )
+    historial = HISTORIALES.get(telefono, [])[-12:]
 
-    mensajes = [
-
+    input_messages = [
         {
             "role": "system",
             "content": SYSTEM_PROMPT
         }
-
     ]
 
     if contexto_extra:
-
-        mensajes.append({
-
+        input_messages.append({
             "role": "system",
-
-            "content":
-                contexto_extra
-
+            "content": contexto_extra
         })
 
-    for item in historial:
+    input_messages.extend(historial)
 
-        rol = item.get(
-            "rol"
-        )
-
-        if rol not in (
-            "user",
-            "assistant"
-        ):
-
-            continue
-
-        mensajes.append({
-
-            "role": rol,
-
-            "content":
-                item.get(
-                    "mensaje",
-                    ""
-                )
-
-        })
-
-    mensajes.append({
-
+    input_messages.append({
         "role": "user",
-
         "content": mensaje
-
     })
 
     try:
-
-        respuesta = client.chat.completions.create(
-
+        # Responses API
+        response = client.responses.create(
             model=OPENAI_MODEL,
-
-            messages=mensajes,
-
-            temperature=0.7
-
+            input=input_messages,
         )
+
+        texto = response.output_text.strip()
+
+        if not texto:
+            return "¿En qué te puedo ayudar? 😊"
+
+        return texto
+
+    except Exception:
+        print("ERROR OPENAI")
+        print(traceback.format_exc())
 
         return (
-            respuesta
-            .choices[0]
-            .message
-            .content
-            .strip()
+            "Disculpa 🙏 Tuve un problema procesando el mensaje. "
+            "Intenta nuevamente."
         )
-
-    except Exception as e:
-
-        print(
-            "ERROR OPENAI:"
-        )
-
-        print(
-            traceback.format_exc()
-        )
-
-        raise
 
 
 # ============================================================
-# DETECCIÓN DE INTENCIÓN
+# INTENCIÓN
 # ============================================================
 
-def parece_agendamiento(
-    texto
-):
-
+def parece_agendamiento(texto):
     texto = texto.lower()
 
     palabras = [
-
         "reservar",
         "reserva",
         "agendar",
@@ -1323,984 +536,190 @@ def parece_agendamiento(
         "disponibilidad",
         "disponible",
         "quiero ir",
-        "quiero una hora"
-
+        "pedir hora",
+        "tomar hora",
     ]
 
-    return any(
-        palabra in texto
-        for palabra in palabras
-    )
-
-
-# ============================================================
-# DETECTAR SERVICIO
-# ============================================================
-
-def detectar_servicio(
-    texto
-):
-
-    texto = texto.lower()
-
-    # primero las frases largas
-
-    if (
-        "corte y barba"
-        in texto
-        or "corte más barba"
-        in texto
-        or "corte mas barba"
-        in texto
-    ):
-
-        return "Corte y barba"
-
-    if (
-        "perfilado de barba"
-        in texto
-        or "perfilado"
-        in texto
-    ):
-
-        return "Perfilado de barba"
-
-    if "barba" in texto:
-
-        return "Barba"
-
-    if "corte de cabello" in texto:
-
-        return "Corte de cabello"
-
-    if (
-        re.search(
-            r"\bcorte\b",
-            texto
-        )
-    ):
-
-        return "Corte de cabello"
-
-    return None
-
-
-# ============================================================
-# DETECTAR HORA
-# ============================================================
-
-def detectar_hora(
-    texto
-):
-
-    texto = texto.lower()
-
-    patrones = [
-
-        r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b",
-
-        r"\b([01]?\d|2[0-3])\s*(?:hrs?|horas?)\b",
-
-    ]
-
-    for patron in patrones:
-
-        match = re.search(
-            patron,
-            texto
-        )
-
-        if match:
-
-            hora = int(
-                match.group(1)
-            )
-
-            if match.lastindex >= 2:
-
-                minuto = int(
-                    match.group(2)
-                )
-
-            else:
-
-                minuto = 0
-
-            # Casos como 7 pm
-
-            if (
-                "pm" in texto
-                and hora < 12
-            ):
-
-                hora += 12
-
-            if (
-                10 <= hora <= 18
-            ):
-
-                return hora, minuto
-
-    # formatos "7 pm", "7:30 pm"
-
-    match = re.search(
-        r"\b(1[0-2]|[1-9])"
-        r"(?:[:.]([0-5]\d))?"
-        r"\s*(am|pm)\b",
-        texto
-    )
-
-    if match:
-
-        hora = int(
-            match.group(1)
-        )
-
-        minuto = (
-            int(match.group(2))
-            if match.group(2)
-            else 0
-        )
-
-        periodo = match.group(3)
-
-        if periodo == "pm" and hora < 12:
-
-            hora += 12
-
-        if periodo == "am" and hora == 12:
-
-            hora = 0
-
-        if 10 <= hora <= 18:
-
-            return hora, minuto
-
-    return None
-
-
-# ============================================================
-# DETECTAR FECHA
-# ============================================================
-
-def detectar_fecha(
-    texto
-):
-
-    ahora = datetime.now(
-        TZ
-    )
-
-    try:
-
-        fecha = dateparser.parse(
-
-            texto,
-
-            languages=["es"],
-
-            settings={
-
-                "TIMEZONE":
-                    "America/Santiago",
-
-                "RETURN_AS_TIMEZONE_AWARE":
-                    True,
-
-                "PREFER_DATES_FROM":
-                    "future",
-
-                "RELATIVE_BASE":
-                    ahora
-            }
-        )
-
-        if not fecha:
-
-            return None
-
-        return fecha.astimezone(
-            TZ
-        )
-
-    except Exception:
-
-        print(
-            "ERROR detectando fecha:"
-        )
-
-        print(
-            traceback.format_exc()
-        )
-
-        return None
-
-
-# ============================================================
-# OBTENER DATOS DE CONVERSACIÓN
-# ============================================================
-
-def extraer_datos_conversacion(
-    telefono,
-    mensaje
-):
-
-    historial = obtener_historial(
-        telefono,
-        30
-    )
-
-    texto_total = ""
-
-    for item in historial:
-
-        texto_total += (
-            " "
-            + item.get(
-                "mensaje",
-                ""
-            )
-        )
-
-    texto_total += (
-        " "
-        + mensaje
-    )
-
-    cliente = obtener_cliente(
-        telefono
-    )
-
-    nombre = None
-
-    if cliente:
-
-        nombre = cliente.get(
-            "nombre"
-        )
-
-    servicio = detectar_servicio(
-        texto_total
-    )
-
-    fecha = detectar_fecha(
-        texto_total
-    )
-
-    hora_data = detectar_hora(
-        texto_total
-    )
-
-    return {
-        "nombre": nombre,
-        "servicio": servicio,
-        "fecha": fecha,
-        "hora": hora_data
-    }
-
-
-# ============================================================
-# DETECTAR NOMBRE
-# ============================================================
-
-def detectar_nombre(
-    texto
-):
-
-    patrones = [
-
-        r"(?:me llamo|mi nombre es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ ]{2,40})",
-
-        r"(?:soy)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ ]{2,40})",
-
-        r"(?:nombre)\s+(?:es\s+)?([A-Za-zÁÉÍÓÚÑáéíóúñ ]{2,40})"
-
-    ]
-
-    for patron in patrones:
-
-        match = re.search(
-            patron,
-            texto,
-            re.IGNORECASE
-        )
-
-        if match:
-
-            nombre = match.group(
-                1
-            ).strip()
-
-            nombre = re.sub(
-                r"\s+",
-                " ",
-                nombre
-            )
-
-            # evitar que capture demasiado
-
-            palabras = nombre.split()
-
-            if len(palabras) > 4:
-
-                nombre = " ".join(
-                    palabras[:4]
-                )
-
-            return nombre.title()
-
-    return None
-
-
-# ============================================================
-# CONSTRUIR DATETIME
-# ============================================================
-
-def construir_inicio(
-    fecha,
-    hora_data
-):
-
-    if not fecha or not hora_data:
-
-        return None
-
-    hora, minuto = hora_data
-
-    naive = datetime.combine(
-
-        fecha.date(),
-
-        time(
-            hora,
-            minuto
-        )
-    )
-
-    return TZ.localize(
-        naive
-    )
-
-
-# ============================================================
-# FORMATEAR FECHA
-# ============================================================
-
-def nombre_dia(
-    fecha
-):
-
-    dias = [
-
-        "lunes",
-        "martes",
-        "miércoles",
-        "jueves",
-        "viernes",
-        "sábado",
-        "domingo"
-
-    ]
-
-    return dias[
-        fecha.weekday()
-    ]
-
-
-def formatear_fecha(
-    fecha
-):
-
-    return (
-        f"{nombre_dia(fecha)} "
-        f"{fecha.day:02d}/"
-        f"{fecha.month:02d}/"
-        f"{fecha.year}"
-    )
-
-
-# ============================================================
-# FORMATEAR HORARIOS
-# ============================================================
-
-def formatear_horarios(
-    horarios
-):
-
-    if not horarios:
-
-        return (
-            "No encontré horas disponibles "
-            "para ese día 😕"
-        )
-
-    textos = []
-
-    for hora in horarios:
-
-        textos.append(
-            hora.strftime(
-                "%H:%M"
-            )
-        )
-
-    return ", ".join(
-        textos
-    )
+    return any(p in texto for p in palabras)
 
 
 # ============================================================
 # PROCESAR MENSAJE
 # ============================================================
 
-def procesar_mensaje(
-    telefono,
-    mensaje
-):
+def procesar_mensaje(telefono, mensaje):
+    cliente = obtener_cliente(telefono)
 
-    print(
-        "------------------------------------------"
-    )
-
-    print(
-        f"WHATSAPP DE: {telefono}"
-    )
-
-    print(
-        f"MENSAJE: {mensaje}"
-    )
-
-    print(
-        "------------------------------------------"
-    )
-
-    cliente = obtener_cliente(
-        telefono
-    )
-
-    # --------------------------------------------------------
-    # DETECTAR NOMBRE DIRECTAMENTE
-    # --------------------------------------------------------
-
-    nombre_detectado = detectar_nombre(
-        mensaje
-    )
-
-    if nombre_detectado:
-
-        guardar_cliente(
-            telefono,
-            nombre_detectado
-        )
-
-    cliente = obtener_cliente(
-        telefono
-    )
-
-    nombre_actual = None
-
-    if cliente:
-
-        nombre_actual = cliente.get(
-            "nombre"
-        )
-
-    # --------------------------------------------------------
-    # SI NO ES AGENDAMIENTO
-    # --------------------------------------------------------
-
-    if not parece_agendamiento(
-        mensaje
-    ):
-
-        respuesta = preguntar_gpt(
-
-            telefono,
-
-            mensaje
-
-        )
-
-        guardar_mensaje(
-
-            telefono,
-
-            "user",
-
-            mensaje
-
-        )
-
-        guardar_mensaje(
-
-            telefono,
-
-            "assistant",
-
-            respuesta
-
-        )
-
-        return respuesta
-
-    # --------------------------------------------------------
-    # EXTRAER DATOS
-    # --------------------------------------------------------
-
-    datos = extraer_datos_conversacion(
-
-        telefono,
-
-        mensaje
-
-    )
-
-    nombre = (
-        nombre_actual
-        or datos["nombre"]
-    )
-
-    servicio = datos["servicio"]
-
-    fecha = datos["fecha"]
-
-    hora_data = datos["hora"]
-
-    # --------------------------------------------------------
-    # GUARDAR NOMBRE SI EXISTE
-    # --------------------------------------------------------
+    nombre = detectar_nombre(mensaje)
+    servicio = detectar_servicio(mensaje)
+    fecha = detectar_fecha(mensaje)
+    hora_data = detectar_hora(mensaje)
 
     if nombre:
+        cliente["nombre"] = nombre
 
-        guardar_cliente(
-            telefono,
-            nombre
-        )
-
-    # --------------------------------------------------------
-    # SI HAY FECHA
-    # --------------------------------------------------------
+    if servicio:
+        cliente["servicio"] = servicio
 
     if fecha:
+        cliente["fecha"] = fecha
 
-        if fecha.date() < datetime.now(
-            TZ
-        ).date():
+    if hora_data:
+        cliente["hora"] = hora_data
 
-            respuesta = (
-                "Esa fecha ya pasó 😅 "
-                "Dime qué día te gustaría "
-                "venir y revisamos disponibilidad."
-            )
+    # Si ya estábamos en proceso de reserva, seguimos aunque el nuevo
+    # mensaje sea solo "15:00", "corte", "Antonio", etc.
+    en_reserva = any([
+        cliente.get("servicio"),
+        cliente.get("fecha"),
+        cliente.get("hora"),
+    ])
 
-            guardar_mensaje(
-                telefono,
-                "user",
-                mensaje
-            )
-
-            guardar_mensaje(
-                telefono,
-                "assistant",
-                respuesta
-            )
-
-            return respuesta
-
-        if fecha.weekday() == 6:
-
-            respuesta = (
-                "Los domingos no atiendo 😊 "
-                "Podemos buscar una hora de "
-                "lunes a sábado."
-            )
-
-            guardar_mensaje(
-                telefono,
-                "user",
-                mensaje
-            )
-
-            guardar_mensaje(
-                telefono,
-                "assistant",
-                respuesta
-            )
-
-            return respuesta
-
-    # --------------------------------------------------------
-    # SI HAY FECHA PERO NO HORA
-    # --------------------------------------------------------
-
-    if fecha and not hora_data:
-
-        try:
-
-            horarios = buscar_horarios_disponibles(
-
-                fecha.date(),
-
-                cantidad=5
-
-            )
-
-            horarios_texto = (
-                formatear_horarios(
-                    horarios
-                )
-            )
-
-            contexto = f"""
-El cliente quiere agendar.
-
-Fecha:
-{formatear_fecha(fecha)}
-
-Horarios reales disponibles:
-{horarios_texto}
-
-Servicio detectado:
-{servicio or "todavía no indicado"}
-
-Nombre:
-{nombre or "todavía no indicado"}
-
-Debes continuar la conversación naturalmente.
-
-No inventes horarios.
-
-Si faltan datos, pregunta solo lo necesario.
-"""
-
-            respuesta = preguntar_gpt(
-
-                telefono,
-
-                mensaje,
-
-                contexto
-
-            )
-
-        except Exception:
-
-            print(
-                "ERROR CONSULTANDO CALENDARIO:"
-            )
-
-            print(
-                traceback.format_exc()
-            )
-
-            respuesta = (
-                "Estoy revisando la agenda "
-                "en este momento 🙏 "
-                "Intenta nuevamente en unos segundos."
-            )
-
-        guardar_mensaje(
-            telefono,
-            "user",
-            mensaje
-        )
-
-        guardar_mensaje(
-            telefono,
-            "assistant",
-            respuesta
-        )
-
+    if not parece_agendamiento(mensaje) and not en_reserva:
+        respuesta = preguntar_gpt(telefono, mensaje)
+        guardar_historial(telefono, "user", mensaje)
+        guardar_historial(telefono, "assistant", respuesta)
         return respuesta
 
-    # --------------------------------------------------------
-    # SI HAY FECHA + HORA
-    # --------------------------------------------------------
+    nombre = cliente.get("nombre")
+    servicio = cliente.get("servicio")
+    fecha = cliente.get("fecha")
+    hora_data = cliente.get("hora")
 
-    if fecha and hora_data:
+    ahora = datetime.now(TZ)
 
-        inicio = construir_inicio(
+    if fecha and fecha.date() < ahora.date():
+        cliente["fecha"] = None
+        cliente["hora"] = None
+        return "Esa fecha ya pasó 😅. ¿Qué otro día te gustaría venir?"
 
-            fecha,
-
-            hora_data
-
+    if fecha and fecha.weekday() == 6:
+        cliente["fecha"] = None
+        cliente["hora"] = None
+        return (
+            "Los domingos no atendemos 😊. "
+            "Podemos buscar una hora de lunes a sábado."
         )
 
-        if not inicio:
+    if not fecha:
+        return "Perfecto 😊 ¿Para qué día quieres reservar?"
+
+    # Si fecha pero aún no hay hora, mostrar disponibilidad real.
+    if fecha and not hora_data:
+        if not google_configurado():
+            return (
+                f"Tengo registrado {formatear_fecha(fecha)}, pero falta "
+                "configurar Google Calendar en Render para revisar disponibilidad."
+            )
+
+        try:
+            horarios = buscar_horarios_disponibles(fecha.date(), cantidad=5)
+
+            if not horarios:
+                return (
+                    f"No encontré horas disponibles para "
+                    f"{formatear_fecha(fecha)} 😕. ¿Quieres probar otro día?"
+                )
+
+            opciones = ", ".join(h.strftime("%H:%M") for h in horarios)
+
+            faltante = ""
+            if not servicio:
+                faltante = "\n\nTambién dime qué servicio necesitas."
 
             return (
-                "No pude interpretar bien "
-                "la hora 😅"
+                f"Para {formatear_fecha(fecha)} tengo estas horas disponibles:\n"
+                f"🕐 {opciones}\n\n"
+                f"¿Cuál te sirve?{faltante}"
             )
 
-        # --------------------------------------------
-        # VALIDAR HORARIO
-        # --------------------------------------------
-
-        if not es_horario_valido(
-            inicio
-        ):
-
-            respuesta = (
-                "Ese horario está fuera de atención 😊\n\n"
-                "Trabajo de lunes a sábado "
-                "entre las 10:00 y las 18:00.\n\n"
-                "Dime otra hora y la revisamos."
+        except Exception:
+            print("ERROR CALENDARIO")
+            print(traceback.format_exc())
+            return (
+                "Tuve un problema consultando Google Calendar 🙏. "
+                "Revisa las variables de Google en Render."
             )
 
-            guardar_mensaje(
-                telefono,
-                "user",
-                mensaje
-            )
+    inicio = construir_inicio(fecha, hora_data)
 
-            guardar_mensaje(
-                telefono,
-                "assistant",
-                respuesta
-            )
+    if not es_horario_valido(inicio):
+        cliente["hora"] = None
+        return (
+            "Ese horario está fuera de atención 😊.\n"
+            "Atendemos de lunes a sábado entre 10:00 y 18:00.\n"
+            "Dime otra hora."
+        )
 
-            return respuesta
+    if not servicio:
+        return (
+            "Perfecto. ¿Qué servicio quieres?\n\n"
+            "💈 Corte de cabello\n"
+            "🧔 Barba\n"
+            "✂️ Corte y barba\n"
+            "✨ Perfilado de barba"
+        )
 
-        # --------------------------------------------
-        # SI FALTA SERVICIO
-        # --------------------------------------------
+    if not nombre:
+        # Permite que un mensaje corto como "Antonio" sea tomado como nombre
+        if re.fullmatch(r"[A-Za-zÁÉÍÓÚÑáéíóúñ ]{2,40}", mensaje.strip()):
+            posible = mensaje.strip().title()
 
-        if not servicio:
+            palabras_reservadas = {
+                "corte", "barba", "perfilado", "hola", "si", "sí",
+                "no", "gracias", "mañana", "hoy"
+            }
 
-            respuesta = preguntar_gpt(
-
-                telefono,
-
-                mensaje,
-
-                f"""
-El cliente ya indicó la fecha
-{formatear_fecha(fecha)}
-y la hora
-{inicio.strftime("%H:%M")}.
-
-Todavía falta conocer el servicio.
-
-Servicios disponibles:
-- Corte de cabello
-- Barba
-- Corte y barba
-- Perfilado de barba
-
-Pregunta naturalmente cuál desea.
-"""
-
-            )
-
-            guardar_mensaje(
-                telefono,
-                "user",
-                mensaje
-            )
-
-            guardar_mensaje(
-                telefono,
-                "assistant",
-                respuesta
-            )
-
-            return respuesta
-
-        # --------------------------------------------
-        # SI FALTA NOMBRE
-        # --------------------------------------------
+            if posible.lower() not in palabras_reservadas:
+                cliente["nombre"] = posible
+                nombre = posible
 
         if not nombre:
+            return "Ya casi 😊. ¿A nombre de quién hago la reserva?"
 
-            respuesta = preguntar_gpt(
+    if not google_configurado():
+        return (
+            "Ya tengo todos los datos, pero falta configurar Google Calendar "
+            "en Render. Revisa GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID y "
+            "GOOGLE_CLIENT_SECRET."
+        )
 
-                telefono,
-
-                mensaje,
-
-                f"""
-El cliente quiere reservar:
-
-Servicio:
-{servicio}
-
-Fecha:
-{formatear_fecha(fecha)}
-
-Hora:
-{inicio.strftime("%H:%M")}
-
-Falta solamente su nombre.
-
-Pregunta de manera natural cómo se llama.
-"""
-
-            )
-
-            guardar_mensaje(
-                telefono,
-                "user",
-                mensaje
-            )
-
-            guardar_mensaje(
-                telefono,
-                "assistant",
-                respuesta
-            )
-
-            return respuesta
-
-        # --------------------------------------------
-        # COMPROBAR DISPONIBILIDAD
-        # --------------------------------------------
-
-        try:
-
-            disponible = esta_disponible(
-                inicio
-            )
-
-        except Exception:
-
-            print(
-                "ERROR COMPROBANDO DISPONIBILIDAD:"
-            )
-
-            print(
-                traceback.format_exc()
-            )
-
-            raise
+    try:
+        disponible = esta_disponible(inicio)
 
         if not disponible:
+            cliente["hora"] = None
 
             horarios = buscar_horarios_disponibles(
-
                 fecha.date(),
-
                 cantidad=5
-
             )
 
-            horarios_texto = (
-                formatear_horarios(
-                    horarios
+            opciones = ", ".join(
+                h.strftime("%H:%M")
+                for h in horarios
+            )
+
+            if opciones:
+                return (
+                    f"La hora {inicio.strftime('%H:%M')} ya está ocupada 😕.\n\n"
+                    f"Tengo disponibles: {opciones}\n"
+                    "¿Cuál te sirve?"
                 )
+
+            return (
+                "Esa hora ya está ocupada y no encontré otra disponible "
+                "ese día 😕. ¿Probamos con otra fecha?"
             )
 
-            respuesta = (
-                f"La hora {inicio.strftime('%H:%M')} "
-                f"ya está ocupada 😕\n\n"
-                f"Para ese día tengo disponibles: "
-                f"{horarios_texto}\n\n"
-                f"¿Te sirve alguna?"
-            )
-
-            guardar_mensaje(
-                telefono,
-                "user",
-                mensaje
-            )
-
-            guardar_mensaje(
-                telefono,
-                "assistant",
-                respuesta
-            )
-
-            return respuesta
-
-        # --------------------------------------------
-        # CREAR RESERVA
-        # --------------------------------------------
-
-        try:
-
-            print(
-                "CREANDO RESERVA GOOGLE..."
-            )
-
-            evento, meet_url = (
-                crear_reserva_google(
-
-                    nombre,
-
-                    telefono,
-
-                    servicio,
-
-                    inicio
-
-                )
-            )
-
-            guardar_reserva(
-
-                telefono,
-
-                nombre,
-
-                servicio,
-
-                inicio,
-
-                evento,
-
-                meet_url
-
-            )
-
-            print(
-                "RESERVA CREADA CORRECTAMENTE"
-            )
-
-        except Exception:
-
-            print(
-                "ERROR CREANDO RESERVA:"
-            )
-
-            print(
-                traceback.format_exc()
-            )
-
-            respuesta = (
-                "Intenté reservar esa hora, "
-                "pero tuve un problema al "
-                "guardar la cita en la agenda 😕.\n\n"
-                "No te preocupes, no voy a decir "
-                "que quedó agendada hasta confirmar "
-                "correctamente."
-            )
-
-            guardar_mensaje(
-                telefono,
-                "user",
-                mensaje
-            )
-
-            guardar_mensaje(
-                telefono,
-                "assistant",
-                respuesta
-            )
-
-            return respuesta
-
-        # --------------------------------------------
-        # CONFIRMACIÓN
-        # --------------------------------------------
-
-        precio_texto = (
-            f"${PRECIO_SERVICIO:,}"
-            .replace(
-                ",",
-                "."
-            )
+        evento = crear_reserva_google(
+            nombre=nombre,
+            telefono=telefono,
+            servicio=servicio,
+            inicio=inicio,
         )
+
+        precio = f"${PRECIO_SERVICIO:,}".replace(",", ".")
 
         respuesta = (
             "¡Listo! 🎉 Tu cita quedó agendada.\n\n"
@@ -2308,852 +727,142 @@ Pregunta de manera natural cómo se llama.
             f"💈 Servicio: {servicio}\n"
             f"📅 Fecha: {formatear_fecha(fecha)}\n"
             f"🕐 Hora: {inicio.strftime('%H:%M')}\n"
-            f"💰 Precio: {precio_texto}\n\n"
+            f"💰 Precio: {precio}\n\n"
             "Te espero 😊"
         )
 
-        if meet_url:
+        # Limpiar datos de reserva, conservando nombre.
+        CLIENTES[telefono] = {
+            "telefono": telefono,
+            "nombre": nombre,
+            "servicio": None,
+            "fecha": None,
+            "hora": None,
+        }
 
-            respuesta += (
-                f"\n\n🔗 Google Meet:\n"
-                f"{meet_url}"
-            )
+        print("RESERVA GOOGLE:", evento.get("id"))
 
-        guardar_mensaje(
-            telefono,
-            "user",
-            mensaje
-        )
-
-        guardar_mensaje(
-            telefono,
-            "assistant",
-            respuesta
-        )
+        guardar_historial(telefono, "user", mensaje)
+        guardar_historial(telefono, "assistant", respuesta)
 
         return respuesta
 
-    # --------------------------------------------------------
-    # CONVERSACIÓN DE AGENDAMIENTO
-    # --------------------------------------------------------
+    except Exception:
+        print("ERROR CREANDO RESERVA")
+        print(traceback.format_exc())
 
-    contexto = f"""
-El cliente está intentando agendar una cita.
-
-Nombre conocido:
-{nombre or "No indicado"}
-
-Servicio conocido:
-{servicio or "No indicado"}
-
-Fecha conocida:
-{
-    formatear_fecha(fecha)
-    if fecha
-    else "No indicada"
-}
-
-Hora conocida:
-{
-    hora_data
-    if hora_data
-    else "No indicada"
-}
-
-Precio:
-$20.000
-
-Duración:
-1 hora
-
-Horario:
-Lunes a sábado de 10:00 a 18:00.
-
-Si falta información,
-pregunta de manera natural.
-
-No inventes disponibilidad.
-"""
-
-    respuesta = preguntar_gpt(
-
-        telefono,
-
-        mensaje,
-
-        contexto
-
-    )
-
-    guardar_mensaje(
-        telefono,
-        "user",
-        mensaje
-    )
-
-    guardar_mensaje(
-        telefono,
-        "assistant",
-        respuesta
-    )
-
-    return respuesta
+        return (
+            "No pude guardar la reserva en Google Calendar 😕. "
+            "No la consideraré confirmada hasta que pueda crearla correctamente."
+        )
 
 
 # ============================================================
-# WEBHOOK WHATSAPP
+# WHATSAPP / TWILIO WEBHOOK
+# ============================================================
+#
+# IMPORTANTE:
+# Tu Sandbox está configurado actualmente con:
+# https://chatbot-laortiga-9.onrender.com/whatsapp/webhook
+#
+# Dejamos además /webhook/whatsapp como alias por compatibilidad.
 # ============================================================
 
-@app.route(
-    "/webhook/whatsapp",
-    methods=["POST"]
-)
+@app.route("/whatsapp/webhook", methods=["POST"])
+@app.route("/webhook/whatsapp", methods=["POST"])
 def whatsapp_webhook():
-
-    print(
-        "=========================================="
-    )
-
-    print(
-        "WHATSAPP WEBHOOK RECIBIDO"
-    )
-
-    print(
-        "=========================================="
-    )
-
     try:
+        telefono = request.form.get("From", "").strip()
+        mensaje = request.form.get("Body", "").strip()
+        message_sid = request.form.get("MessageSid", "").strip()
 
-        telefono = request.form.get(
-            "From",
-            ""
-        ).strip()
-
-        mensaje = request.form.get(
-            "Body",
-            ""
-        ).strip()
-
-        message_sid = request.form.get(
-            "MessageSid"
-        )
-
-        print(
-            f"From: {telefono}"
-        )
-
-        print(
-            f"Body: {mensaje}"
-        )
-
-        print(
-            f"MessageSid: {message_sid}"
-        )
+        print("=" * 60)
+        print("TWILIO WEBHOOK")
+        print("From:", telefono)
+        print("Body:", mensaje)
+        print("MessageSid:", message_sid)
+        print("=" * 60)
 
         if not telefono:
+            return "Missing From", 400
 
-            print(
-                "ERROR: falta From"
-            )
+        twiml = MessagingResponse()
 
-            return (
-                "Missing From",
-                400
-            )
-
+        # Algunos eventos pueden llegar sin texto.
         if not mensaje:
-
-            print(
-                "ERROR: falta Body"
+            twiml.message(
+                "Por ahora puedo procesar mensajes de texto 😊."
             )
-
-            return (
-                "Missing Body",
-                400
-            )
-
-        # ----------------------------------------------------
-        # GUARDAR CLIENTE
-        # ----------------------------------------------------
-
-        guardar_cliente(
-            telefono
-        )
-
-        # ----------------------------------------------------
-        # PROCESAR
-        # ----------------------------------------------------
+            return str(twiml), 200, {
+                "Content-Type": "application/xml; charset=utf-8"
+            }
 
         respuesta = procesar_mensaje(
-
-            telefono,
-
-            mensaje
-
+            telefono=telefono,
+            mensaje=mensaje
         )
 
-        print(
-            "RESPUESTA:"
-        )
+        twiml.message(respuesta)
 
-        print(
-            respuesta
-        )
+        return str(twiml), 200, {
+            "Content-Type": "application/xml; charset=utf-8"
+        }
 
-        # ----------------------------------------------------
-        # TWIML
-        # ----------------------------------------------------
+    except Exception:
+        print("ERROR WEBHOOK")
+        print(traceback.format_exc())
 
         twiml = MessagingResponse()
-
         twiml.message(
-            respuesta
+            "Disculpa 🙏 Estoy teniendo un problema técnico. "
+            "Intenta nuevamente."
         )
 
-        xml = str(
-            twiml
-        )
-
-        print(
-            "TWIML GENERADO CORRECTAMENTE"
-        )
-
-        return (
-            xml,
-            200,
-            {
-                "Content-Type":
-                    "application/xml; charset=utf-8"
-            }
-        )
-
-    except Exception as e:
-
-        print(
-            "=========================================="
-        )
-
-        print(
-            "ERROR WEBHOOK WHATSAPP"
-        )
-
-        print(
-            "=========================================="
-        )
-
-        print(
-            traceback.format_exc()
-        )
-
-        twiml = MessagingResponse()
-
-        twiml.message(
-            "Disculpa 🙏 Estoy teniendo un "
-            "pequeño problema técnico. "
-            "Por favor intenta nuevamente."
-        )
-
-        return (
-            str(twiml),
-            200,
-            {
-                "Content-Type":
-                    "application/xml; charset=utf-8"
-            }
-        )
+        return str(twiml), 200, {
+            "Content-Type": "application/xml; charset=utf-8"
+        }
 
 
 # ============================================================
-# HEALTH CHECK
+# HEALTH / HOME
 # ============================================================
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def home():
-
-    return """
-    <!DOCTYPE html>
-
-    <html>
-
-    <head>
-
-        <meta charset="UTF-8">
-
-        <title>
-            Asistente Virtual Estilista Diego
-        </title>
-
-    </head>
-
-    <body style="
-        font-family: Arial;
-        max-width: 800px;
-        margin: 60px auto;
-        padding: 20px;
-    ">
-
-        <h1>
-            💈 Asistente Virtual de Estilista Diego
-        </h1>
-
-        <p>
-            Sistema funcionando correctamente.
-        </p>
-
-        <hr>
-
-        <p>
-            💬 WhatsApp: Twilio
-        </p>
-
-        <p>
-            🤖 IA: OpenAI
-        </p>
-
-        <p>
-            📅 Agenda: Google Calendar
-        </p>
-
-        <p>
-            🧠 Datos temporales: memoria del servidor
-        </p>
-
-        <p>
-            <a href="/health">
-                Ver estado del sistema
-            </a>
-        </p>
-
-    </body>
-
-    </html>
-    """
+    return jsonify({
+        "status": "ok",
+        "service": "Asistente Virtual Estilista Diego",
+        "whatsapp_webhook": "/whatsapp/webhook",
+        "alternate_webhook": "/webhook/whatsapp",
+    })
 
 
-@app.route(
-    "/health"
-)
+@app.route("/health", methods=["GET"])
 def health():
-
-    estado = {
-
-        "status":
-            "ok",
-
-        "service":
-            "estilista-diego",
-
-        "openai":
-            bool(OPENAI_API_KEY),
-
-        "twilio_sid":
-            bool(TWILIO_ACCOUNT_SID),
-
-        "twilio_auth_token":
-            bool(TWILIO_AUTH_TOKEN),
-
-        "twilio_whatsapp_from":
-            TWILIO_WHATSAPP_FROM,
-
-        "google_refresh_token":
-            bool(GOOGLE_REFRESH_TOKEN),
-
-        "google_client_id":
-            bool(GOOGLE_CLIENT_ID),
-
-        "google_client_secret":
-            bool(GOOGLE_CLIENT_SECRET)
-
-    }
-
-    return jsonify(
-        estado
-    )
+    return jsonify({
+        "status": "ok",
+        "openai": bool(OPENAI_API_KEY),
+        "openai_model": OPENAI_MODEL,
+        "twilio_account_sid": bool(TWILIO_ACCOUNT_SID),
+        "twilio_auth_token": bool(TWILIO_AUTH_TOKEN),
+        "twilio_whatsapp_from": TWILIO_WHATSAPP_FROM,
+        "google_calendar": google_configurado(),
+        "google_calendar_id": GOOGLE_CALENDAR_ID,
+        "timezone": str(TZ),
+    })
 
 
 # ============================================================
-# LOGIN ADMIN
+# TEST LOCAL DEL WEBHOOK
 # ============================================================
 
-@app.route(
-    "/admin/login",
-    methods=[
-        "GET",
-        "POST"
-    ]
-)
-def admin_login():
-
-    if request.method == "POST":
-
-        usuario = request.form.get(
-            "usuario",
-            ""
-        )
-
-        password = request.form.get(
-            "password",
-            ""
-        )
-
-        if (
-            usuario == ADMIN_USER
-            and password == ADMIN_PASSWORD
-        ):
-
-            session["admin"] = True
-
-            return redirect(
-                url_for(
-                    "admin"
-                )
-            )
-
-        return render_template_string(
-
-            ADMIN_LOGIN_HTML,
-
-            error=
-                "Usuario o contraseña incorrectos"
-
-        )
-
-    return render_template_string(
-        ADMIN_LOGIN_HTML
-    )
-
-
-# ============================================================
-# LOGOUT
-# ============================================================
-
-@app.route(
-    "/admin/logout"
-)
-def admin_logout():
-
-    session.clear()
-
-    return redirect(
-        url_for(
-            "admin_login"
-        )
-    )
-
-
-# ============================================================
-# PANEL ADMIN
-# ============================================================
-
-@app.route(
-    "/admin"
-)
-def admin():
-
-    if not session.get(
-        "admin"
-    ):
-
-        return redirect(
-            url_for(
-                "admin_login"
-            )
-        )
-
-    reservas = sorted(
-        RESERVAS,
-        key=lambda r: r["inicio"],
-        reverse=True
-    )[:100]
-
-    return render_template_string(
-
-        ADMIN_HTML,
-
-        reservas=reservas
-
-    )
-
-
-# ============================================================
-# HTML LOGIN
-# ============================================================
-
-ADMIN_LOGIN_HTML = """
-
-<!DOCTYPE html>
-
-<html>
-
-<head>
-
-<meta charset="UTF-8">
-
-<title>
-Administración
-</title>
-
-<style>
-
-body {
-
-    font-family: Arial;
-
-    background: #f4f4f4;
-
-}
-
-.box {
-
-    width: 350px;
-
-    margin: 100px auto;
-
-    background: white;
-
-    padding: 30px;
-
-    border-radius: 12px;
-
-    box-shadow:
-        0 4px 20px
-        rgba(0,0,0,.1);
-
-}
-
-input {
-
-    width: 100%;
-
-    padding: 12px;
-
-    margin: 8px 0;
-
-    box-sizing: border-box;
-
-}
-
-button {
-
-    width: 100%;
-
-    padding: 12px;
-
-    cursor: pointer;
-
-}
-
-.error {
-
-    color: red;
-
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="box">
-
-<h2>
-💈 Administración
-</h2>
-
-{% if error %}
-
-<p class="error">
-{{ error }}
-</p>
-
-{% endif %}
-
-<form method="POST">
-
-<input
-    name="usuario"
-    placeholder="Usuario"
-    required
->
-
-<input
-    type="password"
-    name="password"
-    placeholder="Contraseña"
-    required
->
-
-<button type="submit">
-Ingresar
-</button>
-
-</form>
-
-</div>
-
-</body>
-
-</html>
-
-"""
-
-
-# ============================================================
-# HTML ADMIN
-# ============================================================
-
-ADMIN_HTML = """
-
-<!DOCTYPE html>
-
-<html>
-
-<head>
-
-<meta charset="UTF-8">
-
-<title>
-Reservas - Estilista Diego
-</title>
-
-<style>
-
-body {
-
-    font-family: Arial;
-
-    margin: 30px;
-
-}
-
-table {
-
-    border-collapse: collapse;
-
-    width: 100%;
-
-}
-
-th,
-td {
-
-    border: 1px solid #ddd;
-
-    padding: 10px;
-
-    text-align: left;
-
-}
-
-th {
-
-    background: #eee;
-
-}
-
-a {
-
-    text-decoration: none;
-
-}
-
-</style>
-
-</head>
-
-<body>
-
-<h1>
-💈 Reservas - Estilista Diego
-</h1>
-
-<p>
-
-<a href="/admin/logout">
-Cerrar sesión
-</a>
-
-</p>
-
-<table>
-
-<tr>
-
-<th>
-Fecha
-</th>
-
-<th>
-Cliente
-</th>
-
-<th>
-WhatsApp
-</th>
-
-<th>
-Servicio
-</th>
-
-<th>
-Precio
-</th>
-
-<th>
-Google Meet
-</th>
-
-</tr>
-
-{% for reserva in reservas %}
-
-<tr>
-
-<td>
-{{ reserva.inicio }}
-</td>
-
-<td>
-{{ reserva.nombre }}
-</td>
-
-<td>
-{{ reserva.telefono }}
-</td>
-
-<td>
-{{ reserva.servicio }}
-</td>
-
-<td>
-
-${{
-    "{:,}".format(
-        reserva.precio
-    ).replace(
-        ",",
-        "."
-    )
-}}
-
-</td>
-
-<td>
-
-{% if reserva.meet_url %}
-
-<a
-    href="{{ reserva.meet_url }}"
-    target="_blank"
->
-Abrir Meet
-</a>
-
-{% else %}
-
--
-
-{% endif %}
-
-</td>
-
-</tr>
-
-{% endfor %}
-
-</table>
-
-</body>
-
-</html>
-
-"""
-
-
-# ============================================================
-# INICIALIZACIÓN
-# ============================================================
-
-print(
-    "=========================================="
-)
-
-print(
-    "INICIANDO ASISTENTE ESTILISTA DIEGO"
-)
-
-print(
-    "=========================================="
-)
-
-print(
-    "CONFIGURACIÓN:"
-)
-
-print(
-    "OPENAI_API_KEY:",
-    "OK"
-    if OPENAI_API_KEY
-    else "FALTA"
-)
-
-
-print(
-    "TWILIO_ACCOUNT_SID:",
-    "OK"
-    if TWILIO_ACCOUNT_SID
-    else "FALTA"
-)
-
-print(
-    "TWILIO_AUTH_TOKEN:",
-    "OK"
-    if TWILIO_AUTH_TOKEN
-    else "FALTA"
-)
-
-print(
-    "TWILIO_WHATSAPP_FROM:",
-    TWILIO_WHATSAPP_FROM
-)
-
-print(
-    "GOOGLE_REFRESH_TOKEN:",
-    "OK"
-    if GOOGLE_REFRESH_TOKEN
-    else "FALTA"
-)
-
-print(
-    "GOOGLE_CLIENT_ID:",
-    "OK"
-    if GOOGLE_CLIENT_ID
-    else "FALTA"
-)
-
-print(
-    "GOOGLE_CLIENT_SECRET:",
-    "OK"
-    if GOOGLE_CLIENT_SECRET
-    else "FALTA"
-)
-
-print(
-    "OPENAI_MODEL:",
-    OPENAI_MODEL
-)
-
-print(
-    "TIMEZONE:",
-    TZ
-)
-
-print(
-    "=========================================="
-)
-
-
+@app.route("/test", methods=["GET"])
+def test():
+    return jsonify({
+        "ok": True,
+        "message": "Servidor funcionando",
+        "webhook": "POST /whatsapp/webhook"
+    })
 
 
 # ============================================================
@@ -3161,32 +870,20 @@ print(
 # ============================================================
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
 
-    port = int(
-        os.environ.get(
-            "PORT",
-            10000
-        )
-    )
-
-    print(
-        "=========================================="
-    )
-
-    print(
-        f"INICIANDO FLASK EN PUERTO {port}"
-    )
-
-    print(
-        "=========================================="
-    )
+    print("=" * 60)
+    print("INICIANDO ASISTENTE")
+    print("PORT:", port)
+    print("OPENAI:", "OK" if OPENAI_API_KEY else "FALTA")
+    print("TWILIO SID:", "OK" if TWILIO_ACCOUNT_SID else "FALTA")
+    print("TWILIO TOKEN:", "OK" if TWILIO_AUTH_TOKEN else "FALTA")
+    print("GOOGLE CALENDAR:", "OK" if google_configurado() else "FALTA")
+    print("WEBHOOK PRINCIPAL: /whatsapp/webhook")
+    print("=" * 60)
 
     app.run(
-
         host="0.0.0.0",
-
         port=port,
-
         debug=False
-
     )
