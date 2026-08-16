@@ -5,8 +5,6 @@ import traceback
 from datetime import datetime, timedelta, time
 
 import pytz
-import psycopg2
-from psycopg2.extras import RealDictCursor
 
 from flask import (
     Flask,
@@ -55,9 +53,6 @@ OPENAI_MODEL = os.environ.get(
     "gpt-5-mini"
 )
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL"
-)
 
 
 # ============================================================
@@ -86,6 +81,178 @@ if TWILIO_WHATSAPP_FROM:
             "whatsapp:"
             + TWILIO_WHATSAPP_FROM
         )
+
+
+# ============================================================
+# GOOGLE CALENDAR
+# ============================================================
+
+GOOGLE_REFRESH_TOKEN = os.environ.get(
+    "GOOGLE_REFRESH_TOKEN"
+)
+
+GOOGLE_CLIENT_ID = os.environ.get(
+    "GOOGLE_CLIENT_ID"
+)
+
+GOOGLE_CLIENT_SECRET = os.environ.get(
+    "GOOGLE_CLIENT_SECRET"
+)
+
+GOOGLE_CALENDAR_ID = os.environ.get(
+    "GOOGLE_CALENDAR_ID",
+    "primary"
+)
+
+
+# ============================================================
+# ADMIN
+# ============================================================
+
+ADMIN_USER = os.environ.get(
+    "ADMIN_USER",
+    "admin"
+)
+
+ADMIN_PASSWORD = os.environ.get(
+    "ADMIN_PASSWORD",
+    "cambiar-password"
+)
+
+
+# ============================================================
+# OPENAI
+# ============================================================
+
+client = None
+
+if OPENAI_API_KEY:
+
+    try:
+
+        client = OpenAI(
+            api_key=OPENAI_API_KEY
+        )
+
+        print(
+            "OPENAI: cliente inicializado"
+        )
+
+    except Exception:
+
+        print(
+            "OPENAI: ERROR inicializando cliente"
+        )
+
+        print(
+            traceback.format_exc()
+        )
+
+else:
+
+    print(
+        "OPENAI: FALTA OPENAI_API_KEY"
+    )
+
+
+# ============================================================
+# SERVICIOS
+# ============================================================
+
+SERVICIOS = {
+    "corte": "Corte de cabello",
+    "corte de cabello": "Corte de cabello",
+    "barba": "Barba",
+    "corte y barba": "Corte y barba",
+    "corte barba": "Corte y barba",
+    "perfilado": "Perfilado de barba",
+    "perfilado de barba": "Perfilado de barba",
+}
+
+
+PRECIO_SERVICIO = 20000
+
+DURACION_CITA = 60
+
+
+# ============================================================
+# ALMACENAMIENTO TEMPORAL EN MEMORIA
+# ============================================================
+
+# Esta versión no usa base de datos.
+# Los datos se conservan sólo mientras el proceso de Render esté activo.
+# Si el servicio se reinicia o redeploya, esta información se pierde.
+
+CLIENTES = {}
+MENSAJES = {}
+RESERVAS = []
+
+
+# ============================================================
+# CLIENTES
+# ============================================================
+
+def guardar_cliente(
+    telefono,
+    nombre=None
+):
+
+    cliente = CLIENTES.get(
+        telefono,
+        {
+            "telefono": telefono,
+            "nombre": None
+        }
+    )
+
+    if nombre:
+        cliente["nombre"] = nombre
+
+    CLIENTES[telefono] = cliente
+
+
+def obtener_cliente(
+    telefono
+):
+
+    return CLIENTES.get(
+        telefono
+    )
+
+
+# ============================================================
+# MENSAJES
+# ============================================================
+
+def guardar_mensaje(
+    telefono,
+    rol,
+    mensaje
+):
+
+    if telefono not in MENSAJES:
+        MENSAJES[telefono] = []
+
+    MENSAJES[telefono].append({
+        "rol": rol,
+        "mensaje": mensaje
+    })
+
+    # Dejamos sólo los últimos 50 mensajes por número.
+    MENSAJES[telefono] = MENSAJES[telefono][-50:]
+
+
+def obtener_historial(
+    telefono,
+    limite=20
+):
+
+    historial = MENSAJES.get(
+        telefono,
+        []
+    )
+
+    return historial[-limite:]
 
 
 # ============================================================
@@ -923,52 +1090,20 @@ def guardar_reserva(
     meet_url
 ):
 
-    conn = get_db()
-
-    cur = conn.cursor()
-
     fin = inicio + timedelta(
         minutes=DURACION_CITA
     )
 
-    cur.execute("""
-        INSERT INTO reservas
-        (
-            telefono,
-            nombre,
-            servicio,
-            precio,
-            inicio,
-            fin,
-            google_event_id,
-            meet_url
-        )
-        VALUES
-        (
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s
-        )
-    """, (
-        telefono,
-        nombre,
-        servicio,
-        PRECIO_SERVICIO,
-        inicio,
-        fin,
-        evento.get("id"),
-        meet_url
-    ))
-
-    conn.commit()
-
-    cur.close()
-    conn.close()
+    RESERVAS.append({
+        "telefono": telefono,
+        "nombre": nombre,
+        "servicio": servicio,
+        "precio": PRECIO_SERVICIO,
+        "inicio": inicio,
+        "fin": fin,
+        "google_event_id": evento.get("id"),
+        "meet_url": meet_url
+    })
 
 
 # ============================================================
@@ -2480,7 +2615,7 @@ def home():
         </p>
 
         <p>
-            🗄️ Base de datos: PostgreSQL
+            🧠 Datos temporales: memoria del servidor
         </p>
 
         <p>
@@ -2510,9 +2645,6 @@ def health():
 
         "openai":
             bool(OPENAI_API_KEY),
-
-        "database":
-            bool(DATABASE_URL),
 
         "twilio_sid":
             bool(TWILIO_ACCOUNT_SID),
@@ -2628,24 +2760,11 @@ def admin():
             )
         )
 
-    conn = get_db()
-
-    cur = conn.cursor(
-        cursor_factory=RealDictCursor
-    )
-
-    cur.execute("""
-        SELECT *
-        FROM reservas
-        ORDER BY inicio DESC
-        LIMIT 100
-    """)
-
-    reservas = cur.fetchall()
-
-    cur.close()
-
-    conn.close()
+    reservas = sorted(
+        RESERVAS,
+        key=lambda r: r["inicio"],
+        reverse=True
+    )[:100]
 
     return render_template_string(
 
@@ -2979,12 +3098,6 @@ print(
     else "FALTA"
 )
 
-print(
-    "DATABASE_URL:",
-    "OK"
-    if DATABASE_URL
-    else "FALTA"
-)
 
 print(
     "TWILIO_ACCOUNT_SID:",
@@ -3041,19 +3154,6 @@ print(
 )
 
 
-try:
-
-    init_db()
-
-except Exception:
-
-    print(
-        "ERROR INICIALIZANDO BASE DE DATOS"
-    )
-
-    print(
-        traceback.format_exc()
-    )
 
 
 # ============================================================
