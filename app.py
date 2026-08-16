@@ -17,6 +17,7 @@ from flask import (
 )
 
 from twilio.twiml.messaging_response import MessagingResponse
+from twilio.rest import Client as TwilioClient
 
 from datetime import timedelta, datetime
 from dotenv import load_dotenv
@@ -27,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-16-DEFINITIVO-TWILIO-RESERVAS-V9"
+APP_VERSION = "2026-08-16-DEFINITIVO-TWILIO-RESERVAS-V11"
 
 
 # ============================================================
@@ -1014,11 +1015,164 @@ def verificar_disponibilidad(
 
 def buscar_proximas_10_horas():
 
+    """
+    Busca las próximas 10 horas disponibles haciendo UNA sola
+    consulta a Google Calendar para evitar timeouts de Twilio.
+    """
+
     ahora = ahora_local()
+    zona = obtener_zona()
+
+    # Revisamos hasta 31 días hacia adelante.
+    inicio_rango = ahora
+
+    fin_rango = (
+        ahora
+        + timedelta(days=31)
+    ).replace(
+        hour=23,
+        minute=59,
+        second=59,
+        microsecond=0
+    )
+
+    try:
+
+        service = obtener_calendar_service()
+
+        eventos_resultado = (
+            service
+            .events()
+            .list(
+                calendarId=CALENDAR_ID,
+                timeMin=inicio_rango.isoformat(),
+                timeMax=fin_rango.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+                maxResults=500,
+            )
+            .execute()
+        )
+
+        eventos = eventos_resultado.get(
+            "items",
+            []
+        )
+
+    except Exception as e:
+
+        print(
+            "ERROR CONSULTANDO CALENDAR PARA DISPONIBILIDAD:",
+            repr(e)
+        )
+
+        return []
+
+
+    # Convertimos eventos del calendario en intervalos ocupados.
+    ocupados = []
+
+    for evento in eventos:
+
+        start_data = evento.get(
+            "start",
+            {}
+        )
+
+        end_data = evento.get(
+            "end",
+            {}
+        )
+
+        start_str = start_data.get(
+            "dateTime"
+        )
+
+        end_str = end_data.get(
+            "dateTime"
+        )
+
+        # Evento con hora específica.
+        if start_str and end_str:
+
+            try:
+
+                inicio_evento = (
+                    datetime
+                    .fromisoformat(
+                        start_str.replace(
+                            "Z",
+                            "+00:00"
+                        )
+                    )
+                    .astimezone(zona)
+                )
+
+                fin_evento = (
+                    datetime
+                    .fromisoformat(
+                        end_str.replace(
+                            "Z",
+                            "+00:00"
+                        )
+                    )
+                    .astimezone(zona)
+                )
+
+                ocupados.append(
+                    (
+                        inicio_evento,
+                        fin_evento
+                    )
+                )
+
+            except Exception:
+
+                continue
+
+        # Evento de día completo.
+        elif (
+            start_data.get("date")
+            and end_data.get("date")
+        ):
+
+            try:
+
+                inicio_evento = zona.localize(
+                    datetime.combine(
+                        datetime.fromisoformat(
+                            start_data["date"]
+                        ).date(),
+                        datetime.min.time()
+                    )
+                )
+
+                fin_evento = zona.localize(
+                    datetime.combine(
+                        datetime.fromisoformat(
+                            end_data["date"]
+                        ).date(),
+                        datetime.min.time()
+                    )
+                )
+
+                ocupados.append(
+                    (
+                        inicio_evento,
+                        fin_evento
+                    )
+                )
+
+            except Exception:
+
+                continue
+
 
     resultados = []
 
-    for offset in range(31):
+    # Generar horas enteras de lunes a sábado,
+    # entre 10:00 y 17:00.
+    for offset in range(32):
 
         fecha = (
             ahora
@@ -1030,7 +1184,10 @@ def buscar_proximas_10_horas():
             microsecond=0
         )
 
-        if not es_dia_atencion(fecha):
+        if not es_dia_atencion(
+            fecha
+        ):
+
             continue
 
         for hora in HORAS_DISPONIBLES:
@@ -1043,27 +1200,59 @@ def buscar_proximas_10_horas():
             )
 
             if inicio <= ahora:
+
                 continue
 
-            disponible = verificar_disponibilidad(
-                inicio,
-                DURACION_RESERVA
+            fin = (
+                inicio
+                + timedelta(
+                    minutes=DURACION_RESERVA
+                )
             )
 
-            print(
-                "HORA:",
-                inicio,
-                "DISPONIBLE:",
-                disponible
+            # No permitir reservas que terminen después de las 18:00.
+            limite = fecha.replace(
+                hour=HORA_CIERRE,
+                minute=0,
+                second=0,
+                microsecond=0
             )
 
-            if disponible is True:
+            if fin > limite:
+
+                continue
+
+            disponible = True
+
+            for (
+                inicio_ocupado,
+                fin_ocupado
+            ) in ocupados:
+
+                if (
+                    inicio < fin_ocupado
+                    and fin > inicio_ocupado
+                ):
+
+                    disponible = False
+                    break
+
+            if disponible:
 
                 resultados.append(
                     inicio
                 )
 
-                if len(resultados) == 10:
+                if len(resultados) >= 10:
+
+                    print(
+                        "10 HORAS DISPONIBLES:",
+                        [
+                            h.isoformat()
+                            for h in resultados
+                        ]
+                    )
+
                     return resultados
 
     return resultados
@@ -1750,6 +1939,17 @@ def procesar_agenda(
                 servicio
             )
 
+            if canal == "whatsapp":
+
+                enviar_mensaje_progreso_twilio(
+                    cliente_id,
+                    (
+                        "🔎 Estoy buscando las horas más próximas "
+                        "disponibles en mi agenda. "
+                        "Dame un momento 😊"
+                    )
+                )
+
             horas = buscar_proximas_10_horas()
 
             if not horas:
@@ -2287,6 +2487,69 @@ if (
     TWILIO_WHATSAPP_FROM = (
         "whatsapp:" + TWILIO_WHATSAPP_FROM
     )
+
+
+twilio_client = None
+
+if (
+    TWILIO_ACCOUNT_SID
+    and TWILIO_AUTH_TOKEN
+):
+    try:
+        twilio_client = TwilioClient(
+            TWILIO_ACCOUNT_SID,
+            TWILIO_AUTH_TOKEN
+        )
+    except Exception as e:
+        print(
+            "ERROR INICIALIZANDO TWILIO CLIENT:",
+            repr(e)
+        )
+
+
+def enviar_mensaje_progreso_twilio(
+    telefono_twilio,
+    texto
+):
+    """
+    Envía un mensaje inmediato mientras el webhook continúa
+    procesando la búsqueda de disponibilidad.
+    """
+
+    if not twilio_client:
+        return False
+
+    if not telefono_twilio:
+        return False
+
+    try:
+
+        destino = telefono_twilio
+
+        if not destino.startswith("whatsapp:"):
+            destino = "whatsapp:" + destino
+
+        twilio_client.messages.create(
+            from_=TWILIO_WHATSAPP_FROM,
+            to=destino,
+            body=texto
+        )
+
+        print(
+            "MENSAJE PROGRESO TWILIO ENVIADO:",
+            destino
+        )
+
+        return True
+
+    except Exception as e:
+
+        print(
+            "ERROR MENSAJE PROGRESO TWILIO:",
+            repr(e)
+        )
+
+        return False
 
 
 def normalizar_telefono_twilio(valor):
