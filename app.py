@@ -28,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-16-DEFINITIVO-TWILIO-RESERVAS-V11"
+APP_VERSION = "2026-08-16-TWILIO-RESERVAS-V12-HORA-DIRECTA"
 
 
 # ============================================================
@@ -924,6 +924,212 @@ def detectar_servicio(texto):
         return "corte"
 
     return None
+
+
+
+# ============================================================
+# DETECTAR FECHA / HORA SOLICITADA EN TEXTO LIBRE
+# ============================================================
+
+def detectar_hora_solicitada(texto):
+    """
+    Interpreta expresiones como:
+    - a las 3
+    - a las 3:30
+    - 15:00
+    - 3 pm
+
+    Como el negocio atiende entre 10:00 y 18:00,
+    una hora simple como "3" se interpreta como 15:00.
+    """
+
+    texto_n = normalizar_texto(texto)
+
+    # 15:00 / 15.30 / a las 15:00
+    match = re.search(
+        r"(?:a\s+las?\s+)?\b([01]?\d|2[0-3])[:.]([0-5]\d)\b",
+        texto_n
+    )
+
+    if match:
+        hora = int(match.group(1))
+        minuto = int(match.group(2))
+        return hora, minuto
+
+    # 3 pm / 3:30 pm
+    match = re.search(
+        r"(?:a\s+las?\s+)?\b(1[0-2]|[1-9])"
+        r"(?:[:.]([0-5]\d))?\s*(am|pm)\b",
+        texto_n
+    )
+
+    if match:
+        hora = int(match.group(1))
+        minuto = int(match.group(2) or 0)
+        periodo = match.group(3)
+
+        if periodo == "pm" and hora < 12:
+            hora += 12
+
+        if periodo == "am" and hora == 12:
+            hora = 0
+
+        return hora, minuto
+
+    # "a las 3" / "a la 1"
+    match = re.search(
+        r"\ba\s+las?\s+(\d{1,2})\b",
+        texto_n
+    )
+
+    if match:
+        hora = int(match.group(1))
+
+        # Dentro del horario del negocio, 1..6 normalmente
+        # significa 13:00..18:00.
+        if 1 <= hora <= 6:
+            hora += 12
+
+        return hora, 0
+
+    return None
+
+
+def detectar_fecha_solicitada(texto, hora_data=None):
+    """
+    Detecta hoy, mañana, pasado mañana o un día de la semana.
+
+    Si el cliente solo escribe una hora (ej. "a las 3"),
+    usa el próximo día de atención donde esa hora todavía
+    tenga sentido.
+    """
+
+    texto_n = normalizar_texto(texto)
+    ahora = ahora_local()
+
+    fecha_base = ahora.replace(
+        second=0,
+        microsecond=0
+    )
+
+    if "pasado manana" in texto_n:
+        return (
+            fecha_base
+            + timedelta(days=2)
+        )
+
+    if "manana" in texto_n:
+        return (
+            fecha_base
+            + timedelta(days=1)
+        )
+
+    if "hoy" in texto_n:
+        return fecha_base
+
+    dias_map = {
+        "lunes": 0,
+        "martes": 1,
+        "miercoles": 2,
+        "jueves": 3,
+        "viernes": 4,
+        "sabado": 5,
+        "domingo": 6,
+    }
+
+    for nombre_dia, weekday in dias_map.items():
+
+        if nombre_dia in texto_n:
+
+            diferencia = (
+                weekday
+                - ahora.weekday()
+            ) % 7
+
+            # Si menciona el mismo día pero la hora ya pasó,
+            # tomar la semana siguiente.
+            if (
+                diferencia == 0
+                and hora_data
+            ):
+
+                hora, minuto = hora_data
+
+                candidato_hoy = ahora.replace(
+                    hour=hora,
+                    minute=minuto,
+                    second=0,
+                    microsecond=0
+                )
+
+                if candidato_hoy <= ahora:
+                    diferencia = 7
+
+            return (
+                fecha_base
+                + timedelta(days=diferencia)
+            )
+
+    # Sin fecha explícita: usar hoy si todavía sirve,
+    # si no, avanzar al siguiente día de atención.
+    if hora_data:
+
+        hora, minuto = hora_data
+
+        for offset in range(8):
+
+            candidato_fecha = (
+                ahora
+                + timedelta(days=offset)
+            ).replace(
+                hour=hora,
+                minute=minuto,
+                second=0,
+                microsecond=0
+            )
+
+            if not es_dia_atencion(
+                candidato_fecha
+            ):
+                continue
+
+            if candidato_fecha <= ahora:
+                continue
+
+            return candidato_fecha
+
+    return None
+
+
+def construir_fecha_hora_solicitada(texto):
+    """
+    Devuelve un datetime timezone-aware si el mensaje contiene
+    una hora interpretable.
+    """
+
+    hora_data = detectar_hora_solicitada(
+        texto
+    )
+
+    if not hora_data:
+        return None
+
+    fecha = detectar_fecha_solicitada(
+        texto,
+        hora_data
+    )
+
+    if not fecha:
+        return None
+
+    hora, minuto = hora_data
+
+    return fecha.replace(
+        hour=hora,
+        minute=minuto,
+        second=0,
+        microsecond=0
+    )
 
 
 # ============================================================
@@ -1938,6 +2144,110 @@ def procesar_agenda(
             servicio_info = obtener_servicio(
                 servicio
             )
+
+            # ====================================================
+            # EL CLIENTE YA INDICÓ UNA HORA
+            # Ejemplo: "quiero un corte a las 3"
+            # ====================================================
+
+            hora_solicitada = (
+                construir_fecha_hora_solicitada(
+                    texto
+                )
+            )
+
+            if hora_solicitada:
+
+                if canal == "whatsapp":
+
+                    enviar_mensaje_progreso_twilio(
+                        cliente_id,
+                        (
+                            "🔎 Estoy revisando si esa hora "
+                            "está disponible en mi agenda. "
+                            "Dame un momento 😊"
+                        )
+                    )
+
+                disponible = verificar_disponibilidad(
+                    hora_solicitada,
+                    DURACION_RESERVA
+                )
+
+                if disponible is None:
+
+                    return (
+                        "No pude comprobar la agenda "
+                        "en este momento 😕.\n\n"
+                        "Intenta nuevamente en unos segundos."
+                    )
+
+                if disponible is True:
+
+                    datos["fecha_hora"] = (
+                        hora_solicitada.isoformat()
+                    )
+
+                    estado["paso"] = "nombre"
+
+                    precio = (
+                        f"${servicio_info['precio']:,}"
+                        .replace(",", ".")
+                    )
+
+                    return (
+                        "¡Sí! Esa hora está disponible 😊\n\n"
+                        f"💈 {servicio_info['nombre']}\n"
+                        f"💰 {precio}\n"
+                        f"📅 {formato_fecha_larga(hora_solicitada)}\n\n"
+                        "¿Me indicas tu nombre para continuar "
+                        "con la reserva?"
+                    )
+
+                # La hora solicitada está ocupada:
+                # mostrar alternativas reales.
+                if canal == "whatsapp":
+
+                    enviar_mensaje_progreso_twilio(
+                        cliente_id,
+                        (
+                            "Esa hora está ocupada. "
+                            "Estoy buscando las alternativas "
+                            "más próximas 😊"
+                        )
+                    )
+
+                horas = buscar_proximas_10_horas()
+
+                if not horas:
+
+                    return (
+                        f"La hora solicitada para "
+                        f"{servicio_info['nombre']} está ocupada "
+                        "y por ahora no encontré otras horas "
+                        "disponibles."
+                    )
+
+                estado["horas_ofrecidas"] = [
+                    h.isoformat()
+                    for h in horas
+                ]
+
+                estado["paso"] = "seleccionar_hora"
+
+                return (
+                    f"La hora que pediste "
+                    f"({formato_fecha_larga(hora_solicitada)}) "
+                    "no está disponible 😕.\n\n"
+                    "Estas son las próximas opciones disponibles:\n\n"
+                    f"{formatear_opciones_horas(horas)}\n\n"
+                    "Respóndeme con el número de la opción "
+                    "que prefieras."
+                )
+
+            # ====================================================
+            # NO INDICÓ HORA: flujo normal de próximas 10 horas
+            # ====================================================
 
             if canal == "whatsapp":
 
