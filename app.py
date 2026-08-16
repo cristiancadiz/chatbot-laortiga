@@ -1464,6 +1464,182 @@ def buscar_proximas_10_horas():
     return resultados
 
 
+def buscar_horas_disponibles_dia(fecha_obj):
+    """
+    Devuelve todas las horas enteras disponibles del día solicitado
+    dentro del horario 10:00 a 18:00, haciendo una sola consulta
+    a Google Calendar.
+    """
+
+    zona = obtener_zona()
+    ahora = ahora_local()
+
+    fecha_obj = fecha_obj.astimezone(zona)
+
+    inicio_dia = fecha_obj.replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0
+    )
+
+    fin_dia = (
+        inicio_dia
+        + timedelta(days=1)
+    )
+
+    if not es_dia_atencion(inicio_dia):
+        return []
+
+    try:
+
+        service = obtener_calendar_service()
+
+        eventos_resultado = (
+            service
+            .events()
+            .list(
+                calendarId=CALENDAR_ID,
+                timeMin=inicio_dia.isoformat(),
+                timeMax=fin_dia.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+                maxResults=100,
+            )
+            .execute()
+        )
+
+        eventos = eventos_resultado.get(
+            "items",
+            []
+        )
+
+    except Exception as e:
+
+        print(
+            "ERROR CONSULTANDO DISPONIBILIDAD DEL DIA:",
+            repr(e)
+        )
+
+        return None
+
+
+    ocupados = []
+
+    for evento in eventos:
+
+        start_data = evento.get(
+            "start",
+            {}
+        )
+
+        end_data = evento.get(
+            "end",
+            {}
+        )
+
+        start_str = start_data.get(
+            "dateTime"
+        )
+
+        end_str = end_data.get(
+            "dateTime"
+        )
+
+        if start_str and end_str:
+
+            try:
+
+                inicio_evento = (
+                    datetime
+                    .fromisoformat(
+                        start_str.replace(
+                            "Z",
+                            "+00:00"
+                        )
+                    )
+                    .astimezone(zona)
+                )
+
+                fin_evento = (
+                    datetime
+                    .fromisoformat(
+                        end_str.replace(
+                            "Z",
+                            "+00:00"
+                        )
+                    )
+                    .astimezone(zona)
+                )
+
+                ocupados.append(
+                    (
+                        inicio_evento,
+                        fin_evento
+                    )
+                )
+
+            except Exception:
+                continue
+
+        elif (
+            start_data.get("date")
+            and end_data.get("date")
+        ):
+
+            # Evento de día completo: bloquear todo el día.
+            return []
+
+
+    resultados = []
+
+    for hora in HORAS_DISPONIBLES:
+
+        inicio = inicio_dia.replace(
+            hour=hora,
+            minute=0,
+            second=0,
+            microsecond=0
+        )
+
+        if inicio <= ahora:
+            continue
+
+        fin = inicio + timedelta(
+            minutes=DURACION_RESERVA
+        )
+
+        limite = inicio_dia.replace(
+            hour=HORA_CIERRE,
+            minute=0,
+            second=0,
+            microsecond=0
+        )
+
+        if fin > limite:
+            continue
+
+        disponible = True
+
+        for (
+            inicio_ocupado,
+            fin_ocupado
+        ) in ocupados:
+
+            if (
+                inicio < fin_ocupado
+                and fin > inicio_ocupado
+            ):
+
+                disponible = False
+                break
+
+        if disponible:
+            resultados.append(inicio)
+
+    return resultados
+
+
 def formatear_opciones_horas(horas):
 
     lineas = []
@@ -2303,6 +2479,103 @@ def procesar_agenda(
 
     if estado["paso"] == "seleccionar_hora":
 
+        # ====================================================
+        # EL CLIENTE PUEDE CAMBIAR DE DÍA EN LENGUAJE NATURAL
+        # Ejemplos:
+        # "mañana no hay?"
+        # "¿y el viernes?"
+        # "tienes disponibilidad el miércoles?"
+        # ====================================================
+
+        fecha_consultada = detectar_fecha_solicitada(
+            texto,
+            None
+        )
+
+        texto_n = normalizar_texto(texto)
+
+        menciona_dia = any(
+            palabra in texto_n
+            for palabra in [
+                "hoy",
+                "manana",
+                "pasado manana",
+                "lunes",
+                "martes",
+                "miercoles",
+                "jueves",
+                "viernes",
+                "sabado",
+                "domingo",
+            ]
+        )
+
+        if (
+            fecha_consultada
+            and menciona_dia
+        ):
+
+            if canal == "whatsapp":
+
+                enviar_mensaje_progreso_twilio(
+                    cliente_id,
+                    (
+                        "🔎 Estoy revisando la disponibilidad "
+                        "de ese día en mi agenda. "
+                        "Dame un momento 😊"
+                    )
+                )
+
+            horas_dia = buscar_horas_disponibles_dia(
+                fecha_consultada
+            )
+
+            if horas_dia is None:
+
+                return (
+                    "No pude comprobar la agenda "
+                    "en este momento 😕.\n\n"
+                    "Intenta nuevamente en unos segundos."
+                )
+
+            if not es_dia_atencion(
+                fecha_consultada
+            ):
+
+                return (
+                    f"El {DIAS_NOMBRES[fecha_consultada.weekday()]} "
+                    "no atendemos.\n\n"
+                    "Atendemos de lunes a sábado "
+                    "entre 10:00 y 18:00.\n\n"
+                    "¿Qué otro día quieres revisar?"
+                )
+
+            if not horas_dia:
+
+                return (
+                    f"Para el "
+                    f"{DIAS_NOMBRES[fecha_consultada.weekday()]} "
+                    f"{fecha_consultada.day}/{fecha_consultada.month} "
+                    "no tengo horas disponibles 😕.\n\n"
+                    "Puedes preguntarme por otro día, "
+                    "por ejemplo: “¿y el viernes?”"
+                )
+
+            estado["horas_ofrecidas"] = [
+                h.isoformat()
+                for h in horas_dia
+            ]
+
+            return (
+                f"Sí 😊 Para el "
+                f"{DIAS_NOMBRES[fecha_consultada.weekday()]} "
+                f"{fecha_consultada.day}/{fecha_consultada.month} "
+                "tengo estas horas disponibles:\n\n"
+                f"{formatear_opciones_horas(horas_dia)}\n\n"
+                "Respóndeme con el número de la hora "
+                "que prefieras."
+            )
+
         match = re.fullmatch(
             r"\s*(\d{1,2})\s*",
             texto
@@ -2311,9 +2584,12 @@ def procesar_agenda(
         if not match:
 
             return (
-                "Indícame el número de la hora "
-                "que prefieres .\n\n"
-                "Por ejemplo: 1"
+                "Puedes responder con el número de una hora "
+                "o preguntarme por otro día 😊\n\n"
+                "Por ejemplo:\n"
+                "• 1\n"
+                "• ¿Mañana tienes disponibilidad?\n"
+                "• ¿Y el viernes?"
             )
 
         numero = int(
