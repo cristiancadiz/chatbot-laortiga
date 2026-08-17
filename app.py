@@ -28,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-16-TWILIO-RESERVAS-V12-HORA-DIRECTA"
+APP_VERSION = "2026-08-16-TWILIO-RESERVAS-V14-FALLBACK-10-HORAS"
 
 
 # ============================================================
@@ -1219,21 +1219,31 @@ def verificar_disponibilidad(
 # 10 PRÓXIMAS HORAS
 # ============================================================
 
-def buscar_proximas_10_horas():
+def buscar_proximas_10_horas(desde=None):
 
     """
     Busca las próximas 10 horas disponibles haciendo UNA sola
     consulta a Google Calendar para evitar timeouts de Twilio.
+
+    Si recibe "desde", comienza a buscar desde esa fecha/hora.
     """
 
     ahora = ahora_local()
     zona = obtener_zona()
 
+    if desde is None:
+        desde = ahora
+    else:
+        desde = desde.astimezone(zona)
+
+    if desde < ahora:
+        desde = ahora
+
     # Revisamos hasta 31 días hacia adelante.
-    inicio_rango = ahora
+    inicio_rango = desde
 
     fin_rango = (
-        ahora
+        desde
         + timedelta(days=31)
     ).replace(
         hour=23,
@@ -1381,7 +1391,7 @@ def buscar_proximas_10_horas():
     for offset in range(32):
 
         fecha = (
-            ahora
+            desde
             + timedelta(days=offset)
         ).replace(
             hour=0,
@@ -1406,6 +1416,10 @@ def buscar_proximas_10_horas():
             )
 
             if inicio <= ahora:
+
+                continue
+
+            if inicio < desde:
 
                 continue
 
@@ -2552,13 +2566,59 @@ def procesar_agenda(
 
             if not horas_dia:
 
+                siguiente_dia = (
+                    fecha_consultada
+                    + timedelta(days=1)
+                ).replace(
+                    hour=0,
+                    minute=0,
+                    second=0,
+                    microsecond=0
+                )
+
+                if canal == "whatsapp":
+
+                    enviar_mensaje_progreso_twilio(
+                        cliente_id,
+                        (
+                            "Ese día está completo. "
+                            "Estoy buscando las próximas "
+                            "horas disponibles 😊"
+                        )
+                    )
+
+                horas_siguientes = buscar_proximas_10_horas(
+                    desde=siguiente_dia
+                )
+
+                if not horas_siguientes:
+
+                    return (
+                        f"Para el "
+                        f"{DIAS_NOMBRES[fecha_consultada.weekday()]} "
+                        f"{fecha_consultada.day}/{fecha_consultada.month} "
+                        "no tengo horas disponibles 😕.\n\n"
+                        "Tampoco encontré horas disponibles "
+                        "en los días siguientes por ahora."
+                    )
+
+                estado["horas_ofrecidas"] = [
+                    h.isoformat()
+                    for h in horas_siguientes
+                ]
+
+                estado["paso"] = "seleccionar_hora"
+
                 return (
                     f"Para el "
                     f"{DIAS_NOMBRES[fecha_consultada.weekday()]} "
                     f"{fecha_consultada.day}/{fecha_consultada.month} "
                     "no tengo horas disponibles 😕.\n\n"
-                    "Puedes preguntarme por otro día, "
-                    "por ejemplo: “¿y el viernes?”"
+                    "Estas son las próximas 10 horas disponibles "
+                    "desde el día siguiente:\n\n"
+                    f"{formatear_opciones_horas(horas_siguientes)}\n\n"
+                    "Respóndeme con el número de la hora "
+                    "que prefieras, del 1 al 10."
                 )
 
             estado["horas_ofrecidas"] = [
