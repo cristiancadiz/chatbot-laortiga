@@ -28,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-17-V22-FIX-DUPLICADO-SERVICIOS"
+APP_VERSION = "2026-08-17-V23-FIX-OBTENER-SERVICIO"
 
 
 # ============================================================
@@ -1256,36 +1256,7 @@ def formato_fecha_larga(fecha):
 # SERVICIOS
 # ============================================================
 
-def obtener_servicio(codigo):
 
-    return SERVICIOS.get(
-        codigo,
-        {
-            "nombre": "Servicio",
-            "duracion": 60,
-            "precio": 20000,
-        }
-    )
-
-
-def mostrar_servicios():
-
-    return (
-        "Claro  Estos son nuestros servicios:\n\n"
-        "1. Corte de cabello — $20.000\n"
-        "2. Corte + barba — $20.000\n"
-        "3. Arreglo de barba — $20.000\n"
-        "4. Corte de niño — $20.000\n"
-        "5. Perfilado — $20.000\n\n"
-        "Si quieres reservar, escríbeme el número "
-        "del servicio que prefieres. "
-    )
-
-
-
-# ============================================================
-# DETECTAR FECHA / HORA SOLICITADA EN TEXTO LIBRE
-# ============================================================
 
 def detectar_hora_solicitada(texto):
     """
