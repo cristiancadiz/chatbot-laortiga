@@ -28,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-17-V23-FIX-OBTENER-SERVICIO"
+APP_VERSION = "2026-08-17-V24-DIAGNOSTICO-CALENDAR"
 
 
 # ============================================================
@@ -1623,14 +1623,31 @@ def buscar_proximas_10_horas(desde=None, calendar_id=None, rubro_codigo="estilis
             []
         )
 
+        print(
+            "CALENDAR CONSULTA OK:",
+            calendar_id,
+            "| RUBRO:",
+            rubro_codigo,
+            "| EVENTOS EN RANGO:",
+            len(eventos)
+        )
+
     except Exception as e:
 
         print(
             "ERROR CONSULTANDO CALENDAR PARA DISPONIBILIDAD:",
             repr(e)
         )
+        print(
+            "CALENDAR_ID CONSULTADO:",
+            calendar_id
+        )
+        print(
+            "RUBRO CONSULTADO:",
+            rubro_codigo
+        )
 
-        return []
+        return None
 
 
     # Convertimos eventos del calendario en intervalos ocupados.
@@ -2960,6 +2977,14 @@ def procesar_agenda(
                 rubro_codigo=rubro_codigo
             )
 
+            if horas is None:
+
+                return (
+                    f"No pude acceder correctamente a la agenda de "
+                    f"{profesional_nombre} en Google Calendar. "
+                    "Revisa los logs de Render."
+                )
+
             if not horas:
 
                 return (
@@ -3064,6 +3089,14 @@ def procesar_agenda(
                     rubro_codigo=rubro_codigo
                 )
 
+                if horas is None:
+
+                    return (
+                        f"No pude acceder correctamente a la agenda de "
+                        f"{profesional_nombre} en Google Calendar. "
+                        "Revisa los logs de Render."
+                    )
+
                 if not horas:
 
                     return (
@@ -3086,6 +3119,14 @@ def procesar_agenda(
             horas = buscar_proximas_10_horas(
                 calendar_id=calendar_id,
                 rubro_codigo=rubro_codigo
+            )
+
+        if horas is None:
+
+            return (
+                f"No pude acceder correctamente a la agenda de "
+                f"{profesional_nombre} en Google Calendar. "
+                "Revisa los logs de Render."
             )
 
         if not horas:
@@ -5645,6 +5686,11 @@ except Exception as e:
 # ============================================================
 
 print("APP_VERSION:", APP_VERSION)
+print("GOOGLE_CALENDAR_ID DIEGO:", CALENDAR_ID)
+print("CAMILO_CALENDAR_ID CONFIGURADO:", CAMILO_CALENDAR_ID)
+print("GOOGLE_REFRESH_TOKEN PRESENTE:", bool(GOOGLE_REFRESH_TOKEN))
+print("GOOGLE_CLIENT_ID PRESENTE:", bool(GOOGLE_CLIENT_ID))
+
 print("WHATSAPP: TWILIO + LOGICA COMPLETA DE RESERVAS")
 
 if __name__ == "__main__":
