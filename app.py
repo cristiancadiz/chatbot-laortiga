@@ -28,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-17-V25-DIAGNOSTICO-CALENDAR-FIX"
+APP_VERSION = "2026-08-16-TWILIO-RESERVAS-V15-FLUJO-CALENDAR-COMPLETO"
 
 
 # ============================================================
@@ -188,21 +188,6 @@ def init_database():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_reservas_inicio
             ON reservas(inicio);
-        """)
-
-        cur.execute("""
-            ALTER TABLE reservas
-            ADD COLUMN IF NOT EXISTS rubro VARCHAR(100);
-        """)
-
-        cur.execute("""
-            ALTER TABLE reservas
-            ADD COLUMN IF NOT EXISTS profesional VARCHAR(255);
-        """)
-
-        cur.execute("""
-            ALTER TABLE reservas
-            ADD COLUMN IF NOT EXISTS profesional_codigo VARCHAR(100);
         """)
 
         conn.commit()
@@ -595,215 +580,6 @@ CALENDAR_ID = os.getenv(
 
 
 # ============================================================
-# ROUTER DE RUBROS
-# ============================================================
-
-CAMILO_CALENDAR_ID = os.getenv(
-    "CAMILO_CALENDAR_ID",
-    "1a1be07fdd65289ef9695e88bff24ea54e44833abf0386c03670d089da325faf5@group.calendar.google.com"
-)
-
-RUBROS = {
-
-    "estilista": {
-        "numero": 1,
-        "nombre": "Estilista",
-        "emoji": "💈",
-        "profesional_codigo": "diego",
-        "profesional_nombre": ESTILISTA_NOMBRE,
-        "calendar_id": CALENDAR_ID,
-        "hora_apertura": 10,
-        "hora_cierre": 18,
-        "dias_atencion": [0, 1, 2, 3, 4, 5],
-    },
-
-    "abogado": {
-        "numero": 2,
-        "nombre": "Servicios legales",
-        "emoji": "⚖️",
-        "profesional_codigo": "camilo",
-        "profesional_nombre": "Camilo",
-        "calendar_id": CAMILO_CALENDAR_ID,
-        "hora_apertura": 10,
-        "hora_cierre": 13,
-        "dias_atencion": [0, 1, 2, 3, 4],
-    },
-}
-
-
-def obtener_rubro(codigo):
-
-    return RUBROS.get(codigo)
-
-
-def calendar_id_rubro(rubro_codigo):
-
-    rubro = obtener_rubro(
-        rubro_codigo
-    )
-
-    if not rubro:
-        return None
-
-    return rubro.get(
-        "calendar_id"
-    )
-
-
-def profesional_rubro(rubro_codigo):
-
-    rubro = obtener_rubro(
-        rubro_codigo
-    )
-
-    if not rubro:
-        return None
-
-    return {
-        "codigo":
-            rubro["profesional_codigo"],
-        "nombre":
-            rubro["profesional_nombre"],
-    }
-
-
-def configuracion_horario_rubro(rubro_codigo):
-
-    rubro = obtener_rubro(
-        rubro_codigo
-    )
-
-    if not rubro:
-
-        return {
-            "hora_apertura": HORA_APERTURA,
-            "hora_cierre": HORA_CIERRE,
-            "dias_atencion": list(DIAS_ATENCION.keys()),
-        }
-
-    return {
-        "hora_apertura":
-            rubro.get("hora_apertura", HORA_APERTURA),
-        "hora_cierre":
-            rubro.get("hora_cierre", HORA_CIERRE),
-        "dias_atencion":
-            rubro.get(
-                "dias_atencion",
-                list(DIAS_ATENCION.keys())
-            ),
-    }
-
-
-def es_dia_atencion_rubro(
-    fecha,
-    rubro_codigo
-):
-
-    fecha = fecha.astimezone(
-        obtener_zona()
-    )
-
-    config = configuracion_horario_rubro(
-        rubro_codigo
-    )
-
-    return (
-        fecha.weekday()
-        in config["dias_atencion"]
-    )
-
-
-def horas_disponibles_rubro(
-    rubro_codigo
-):
-
-    config = configuracion_horario_rubro(
-        rubro_codigo
-    )
-
-    return list(
-        range(
-            config["hora_apertura"],
-            config["hora_cierre"]
-        )
-    )
-
-
-def mostrar_rubros():
-
-    return (
-        "Claro 😊 ¿Qué tipo de atención necesitas?\n\n"
-        "1. 💈 Estilista\n"
-        "2. ⚖️ Abogado\n\n"
-        "También puedes escribir directamente lo que necesitas, "
-        "por ejemplo:\n"
-        "• “Quiero cortarme el pelo”\n"
-        "• “Necesito revisar un contrato”"
-    )
-
-
-def detectar_rubro(texto):
-
-    texto_n = normalizar_texto(
-        texto
-    )
-
-    if re.fullmatch(
-        r"\s*1\s*",
-        texto or ""
-    ):
-        return "estilista"
-
-    if re.fullmatch(
-        r"\s*2\s*",
-        texto or ""
-    ):
-        return "abogado"
-
-    palabras_estilista = [
-        "estilista",
-        "peluquer",
-        "barber",
-        "corte",
-        "cortarme",
-        "cortar",
-        "pelo",
-        "cabello",
-        "barba",
-        "perfilado",
-    ]
-
-    palabras_abogado = [
-        "abogado",
-        "abogada",
-        "legal",
-        "ley",
-        "contrato",
-        "despido",
-        "laboral",
-        "demanda",
-        "civil",
-        "asesoria juridica",
-        "asesoria legal",
-        "camilo",
-    ]
-
-    if any(
-        palabra in texto_n
-        for palabra in palabras_abogado
-    ):
-        return "abogado"
-
-    if any(
-        palabra in texto_n
-        for palabra in palabras_estilista
-    ):
-        return "estilista"
-
-    return None
-
-
-# ============================================================
 # HORARIO
 # ============================================================
 
@@ -833,7 +609,7 @@ HORAS_DISPONIBLES = list(
 # SERVICIOS
 # ============================================================
 
-SERVICIOS_ESTILISTA = {
+SERVICIOS = {
 
     "corte": {
         "numero": 1,
@@ -871,238 +647,44 @@ SERVICIOS_ESTILISTA = {
     },
 }
 
-
-SERVICIOS_ABOGADO = {
-
-    "consulta_legal": {
-        "numero": 1,
-        "nombre": "Consulta legal",
-        "duracion": 60,
-        "precio": 30000,
-    },
-
-    "laboral": {
-        "numero": 2,
-        "nombre": "Asesoría laboral",
-        "duracion": 60,
-        "precio": 30000,
-    },
-
-    "revision_contrato": {
-        "numero": 3,
-        "nombre": "Revisión de contrato",
-        "duracion": 60,
-        "precio": 30000,
-    },
-
-    "civil": {
-        "numero": 4,
-        "nombre": "Asesoría civil",
-        "duracion": 60,
-        "precio": 30000,
-    },
-
-    "otra_legal": {
-        "numero": 5,
-        "nombre": "Otra consulta legal",
-        "duracion": 60,
-        "precio": 30000,
-    },
+SERVICIO_POR_NUMERO = {
+    1: "corte",
+    2: "corte_barba",
+    3: "barba",
+    4: "corte_nino",
+    5: "perfilado",
 }
 
 
-SERVICIOS_POR_RUBRO = {
-    "estilista": SERVICIOS_ESTILISTA,
-    "abogado": SERVICIOS_ABOGADO,
-}
+# ============================================================
+# GOOGLE
+# ============================================================
+
+GOOGLE_CLIENT_ID = os.getenv(
+    "GOOGLE_CLIENT_ID"
+)
+
+GOOGLE_CLIENT_SECRET = os.getenv(
+    "GOOGLE_CLIENT_SECRET"
+)
+
+GOOGLE_REFRESH_TOKEN = os.getenv(
+    "GOOGLE_REFRESH_TOKEN"
+)
+
+GOOGLE_REDIRECT_URI = os.getenv(
+    "GOOGLE_REDIRECT_URI",
+    "https://chatbot-laortiga-9.onrender.com/callback"
+)
+
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar"
+]
 
 
-def servicios_del_rubro(rubro_codigo):
-
-    return SERVICIOS_POR_RUBRO.get(
-        rubro_codigo,
-        {}
-    )
-
-
-def obtener_servicio(
-    codigo,
-    rubro_codigo="estilista"
-):
-
-    servicios = servicios_del_rubro(
-        rubro_codigo
-    )
-
-    return servicios.get(
-        codigo,
-        {
-            "nombre": "Servicio",
-            "duracion": 60,
-            "precio": 0,
-        }
-    )
-
-
-def mostrar_servicios(
-    rubro_codigo=None
-):
-
-    if not rubro_codigo:
-        return mostrar_rubros()
-
-    if rubro_codigo == "estilista":
-
-        return (
-            "💈 Servicios con Diego:\n\n"
-            "1. Corte de cabello — $20.000\n"
-            "2. Corte + barba — $20.000\n"
-            "3. Arreglo de barba — $20.000\n"
-            "4. Corte de niño — $20.000\n"
-            "5. Perfilado — $20.000\n\n"
-            "Escríbeme el número o el nombre del servicio."
-        )
-
-    if rubro_codigo == "abogado":
-
-        return (
-            "⚖️ Servicios legales con Camilo:\n\n"
-            "1. Consulta legal — $30.000\n"
-            "2. Asesoría laboral — $30.000\n"
-            "3. Revisión de contrato — $30.000\n"
-            "4. Asesoría civil — $30.000\n"
-            "5. Otra consulta legal — $30.000\n\n"
-            "🕐 Camilo atiende de lunes a viernes, "
-            "de 10:00 a 13:00.\n\n"
-            "Escríbeme el número o cuéntame brevemente "
-            "qué tipo de ayuda necesitas."
-        )
-
-    return mostrar_rubros()
-
-
-def detectar_servicio_por_numero(
-    texto,
-    rubro_codigo
-):
-
-    match = re.fullmatch(
-        r"\s*([1-5])\s*",
-        texto or ""
-    )
-
-    if not match:
-        return None
-
-    numero = int(
-        match.group(1)
-    )
-
-    for codigo, info in servicios_del_rubro(
-        rubro_codigo
-    ).items():
-
-        if info.get("numero") == numero:
-            return codigo
-
-    return None
-
-
-
-def detectar_servicio(
-    texto,
-    rubro_codigo="estilista"
-):
-
-    texto_n = normalizar_texto(
-        texto
-    )
-
-    servicio_numero = detectar_servicio_por_numero(
-        texto,
-        rubro_codigo
-    )
-
-    if servicio_numero:
-        return servicio_numero
-
-    if rubro_codigo == "abogado":
-
-        if (
-            "contrato" in texto_n
-            or "revisar documento" in texto_n
-        ):
-            return "revision_contrato"
-
-        if (
-            "despido" in texto_n
-            or "laboral" in texto_n
-            or "trabajo" in texto_n
-            or "empleador" in texto_n
-        ):
-            return "laboral"
-
-        if (
-            "civil" in texto_n
-            or "arriendo" in texto_n
-            or "deuda" in texto_n
-        ):
-            return "civil"
-
-        if (
-            "consulta legal" in texto_n
-            or "consulta abogado" in texto_n
-            or "asesoria legal" in texto_n
-            or "asesoria juridica" in texto_n
-            or "abogado" in texto_n
-            or "camilo" in texto_n
-        ):
-            return "consulta_legal"
-
-        if (
-            "otra" in texto_n
-            or "otro" in texto_n
-        ):
-            return "otra_legal"
-
-        return None
-
-    # Ruta estilista
-    if (
-        "corte" in texto_n
-        and "barba" in texto_n
-    ):
-        return "corte_barba"
-
-    if (
-        "corte de nino" in texto_n
-        or "corte nino" in texto_n
-        or "nino" in texto_n
-    ):
-        return "corte_nino"
-
-    if "barba" in texto_n:
-        return "barba"
-
-    if (
-        "perfilado" in texto_n
-        or "perfil" in texto_n
-    ):
-        return "perfilado"
-
-    if (
-        "corte" in texto_n
-        or "cortar" in texto_n
-        or "cortarme" in texto_n
-        or "cabello" in texto_n
-        or "pelo" in texto_n
-        or "estilista" in texto_n
-    ):
-        return "corte"
-
-    return None
-
-
+# ============================================================
+# GOOGLE FLOW
+# ============================================================
 
 def crear_google_flow():
 
@@ -1126,16 +708,6 @@ def crear_google_flow():
 
 
 def obtener_credentials_diego():
-
-    print(
-        "GOOGLE AUTH CONFIG:",
-        "refresh_token=",
-        bool(GOOGLE_REFRESH_TOKEN),
-        "| client_id=",
-        bool(GOOGLE_CLIENT_ID),
-        "| client_secret=",
-        bool(GOOGLE_CLIENT_SECRET),
-    )
 
     if not GOOGLE_REFRESH_TOKEN:
         raise Exception(
@@ -1266,7 +838,98 @@ def formato_fecha_larga(fecha):
 # SERVICIOS
 # ============================================================
 
+def obtener_servicio(codigo):
 
+    return SERVICIOS.get(
+        codigo,
+        {
+            "nombre": "Servicio",
+            "duracion": 60,
+            "precio": 20000,
+        }
+    )
+
+
+def mostrar_servicios():
+
+    return (
+        "Claro  Estos son nuestros servicios:\n\n"
+        "1. Corte de cabello — $20.000\n"
+        "2. Corte + barba — $20.000\n"
+        "3. Arreglo de barba — $20.000\n"
+        "4. Corte de niño — $20.000\n"
+        "5. Perfilado — $20.000\n\n"
+        "Si quieres reservar, escríbeme el número "
+        "del servicio que prefieres. "
+    )
+
+
+def detectar_servicio_por_numero(texto):
+
+    match = re.fullmatch(
+        r"\s*([1-5])\s*",
+        texto or ""
+    )
+
+    if match:
+
+        numero = int(
+            match.group(1)
+        )
+
+        return SERVICIO_POR_NUMERO.get(
+            numero
+        )
+
+    return None
+
+
+def detectar_servicio(texto):
+
+    texto_n = normalizar_texto(texto)
+
+    servicio_numero = detectar_servicio_por_numero(
+        texto
+    )
+
+    if servicio_numero:
+        return servicio_numero
+
+    if (
+        "corte" in texto_n
+        and "barba" in texto_n
+    ):
+        return "corte_barba"
+
+    if (
+        "corte de nino" in texto_n
+        or "corte nino" in texto_n
+        or "nino" in texto_n
+    ):
+        return "corte_nino"
+
+    if "barba" in texto_n:
+        return "barba"
+
+    if (
+        "perfilado" in texto_n
+        or "perfil" in texto_n
+    ):
+        return "perfilado"
+
+    if (
+        "corte" in texto_n
+        or "cortar" in texto_n
+    ):
+        return "corte"
+
+    return None
+
+
+
+# ============================================================
+# DETECTAR FECHA / HORA SOLICITADA EN TEXTO LIBRE
+# ============================================================
 
 def detectar_hora_solicitada(texto):
     """
@@ -1475,9 +1138,7 @@ def construir_fecha_hora_solicitada(texto):
 
 def verificar_disponibilidad(
     inicio,
-    duracion=60,
-    calendar_id=None,
-    rubro_codigo="estilista"
+    duracion=60
 ):
 
     try:
@@ -1486,22 +1147,15 @@ def verificar_disponibilidad(
 
         inicio = inicio.astimezone(zona)
 
-        config_horario = configuracion_horario_rubro(
-            rubro_codigo
-        )
-
-        if not es_dia_atencion_rubro(
-            inicio,
-            rubro_codigo
-        ):
+        if not es_dia_atencion(inicio):
             return False
 
         if inicio.minute != 0:
             return False
 
         if (
-            inicio.hour < config_horario["hora_apertura"]
-            or inicio.hour >= config_horario["hora_cierre"]
+            inicio.hour < HORA_APERTURA
+            or inicio.hour >= HORA_CIERRE
         ):
             return False
 
@@ -1510,7 +1164,7 @@ def verificar_disponibilidad(
         )
 
         limite = inicio.replace(
-            hour=config_horario["hora_cierre"],
+            hour=HORA_CIERRE,
             minute=0,
             second=0,
             microsecond=0
@@ -1521,8 +1175,6 @@ def verificar_disponibilidad(
 
         service = obtener_calendar_service()
 
-        calendar_id = calendar_id or CALENDAR_ID
-
         resultado = (
             service
             .freebusy()
@@ -1532,7 +1184,7 @@ def verificar_disponibilidad(
                     "timeMax": fin.isoformat(),
                     "items": [
                         {
-                            "id": calendar_id
+                            "id": CALENDAR_ID
                         }
                     ],
                 }
@@ -1543,7 +1195,7 @@ def verificar_disponibilidad(
         calendario = (
             resultado
             .get("calendars", {})
-            .get(calendar_id, {})
+            .get(CALENDAR_ID, {})
         )
 
         busy = calendario.get(
@@ -1567,7 +1219,7 @@ def verificar_disponibilidad(
 # 10 PRÓXIMAS HORAS
 # ============================================================
 
-def buscar_proximas_10_horas(desde=None, calendar_id=None, rubro_codigo="estilista"):
+def buscar_proximas_10_horas(desde=None):
 
     """
     Busca las próximas 10 horas disponibles haciendo UNA sola
@@ -1578,16 +1230,6 @@ def buscar_proximas_10_horas(desde=None, calendar_id=None, rubro_codigo="estilis
 
     ahora = ahora_local()
     zona = obtener_zona()
-
-    calendar_id = calendar_id or CALENDAR_ID
-
-    config_horario = configuracion_horario_rubro(
-        rubro_codigo
-    )
-
-    horas_rubro = horas_disponibles_rubro(
-        rubro_codigo
-    )
 
     if desde is None:
         desde = ahora
@@ -1618,7 +1260,7 @@ def buscar_proximas_10_horas(desde=None, calendar_id=None, rubro_codigo="estilis
             service
             .events()
             .list(
-                calendarId=calendar_id,
+                calendarId=CALENDAR_ID,
                 timeMin=inicio_rango.isoformat(),
                 timeMax=fin_rango.isoformat(),
                 singleEvents=True,
@@ -1633,31 +1275,14 @@ def buscar_proximas_10_horas(desde=None, calendar_id=None, rubro_codigo="estilis
             []
         )
 
-        print(
-            "CALENDAR CONSULTA OK:",
-            calendar_id,
-            "| RUBRO:",
-            rubro_codigo,
-            "| EVENTOS EN RANGO:",
-            len(eventos)
-        )
-
     except Exception as e:
 
         print(
             "ERROR CONSULTANDO CALENDAR PARA DISPONIBILIDAD:",
             repr(e)
         )
-        print(
-            "CALENDAR_ID CONSULTADO:",
-            calendar_id
-        )
-        print(
-            "RUBRO CONSULTADO:",
-            rubro_codigo
-        )
 
-        return None
+        return []
 
 
     # Convertimos eventos del calendario en intervalos ocupados.
@@ -1775,14 +1400,13 @@ def buscar_proximas_10_horas(desde=None, calendar_id=None, rubro_codigo="estilis
             microsecond=0
         )
 
-        if not es_dia_atencion_rubro(
-            fecha,
-            rubro_codigo
+        if not es_dia_atencion(
+            fecha
         ):
 
             continue
 
-        for hora in horas_rubro:
+        for hora in HORAS_DISPONIBLES:
 
             inicio = fecha.replace(
                 hour=hora,
@@ -1808,7 +1432,7 @@ def buscar_proximas_10_horas(desde=None, calendar_id=None, rubro_codigo="estilis
 
             # No permitir reservas que terminen después de las 18:00.
             limite = fecha.replace(
-                hour=config_horario["hora_cierre"],
+                hour=HORA_CIERRE,
                 minute=0,
                 second=0,
                 microsecond=0
@@ -1854,7 +1478,7 @@ def buscar_proximas_10_horas(desde=None, calendar_id=None, rubro_codigo="estilis
     return resultados
 
 
-def buscar_horas_disponibles_dia(fecha_obj, calendar_id=None, rubro_codigo="estilista"):
+def buscar_horas_disponibles_dia(fecha_obj):
     """
     Devuelve todas las horas enteras disponibles del día solicitado
     dentro del horario 10:00 a 18:00, haciendo una sola consulta
@@ -1863,16 +1487,6 @@ def buscar_horas_disponibles_dia(fecha_obj, calendar_id=None, rubro_codigo="esti
 
     zona = obtener_zona()
     ahora = ahora_local()
-
-    calendar_id = calendar_id or CALENDAR_ID
-
-    config_horario = configuracion_horario_rubro(
-        rubro_codigo
-    )
-
-    horas_rubro = horas_disponibles_rubro(
-        rubro_codigo
-    )
 
     fecha_obj = fecha_obj.astimezone(zona)
 
@@ -1888,10 +1502,7 @@ def buscar_horas_disponibles_dia(fecha_obj, calendar_id=None, rubro_codigo="esti
         + timedelta(days=1)
     )
 
-    if not es_dia_atencion_rubro(
-        inicio_dia,
-        rubro_codigo
-    ):
+    if not es_dia_atencion(inicio_dia):
         return []
 
     try:
@@ -1902,7 +1513,7 @@ def buscar_horas_disponibles_dia(fecha_obj, calendar_id=None, rubro_codigo="esti
             service
             .events()
             .list(
-                calendarId=calendar_id,
+                calendarId=CALENDAR_ID,
                 timeMin=inicio_dia.isoformat(),
                 timeMax=fin_dia.isoformat(),
                 singleEvents=True,
@@ -1996,7 +1607,7 @@ def buscar_horas_disponibles_dia(fecha_obj, calendar_id=None, rubro_codigo="esti
 
     resultados = []
 
-    for hora in horas_rubro:
+    for hora in HORAS_DISPONIBLES:
 
         inicio = inicio_dia.replace(
             hour=hora,
@@ -2013,7 +1624,7 @@ def buscar_horas_disponibles_dia(fecha_obj, calendar_id=None, rubro_codigo="esti
         )
 
         limite = inicio_dia.replace(
-            hour=config_horario["hora_cierre"],
+            hour=HORA_CIERRE,
             minute=0,
             second=0,
             microsecond=0
@@ -2089,9 +1700,7 @@ def pregunta_servicios(texto):
 
 def es_intencion_agendar(texto):
 
-    texto_n = normalizar_texto(
-        texto
-    )
+    texto_n = normalizar_texto(texto)
 
     patrones = [
         "agendar",
@@ -2112,27 +1721,11 @@ def es_intencion_agendar(texto):
         "quiero cortarme",
         "quiero corte",
         "me quiero cortar",
-        "necesito abogado",
-        "quiero abogado",
-        "hablar con abogado",
-        "hablar con camilo",
-        "necesito asesoria",
-        "asesoria legal",
-        "asesoria juridica",
-        "revisar contrato",
-        "revision de contrato",
-        "me despidieron",
-        "despido",
     ]
 
-    if detectar_rubro(
-        texto
-    ):
-        return True
-
     return any(
-        patron in texto_n
-        for patron in patrones
+        p in texto_n
+        for p in patrones
     )
 
 
@@ -2177,54 +1770,56 @@ def responder_openai(
         )
 
     system_prompt = f"""
-Eres un Asistente Virtual de reservas que atiende por WhatsApp
-en español natural de Chile.
+Eres el Asistente Virtual de Estilista {ESTILISTA_NOMBRE}.
 
-Tienes DOS rutas de atención totalmente separadas:
-
-1. ESTILISTA
-   Profesional: Diego
-   Servicios:
-   - Corte de cabello
-   - Corte + barba
-   - Arreglo de barba
-   - Corte de niño
-   - Perfilado
-
-2. SERVICIOS LEGALES
-   Profesional: Camilo
-   Servicios:
-   - Consulta legal
-   - Asesoría laboral
-   - Revisión de contrato
-   - Asesoría civil
-   - Otra consulta legal
-   Horario de Camilo:
-   - Lunes a viernes
-   - 10:00 a 13:00
-   - Última hora de inicio: 12:00
+Atiendes clientes por WhatsApp en español natural de Chile.
 
 Tu conversación debe sentirse natural, breve y humana.
 
-Si el usuario pide algo relacionado con pelo, corte, barba o estilista,
-corresponde a la ruta ESTILISTA.
+IMPORTANTE:
 
-Si pide abogado, contrato, despido, asesoría legal, laboral,
-civil o menciona a Camilo, corresponde a SERVICIOS LEGALES.
+Si el cliente dice "hola", saluda normalmente.
 
-Si no está claro qué necesita, pregúntale si busca:
-💈 Estilista
-⚖️ Abogado
+Si continúa la conversación, no vuelvas a empezar desde cero
+ni repitas el saludo anterior.
 
-La aplicación se encarga de consultar disponibilidad real y reservar.
+Tu objetivo es ayudar al cliente con:
+
+1. Conocer los servicios.
+2. Consultar precios.
+3. Reservar una hora.
+
+SERVICIOS:
+
+1. Corte de cabello — $20.000
+2. Corte + barba — $20.000
+3. Arreglo de barba — $20.000
+4. Corte de niño — $20.000
+5. Perfilado — $20.000
+
+HORARIO:
+
+Lunes a sábado.
+10:00 a 18:00.
+Cada reserva dura 1 hora.
+Última hora de inicio: 17:00.
+Domingo cerrado.
+
+Si el cliente quiere reservar, la aplicación se encargará
+del proceso de agenda y de consultar disponibilidad real.
 
 Nunca inventes horas disponibles.
-Nunca confirmes una reserva por tu cuenta.
+
+No confirmes una reserva por tu cuenta.
+
 No hables de APIs, programación, bases de datos,
 Google Calendar, Twilio ni sistemas internos.
 
-Si el cliente dice "hola", saluda normalmente y pregúntale
-brevemente qué tipo de atención necesita.
+Si falta información para entender al cliente,
+pregunta de manera breve y natural.
+
+Nombre del estilista:
+{ESTILISTA_NOMBRE}
 """
 
     mensajes = [
@@ -2320,7 +1915,6 @@ def resetear_reserva(estado):
     estado["horas_ofrecidas"] = []
 
     estado["datos_reserva"] = {
-        "rubro": None,
         "servicio": None,
         "fecha_hora": None,
         "nombre": None,
@@ -2333,9 +1927,8 @@ def resetear_reserva(estado):
 # GOOGLE MEET + CALENDAR
 # ============================================================
 
-def crear_evento_profesional(
+def crear_evento_diego(
     inicio,
-    rubro_codigo,
     servicio_codigo,
     nombre_cliente,
     telefono_cliente,
@@ -2344,47 +1937,14 @@ def crear_evento_profesional(
 
     try:
 
-        rubro = obtener_rubro(
-            rubro_codigo
-        )
-
-        if not rubro:
-
-            return {
-                "ok": False,
-                "error": "Rubro no configurado."
-            }
-
-        calendar_id = rubro.get(
-            "calendar_id"
-        )
-
-        if not calendar_id:
-
-            return {
-                "ok": False,
-                "error":
-                    "Calendario del profesional no configurado."
-            }
-
-        profesional_nombre = rubro[
-            "profesional_nombre"
-        ]
-
         service = obtener_calendar_service()
 
         servicio = obtener_servicio(
-            servicio_codigo,
-            rubro_codigo
-        )
-
-        duracion = servicio.get(
-            "duracion",
-            DURACION_RESERVA
+            servicio_codigo
         )
 
         fin = inicio + timedelta(
-            minutes=duracion
+            minutes=DURACION_RESERVA
         )
 
         evento = {
@@ -2394,15 +1954,15 @@ def crear_evento_profesional(
 
             "description":
                 (
-                    "Reserva creada por el Asistente Virtual.\n\n"
-                    f"Rubro: {rubro['nombre']}\n"
-                    f"Profesional: {profesional_nombre}\n"
+                    "Reserva creada por el "
+                    "Asistente Virtual de "
+                    f"Estilista {ESTILISTA_NOMBRE}.\n\n"
                     f"Cliente: {nombre_cliente}\n"
                     f"Teléfono: {telefono_cliente}\n"
                     f"Correo: {correo_cliente}\n"
                     f"Servicio: {servicio['nombre']}\n"
                     f"Valor: ${servicio['precio']}\n"
-                    f"Duración: {duracion} minutos\n"
+                    f"Duración: {DURACION_RESERVA} minutos\n"
                     "Origen: Asistente Virtual"
                 ),
 
@@ -2430,8 +1990,7 @@ def crear_evento_profesional(
                     "requestId":
                         hashlib.sha256(
                             (
-                                rubro_codigo
-                                + str(inicio)
+                                str(inicio)
                                 + correo_cliente
                                 + str(datetime.now())
                             ).encode()
@@ -2447,12 +2006,6 @@ def crear_evento_profesional(
 
                 "private": {
 
-                    "rubro":
-                        rubro_codigo,
-
-                    "profesional":
-                        profesional_nombre,
-
                     "cliente":
                         nombre_cliente,
 
@@ -2466,7 +2019,10 @@ def crear_evento_profesional(
                         servicio["nombre"],
 
                     "origen":
-                        "Asistente Virtual",
+                        (
+                            f"Asistente Virtual "
+                            f"{ESTILISTA_NOMBRE}"
+                        ),
                 }
             },
         }
@@ -2475,7 +2031,7 @@ def crear_evento_profesional(
             service
             .events()
             .insert(
-                calendarId=calendar_id,
+                calendarId=CALENDAR_ID,
                 body=evento,
                 conferenceDataVersion=1,
                 sendUpdates="all",
@@ -2510,17 +2066,19 @@ def crear_evento_profesional(
 
         if not meet_url:
 
-            meet_url = resultado.get(
-                "hangoutLink"
+            meet_url = (
+                resultado
+                .get("hangoutLink")
             )
 
         print(
             "EVENTO GOOGLE CREADO:",
-            resultado.get("id"),
-            "RUBRO:",
-            rubro_codigo,
-            "PROFESIONAL:",
-            profesional_nombre
+            resultado.get("id")
+        )
+
+        print(
+            "GOOGLE MEET:",
+            meet_url
         )
 
         return {
@@ -2557,6 +2115,12 @@ def crear_reserva_segura(
     canal
 ):
 
+    """
+    PostgreSQL advisory lock evita que dos clientes
+    puedan intentar reservar simultáneamente la misma
+    hora desde nuestra aplicación.
+    """
+
     if not DATABASE_URL:
 
         return {
@@ -2565,52 +2129,23 @@ def crear_reserva_segura(
                 "DATABASE_URL no configurada."
         }
 
-    rubro_codigo = datos.get(
-        "rubro"
-    )
-
-    rubro = obtener_rubro(
-        rubro_codigo
-    )
-
-    if not rubro:
-
-        return {
-            "ok": False,
-            "error":
-                "Rubro no seleccionado."
-        }
-
-    calendar_id = rubro.get(
-        "calendar_id"
-    )
-
-    if not calendar_id:
-
-        return {
-            "ok": False,
-            "error":
-                "Calendario del profesional no configurado."
-        }
-
     conn = None
 
     try:
 
         conn = db_connect()
+
         conn.autocommit = False
+
         cur = conn.cursor()
 
-        # Lock separado por rubro/profesional + hora.
-        clave_texto = (
-            rubro_codigo
-            + "|"
-            + inicio.isoformat()
-        )
+        # ====================================================
+        # LOCK POR HORA
+        # ====================================================
 
         clave = int(
             hashlib.sha256(
-                clave_texto.encode()
+                inicio.isoformat().encode()
             ).hexdigest()[:15],
             16
         )
@@ -2620,21 +2155,13 @@ def crear_reserva_segura(
             (clave,)
         )
 
-        servicio = obtener_servicio(
-            datos["servicio"],
-            rubro_codigo
-        )
-
-        duracion = servicio.get(
-            "duracion",
-            DURACION_RESERVA
-        )
+        # ====================================================
+        # VOLVER A COMPROBAR GOOGLE
+        # ====================================================
 
         disponible = verificar_disponibilidad(
             inicio,
-            duracion,
-            calendar_id=calendar_id,
-            rubro_codigo=rubro_codigo
+            DURACION_RESERVA
         )
 
         if disponible is not True:
@@ -2646,9 +2173,12 @@ def crear_reserva_segura(
                 "ocupada": True,
             }
 
-        resultado = crear_evento_profesional(
+        # ====================================================
+        # CREAR EVENTO
+        # ====================================================
+
+        resultado = crear_evento_diego(
             inicio=inicio,
-            rubro_codigo=rubro_codigo,
             servicio_codigo=datos["servicio"],
             nombre_cliente=datos["nombre"],
             telefono_cliente=datos["telefono"],
@@ -2666,13 +2196,21 @@ def crear_reserva_segura(
             }
 
         fin = inicio + timedelta(
-            minutes=duracion
+            minutes=DURACION_RESERVA
+        )
+
+        servicio = obtener_servicio(
+            datos["servicio"]
         )
 
         conversation_id = asegurar_conversacion(
             cliente_id,
             canal
         )
+
+        # ====================================================
+        # GUARDAR RESERVA
+        # ====================================================
 
         cur.execute(
             """
@@ -2685,9 +2223,6 @@ def crear_reserva_segura(
                 correo,
                 servicio,
                 servicio_codigo,
-                rubro,
-                profesional,
-                profesional_codigo,
                 inicio,
                 fin,
                 google_event_id,
@@ -2695,7 +2230,7 @@ def crear_reserva_segura(
             )
             VALUES
             (
-                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
+                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
             )
             """,
             (
@@ -2706,9 +2241,6 @@ def crear_reserva_segura(
                 datos["correo"],
                 servicio["nombre"],
                 datos["servicio"],
-                rubro_codigo,
-                rubro["profesional_nombre"],
-                rubro["profesional_codigo"],
                 inicio,
                 fin,
                 resultado["evento_id"],
@@ -2717,6 +2249,7 @@ def crear_reserva_segura(
         )
 
         conn.commit()
+
         cur.close()
 
         return {
@@ -2725,8 +2258,6 @@ def crear_reserva_segura(
                 resultado["evento_id"],
             "meet_url":
                 resultado["meet_url"],
-            "profesional":
-                rubro["profesional_nombre"],
         }
 
     except Exception as e:
@@ -2767,6 +2298,7 @@ def procesar_agenda(
         texto or ""
     ).strip()
 
+
     # ========================================================
     # CANCELAR
     # ========================================================
@@ -2778,229 +2310,155 @@ def procesar_agenda(
         )
 
         return (
-            "No hay problema 😊 "
-            "Cuando quieras reservar una hora, aquí estaré."
+            "No hay problema  "
+            "Cuando quieras conocer los servicios "
+            "o reservar una hora con Diego, "
+            "aquí estaré. ¡Que estés muy bien! "
         )
 
-    # ========================================================
-    # 1. ROUTER DE RUBRO
-    # ========================================================
-
-    if not datos.get("rubro"):
-
-        rubro = detectar_rubro(
-            texto
-        )
-
-        if not rubro:
-
-            estado["paso"] = "rubro"
-
-            return mostrar_rubros()
-
-        datos["rubro"] = rubro
-        estado["paso"] = "servicio"
-
-        # IMPORTANTE:
-        # Si el usuario acaba de elegir el rubro con "1" o "2",
-        # no reutilizar ese mismo número como número de servicio.
-        # Primero mostramos los servicios del rubro seleccionado.
-        if re.fullmatch(
-            r"\s*[12]\s*",
-            texto or ""
-        ):
-            return mostrar_servicios(
-                rubro
-            )
-
-    # Si está esperando rubro, intentar resolverlo.
-    if estado["paso"] == "rubro":
-
-        rubro = detectar_rubro(
-            texto
-        )
-
-        if not rubro:
-
-            return mostrar_rubros()
-
-        datos["rubro"] = rubro
-        estado["paso"] = "servicio"
-
-        # Igual que arriba: 1/2 aquí representan el RUBRO,
-        # no un servicio del rubro.
-        if re.fullmatch(
-            r"\s*[12]\s*",
-            texto or ""
-        ):
-            return mostrar_servicios(
-                rubro
-            )
-
-    rubro_codigo = datos["rubro"]
-    rubro_info = obtener_rubro(
-        rubro_codigo
-    )
-
-    calendar_id = rubro_info.get(
-        "calendar_id"
-    )
-
-    if not calendar_id:
-
-        return (
-            f"La agenda de {rubro_info['profesional_nombre']} "
-            "todavía no está conectada. "
-            "Configura su Calendar ID en Render para poder reservar."
-        )
 
     # ========================================================
-    # 2. SERVICIO
+    # SERVICIO
     # ========================================================
 
-    if not datos.get("servicio"):
+    if not datos["servicio"]:
 
         servicio = detectar_servicio(
-            texto,
-            rubro_codigo
-        )
-
-        if not servicio:
-
-            estado["paso"] = "servicio"
-
-            return mostrar_servicios(
-                rubro_codigo
-            )
-
-        datos["servicio"] = servicio
-        estado["paso"] = "buscar_hora"
-
-    # Si el usuario está en paso servicio
-    if estado["paso"] == "servicio":
-
-        servicio = detectar_servicio(
-            texto,
-            rubro_codigo
-        )
-
-        if not servicio:
-
-            return mostrar_servicios(
-                rubro_codigo
-            )
-
-        datos["servicio"] = servicio
-        estado["paso"] = "buscar_hora"
-
-    servicio_info = obtener_servicio(
-        datos["servicio"],
-        rubro_codigo
-    )
-
-    duracion = servicio_info.get(
-        "duracion",
-        DURACION_RESERVA
-    )
-
-    profesional_nombre = rubro_info[
-        "profesional_nombre"
-    ]
-
-    # ========================================================
-    # 3. BUSCAR HORA
-    # ========================================================
-
-    if estado["paso"] == "buscar_hora":
-
-        hora_solicitada = construir_fecha_hora_solicitada(
             texto
         )
 
-        # ----------------------------------------------------
-        # Cliente indicó hora exacta
-        # ----------------------------------------------------
-        if hora_solicitada:
+        if servicio:
+
+            datos["servicio"] = servicio
+
+            servicio_info = obtener_servicio(
+                servicio
+            )
+
+            # ====================================================
+            # EL CLIENTE YA INDICÓ UNA HORA
+            # Ejemplo: "quiero un corte a las 3"
+            # ====================================================
+
+            hora_solicitada = (
+                construir_fecha_hora_solicitada(
+                    texto
+                )
+            )
+
+            if hora_solicitada:
+
+                if canal == "whatsapp":
+
+                    enviar_mensaje_progreso_twilio(
+                        cliente_id,
+                        (
+                            "🔎 Estoy revisando si esa hora "
+                            "está disponible en mi agenda. "
+                            "Dame un momento 😊"
+                        )
+                    )
+
+                disponible = verificar_disponibilidad(
+                    hora_solicitada,
+                    DURACION_RESERVA
+                )
+
+                if disponible is None:
+
+                    return (
+                        "No pude comprobar la agenda "
+                        "en este momento 😕.\n\n"
+                        "Intenta nuevamente en unos segundos."
+                    )
+
+                if disponible is True:
+
+                    datos["fecha_hora"] = (
+                        hora_solicitada.isoformat()
+                    )
+
+                    estado["paso"] = "nombre"
+
+                    precio = (
+                        f"${servicio_info['precio']:,}"
+                        .replace(",", ".")
+                    )
+
+                    return (
+                        "¡Sí! Esa hora está disponible 😊\n\n"
+                        f"💈 {servicio_info['nombre']}\n"
+                        f"💰 {precio}\n"
+                        f"📅 {formato_fecha_larga(hora_solicitada)}\n\n"
+                        "¿Me indicas tu nombre para continuar "
+                        "con la reserva?"
+                    )
+
+                # La hora solicitada está ocupada:
+                # mostrar alternativas reales.
+                if canal == "whatsapp":
+
+                    enviar_mensaje_progreso_twilio(
+                        cliente_id,
+                        (
+                            "Esa hora está ocupada. "
+                            "Estoy buscando las alternativas "
+                            "más próximas 😊"
+                        )
+                    )
+
+                horas = buscar_proximas_10_horas()
+
+                if not horas:
+
+                    return (
+                        f"La hora solicitada para "
+                        f"{servicio_info['nombre']} está ocupada "
+                        "y por ahora no encontré otras horas "
+                        "disponibles."
+                    )
+
+                estado["horas_ofrecidas"] = [
+                    h.isoformat()
+                    for h in horas
+                ]
+
+                estado["paso"] = "seleccionar_hora"
+
+                return (
+                    f"La hora que pediste "
+                    f"({formato_fecha_larga(hora_solicitada)}) "
+                    "no está disponible 😕.\n\n"
+                    "Estas son las próximas opciones disponibles:\n\n"
+                    f"{formatear_opciones_horas(horas)}\n\n"
+                    "Respóndeme con el número de la opción "
+                    "que prefieras."
+                )
+
+            # ====================================================
+            # NO INDICÓ HORA: flujo normal de próximas 10 horas
+            # ====================================================
 
             if canal == "whatsapp":
 
                 enviar_mensaje_progreso_twilio(
                     cliente_id,
                     (
-                        f"🔎 Estoy revisando la agenda de "
-                        f"{profesional_nombre}. Dame un momento 😊"
+                        "🔎 Estoy buscando las horas más próximas "
+                        "disponibles en mi agenda. "
+                        "Dame un momento 😊"
                     )
                 )
 
-            disponible = verificar_disponibilidad(
-                hora_solicitada,
-                duracion,
-                calendar_id=calendar_id,
-                rubro_codigo=rubro_codigo
-            )
-
-            if disponible is None:
-
-                return (
-                    "No pude comprobar la agenda "
-                    "en este momento 😕.\n\n"
-                    "Intenta nuevamente en unos segundos."
-                )
-
-            if disponible is True:
-
-                datos["fecha_hora"] = (
-                    hora_solicitada.isoformat()
-                )
-
-                estado["paso"] = "nombre"
-
-                precio = (
-                    f"${servicio_info['precio']:,}"
-                    .replace(",", ".")
-                )
-
-                return (
-                    "¡Sí! Esa hora está disponible 😊\n\n"
-                    f"👤 {profesional_nombre}\n"
-                    f"📌 {servicio_info['nombre']}\n"
-                    f"💰 {precio}\n"
-                    f"📅 {formato_fecha_larga(hora_solicitada)}\n\n"
-                    "¿Me indicas tu nombre para continuar "
-                    "con la reserva?"
-                )
-
-            # Hora exacta ocupada -> próximas 10 del mismo profesional.
-            if canal == "whatsapp":
-
-                enviar_mensaje_progreso_twilio(
-                    cliente_id,
-                    (
-                        "Esa hora está ocupada. "
-                        "Estoy buscando las alternativas "
-                        "más próximas 😊"
-                    )
-                )
-
-            horas = buscar_proximas_10_horas(
-                calendar_id=calendar_id,
-                rubro_codigo=rubro_codigo
-            )
-
-            if horas is None:
-
-                return (
-                    f"No pude acceder correctamente a la agenda de "
-                    f"{profesional_nombre} en Google Calendar. "
-                    "Revisa los logs de Render."
-                )
+            horas = buscar_proximas_10_horas()
 
             if not horas:
 
                 return (
-                    f"La hora solicitada con "
-                    f"{profesional_nombre} está ocupada "
-                    "y por ahora no encontré otras horas."
+                    f"Perfecto  Elegiste "
+                    f"{servicio_info['nombre']}.\n\n"
+                    "Pero por ahora no encontré "
+                    "horas disponibles."
                 )
 
             estado["horas_ofrecidas"] = [
@@ -3010,179 +2468,45 @@ def procesar_agenda(
 
             estado["paso"] = "seleccionar_hora"
 
+            precio = (
+                f"${servicio_info['precio']:,}"
+                .replace(",", ".")
+            )
+
             return (
-                f"La hora que pediste "
-                f"({formato_fecha_larga(hora_solicitada)}) "
-                "no está disponible 😕.\n\n"
-                f"Estas son las próximas horas con "
-                f"{profesional_nombre}:\n\n"
+                f"Perfecto \n\n"
+                f" {servicio_info['nombre']}\n"
+                f" {precio}\n\n"
+                "Estas son las próximas "
+                "10 horas disponibles:\n\n"
                 f"{formatear_opciones_horas(horas)}\n\n"
-                "Respóndeme con el número de la opción "
-                "que prefieras."
+                "Respóndeme con el número de la hora "
+                "que prefieras, del 1 al 10."
             )
 
-        # ----------------------------------------------------
-        # Cliente indicó día, pero no hora exacta
-        # ----------------------------------------------------
-        fecha_consultada = detectar_fecha_solicitada(
-            texto,
-            None
-        )
+        return mostrar_servicios()
 
-        texto_n = normalizar_texto(
-            texto
-        )
-
-        menciona_dia = any(
-            palabra in texto_n
-            for palabra in [
-                "hoy",
-                "manana",
-                "pasado manana",
-                "lunes",
-                "martes",
-                "miercoles",
-                "jueves",
-                "viernes",
-                "sabado",
-                "domingo",
-            ]
-        )
-
-        if (
-            fecha_consultada
-            and menciona_dia
-        ):
-
-            if canal == "whatsapp":
-
-                enviar_mensaje_progreso_twilio(
-                    cliente_id,
-                    (
-                        f"🔎 Estoy revisando las horas de "
-                        f"{profesional_nombre} para ese día 😊"
-                    )
-                )
-
-            horas_dia = buscar_horas_disponibles_dia(
-                fecha_consultada,
-                calendar_id=calendar_id,
-                rubro_codigo=rubro_codigo
-            )
-
-            if horas_dia is None:
-
-                return (
-                    "No pude comprobar la agenda "
-                    "en este momento 😕."
-                )
-
-            if horas_dia:
-
-                horas = horas_dia[:10]
-
-            else:
-
-                siguiente_dia = (
-                    fecha_consultada
-                    + timedelta(days=1)
-                ).replace(
-                    hour=0,
-                    minute=0,
-                    second=0,
-                    microsecond=0
-                )
-
-                horas = buscar_proximas_10_horas(
-                    desde=siguiente_dia,
-                    calendar_id=calendar_id,
-                    rubro_codigo=rubro_codigo
-                )
-
-                if horas is None:
-
-                    return (
-                        f"No pude acceder correctamente a la agenda de "
-                        f"{profesional_nombre} en Google Calendar. "
-                        "Revisa los logs de Render."
-                    )
-
-                if not horas:
-
-                    return (
-                        "No encontré horas disponibles "
-                        "para ese día ni en los días siguientes."
-                    )
-
-        else:
-
-            if canal == "whatsapp":
-
-                enviar_mensaje_progreso_twilio(
-                    cliente_id,
-                    (
-                        f"🔎 Estoy buscando las próximas horas "
-                        f"disponibles con {profesional_nombre} 😊"
-                    )
-                )
-
-            horas = buscar_proximas_10_horas(
-                calendar_id=calendar_id,
-                rubro_codigo=rubro_codigo
-            )
-
-        if horas is None:
-
-            return (
-                f"No pude acceder correctamente a la agenda de "
-                f"{profesional_nombre} en Google Calendar. "
-                "Revisa los logs de Render."
-            )
-
-        if not horas:
-
-            return (
-                f"Por ahora no encontré horas disponibles "
-                f"con {profesional_nombre}."
-            )
-
-        estado["horas_ofrecidas"] = [
-            h.isoformat()
-            for h in horas
-        ]
-
-        estado["paso"] = "seleccionar_hora"
-
-        precio = (
-            f"${servicio_info['precio']:,}"
-            .replace(",", ".")
-        )
-
-        return (
-            f"Perfecto 😊\n\n"
-            f"👤 {profesional_nombre}\n"
-            f"📌 {servicio_info['nombre']}\n"
-            f"💰 {precio}\n\n"
-            "Estas son las horas disponibles:\n\n"
-            f"{formatear_opciones_horas(horas)}\n\n"
-            "Respóndeme con el número de la hora "
-            "que prefieras."
-        )
 
     # ========================================================
-    # 4. SELECCIONAR HORA
+    # HORA
     # ========================================================
 
     if estado["paso"] == "seleccionar_hora":
 
+        # ====================================================
+        # EL CLIENTE PUEDE CAMBIAR DE DÍA EN LENGUAJE NATURAL
+        # Ejemplos:
+        # "mañana no hay?"
+        # "¿y el viernes?"
+        # "tienes disponibilidad el miércoles?"
+        # ====================================================
+
         fecha_consultada = detectar_fecha_solicitada(
             texto,
             None
         )
 
-        texto_n = normalizar_texto(
-            texto
-        )
+        texto_n = normalizar_texto(texto)
 
         menciona_dia = any(
             palabra in texto_n
@@ -3210,29 +2534,37 @@ def procesar_agenda(
                 enviar_mensaje_progreso_twilio(
                     cliente_id,
                     (
-                        f"🔎 Estoy revisando la agenda de "
-                        f"{profesional_nombre} para ese día 😊"
+                        "🔎 Estoy revisando la disponibilidad "
+                        "de ese día en mi agenda. "
+                        "Dame un momento 😊"
                     )
                 )
 
             horas_dia = buscar_horas_disponibles_dia(
-                fecha_consultada,
-                calendar_id=calendar_id,
-                rubro_codigo=rubro_codigo
+                fecha_consultada
             )
 
             if horas_dia is None:
 
                 return (
                     "No pude comprobar la agenda "
-                    "en este momento 😕."
+                    "en este momento 😕.\n\n"
+                    "Intenta nuevamente en unos segundos."
                 )
 
-            if horas_dia:
+            if not es_dia_atencion(
+                fecha_consultada
+            ):
 
-                horas = horas_dia[:10]
+                return (
+                    f"El {DIAS_NOMBRES[fecha_consultada.weekday()]} "
+                    "no atendemos.\n\n"
+                    "Atendemos de lunes a sábado "
+                    "entre 10:00 y 18:00.\n\n"
+                    "¿Qué otro día quieres revisar?"
+                )
 
-            else:
+            if not horas_dia:
 
                 siguiente_dia = (
                     fecha_consultada
@@ -3244,29 +2576,64 @@ def procesar_agenda(
                     microsecond=0
                 )
 
-                horas = buscar_proximas_10_horas(
-                    desde=siguiente_dia,
-                    calendar_id=calendar_id,
-                    rubro_codigo=rubro_codigo
+                if canal == "whatsapp":
+
+                    enviar_mensaje_progreso_twilio(
+                        cliente_id,
+                        (
+                            "Ese día está completo. "
+                            "Estoy buscando las próximas "
+                            "horas disponibles 😊"
+                        )
+                    )
+
+                horas_siguientes = buscar_proximas_10_horas(
+                    desde=siguiente_dia
                 )
 
-            if not horas:
+                if not horas_siguientes:
+
+                    return (
+                        f"Para el "
+                        f"{DIAS_NOMBRES[fecha_consultada.weekday()]} "
+                        f"{fecha_consultada.day}/{fecha_consultada.month} "
+                        "no tengo horas disponibles 😕.\n\n"
+                        "Tampoco encontré horas disponibles "
+                        "en los días siguientes por ahora."
+                    )
+
+                estado["horas_ofrecidas"] = [
+                    h.isoformat()
+                    for h in horas_siguientes
+                ]
+
+                estado["paso"] = "seleccionar_hora"
 
                 return (
-                    "No encontré horas disponibles "
-                    "para ese día ni en los días siguientes."
+                    f"Para el "
+                    f"{DIAS_NOMBRES[fecha_consultada.weekday()]} "
+                    f"{fecha_consultada.day}/{fecha_consultada.month} "
+                    "no tengo horas disponibles 😕.\n\n"
+                    "Estas son las próximas 10 horas disponibles "
+                    "desde el día siguiente:\n\n"
+                    f"{formatear_opciones_horas(horas_siguientes)}\n\n"
+                    "Respóndeme con el número de la hora "
+                    "que prefieras, del 1 al 10."
                 )
 
             estado["horas_ofrecidas"] = [
                 h.isoformat()
-                for h in horas
+                for h in horas_dia
             ]
 
             return (
-                f"Estas son las horas disponibles con "
-                f"{profesional_nombre}:\n\n"
-                f"{formatear_opciones_horas(horas)}\n\n"
-                "Respóndeme con el número que prefieras."
+                f"Sí 😊 Para el "
+                f"{DIAS_NOMBRES[fecha_consultada.weekday()]} "
+                f"{fecha_consultada.day}/{fecha_consultada.month} "
+                "tengo estas horas disponibles:\n\n"
+                f"{formatear_opciones_horas(horas_dia)}\n\n"
+                "Respóndeme con el número de la hora "
+                "que prefieras."
             )
 
         match = re.fullmatch(
@@ -3278,16 +2645,23 @@ def procesar_agenda(
 
             return (
                 "Puedes responder con el número de una hora "
-                "o preguntarme por otro día 😊"
+                "o preguntarme por otro día 😊\n\n"
+                "Por ejemplo:\n"
+                "• 1\n"
+                "• ¿Mañana tienes disponibilidad?\n"
+                "• ¿Y el viernes?"
             )
 
         numero = int(
             match.group(1)
         )
 
-        horas_guardadas = estado.get(
-            "horas_ofrecidas",
-            []
+        horas_guardadas = (
+            estado
+            .get(
+                "horas_ofrecidas",
+                []
+            )
         )
 
         if (
@@ -3297,43 +2671,43 @@ def procesar_agenda(
 
             return (
                 f"Elige un número entre 1 y "
-                f"{len(horas_guardadas)}, por favor."
+                f"{len(horas_guardadas)}, por favor ."
             )
 
         fecha_hora = datetime.fromisoformat(
             horas_guardadas[numero - 1]
         )
 
+        # ====================================================
+        # SEGUNDA COMPROBACIÓN EN GOOGLE CALENDAR
+        # ====================================================
+
         if canal == "whatsapp":
 
             enviar_mensaje_progreso_twilio(
                 cliente_id,
                 (
-                    f"🔎 Perfecto. Estoy verificando nuevamente "
-                    f"la agenda de {profesional_nombre} 😊"
+                    "🔎 Perfecto. Estoy verificando nuevamente "
+                    "esa hora en la agenda antes de continuar 😊"
                 )
             )
 
         disponible = verificar_disponibilidad(
             fecha_hora,
-            duracion,
-            calendar_id=calendar_id,
-            rubro_codigo=rubro_codigo
+            DURACION_RESERVA
         )
 
         if disponible is None:
 
             return (
                 "No pude comprobar la agenda "
-                "en este momento. Intenta nuevamente."
+                "en este momento .\n\n"
+                "Intenta nuevamente en unos segundos."
             )
 
         if not disponible:
 
-            horas = buscar_proximas_10_horas(
-                calendar_id=calendar_id,
-                rubro_codigo=rubro_codigo
-            )
+            horas = buscar_proximas_10_horas()
 
             estado["horas_ofrecidas"] = [
                 h.isoformat()
@@ -3341,8 +2715,8 @@ def procesar_agenda(
             ]
 
             return (
-                "Esa hora acaba de ocuparse 😕.\n\n"
-                "Volví a consultar la agenda:\n\n"
+                "Esa hora acaba de ocuparse .\n\n"
+                "Actualicé las horas disponibles:\n\n"
                 f"{formatear_opciones_horas(horas)}\n\n"
                 "¿Cuál prefieres?"
             )
@@ -3355,14 +2729,15 @@ def procesar_agenda(
 
         return (
             "¡Perfecto! 😊\n\n"
-            f"👤 {profesional_nombre}\n"
+            "La hora sigue disponible:\n"
             f"📅 {formato_fecha_larga(fecha_hora)}\n\n"
-            "La hora sigue disponible.\n\n"
+            "Ahora necesito tus datos para cerrar la cita.\n\n"
             "¿Me indicas tu nombre?"
         )
 
+
     # ========================================================
-    # 5. NOMBRE
+    # NOMBRE
     # ========================================================
 
     if estado["paso"] == "nombre":
@@ -3370,7 +2745,7 @@ def procesar_agenda(
         if len(texto) < 2:
 
             return (
-                "¿Me indicas tu nombre, por favor?"
+                "¿Me indicas tu nombre, por favor? "
             )
 
         datos["nombre"] = texto
@@ -3399,32 +2774,46 @@ def procesar_agenda(
                 "Ya tengo tu número de WhatsApp.\n\n"
                 "¿Cuál es tu correo electrónico?\n\n"
                 "Lo usaremos para enviarte la invitación "
-                "de Google Calendar con la cita."
+                "de Google Calendar con la cita y el enlace "
+                "de Google Meet."
             )
 
         estado["paso"] = "telefono"
 
         return (
             f"Perfecto, {texto} 😊\n\n"
-            "¿Cuál es tu número de teléfono?"
+            "¿Cuál es tu número de teléfono? "
         )
 
+
     # ========================================================
-    # 6. TELÉFONO
+    # TELÉFONO
     # ========================================================
 
     if estado["paso"] == "telefono":
 
+        # En WhatsApp/Twilio el número ya viene identificado
+        # automáticamente en el campo From.
         if (
             canal == "whatsapp"
             and datos.get("telefono")
         ):
 
+            actualizar_conversacion_datos(
+                cliente_id,
+                canal,
+                telefono=datos["telefono"]
+            )
+
             estado["paso"] = "correo"
 
             return (
                 "Perfecto 😊\n\n"
-                "¿Cuál es tu correo electrónico?"
+                "Ya tengo tu número de WhatsApp.\n\n"
+                "¿Cuál es tu correo electrónico?\n\n"
+                "Lo usaremos para enviarte la invitación "
+                "de Google Calendar con la cita y el enlace "
+                "de Google Meet."
             )
 
         telefono_limpio = re.sub(
@@ -3443,12 +2832,10 @@ def procesar_agenda(
 
             return (
                 "¿Me indicas un número de teléfono "
-                "válido, por favor?"
+                "válido, por favor? "
             )
 
-        datos["telefono"] = (
-            telefono_limpio
-        )
+        datos["telefono"] = telefono_limpio
 
         actualizar_conversacion_datos(
             cliente_id,
@@ -3460,11 +2847,15 @@ def procesar_agenda(
 
         return (
             "Perfecto 😊\n\n"
-            "¿Cuál es tu correo electrónico?"
+            "¿Cuál es tu correo electrónico?\n\n"
+            "Lo usaremos para enviarte la invitación "
+            "de Google Calendar con la cita y el enlace "
+            "de Google Meet."
         )
 
+
     # ========================================================
-    # 7. CORREO
+    # CORREO
     # ========================================================
 
     if estado["paso"] == "correo":
@@ -3481,7 +2872,7 @@ def procesar_agenda(
         ):
 
             return (
-                "Parece que el correo no está correcto.\n\n"
+                "Parece que el correo no está correcto .\n\n"
                 "Escríbelo nuevamente, por ejemplo:\n"
                 "nombre@gmail.com"
             )
@@ -3501,9 +2892,8 @@ def procesar_agenda(
             enviar_mensaje_progreso_twilio(
                 cliente_id,
                 (
-                    f"📅 Gracias. Estoy haciendo la última "
-                    f"validación en la agenda de "
-                    f"{profesional_nombre} y cerrando tu cita 😊"
+                    "📅 Gracias. Estoy haciendo la última validación "
+                    "en la agenda y cerrando tu cita. Dame un momento 😊"
                 )
             )
 
@@ -3512,6 +2902,7 @@ def procesar_agenda(
             cliente_id,
             canal
         )
+
 
     return completar_reserva(
         estado,
@@ -3532,54 +2923,17 @@ def completar_reserva(
 
     datos = estado["datos_reserva"]
 
-    if not datos.get("rubro"):
-
-        estado["paso"] = "rubro"
-
-        return mostrar_rubros()
-
-    rubro_codigo = datos[
-        "rubro"
-    ]
-
-    rubro_info = obtener_rubro(
-        rubro_codigo
-    )
-
-    calendar_id = rubro_info.get(
-        "calendar_id"
-    )
-
-    profesional_nombre = rubro_info[
-        "profesional_nombre"
-    ]
-
-    if not datos.get("servicio"):
+    if not datos["servicio"]:
 
         estado["paso"] = "servicio"
 
-        return mostrar_servicios(
-            rubro_codigo
-        )
+        return mostrar_servicios()
 
-    servicio = obtener_servicio(
-        datos["servicio"],
-        rubro_codigo
-    )
-
-    duracion = servicio.get(
-        "duracion",
-        DURACION_RESERVA
-    )
-
-    if not datos.get("fecha_hora"):
+    if not datos["fecha_hora"]:
 
         estado["paso"] = "seleccionar_hora"
 
-        horas = buscar_proximas_10_horas(
-            calendar_id=calendar_id,
-            rubro_codigo=rubro_codigo
-        )
+        horas = buscar_proximas_10_horas()
 
         estado["horas_ofrecidas"] = [
             h.isoformat()
@@ -3587,30 +2941,42 @@ def completar_reserva(
         ]
 
         return (
-            f"Estas son las próximas horas disponibles con "
-            f"{profesional_nombre}:\n\n"
+            "Estas son las próximas 10 horas disponibles:\n\n"
             f"{formatear_opciones_horas(horas)}\n\n"
-            "Respóndeme con el número que prefieras."
+            "Respóndeme con el número de la hora que prefieras."
         )
 
-    if not datos.get("nombre"):
+    if not datos["nombre"]:
 
         estado["paso"] = "nombre"
-        return "¿Me indicas tu nombre?"
 
-    if not datos.get("telefono"):
+        return (
+            "¿Me indicas tu nombre? "
+        )
+
+    if not datos["telefono"]:
 
         estado["paso"] = "telefono"
-        return "¿Cuál es tu número de teléfono?"
 
-    if not datos.get("correo"):
+        return (
+            "¿Cuál es tu número de teléfono? "
+        )
+
+    if not datos["correo"]:
 
         estado["paso"] = "correo"
-        return "¿Cuál es tu correo electrónico?"
+
+        return (
+            "¿Cuál es tu correo electrónico? "
+        )
 
     inicio = datetime.fromisoformat(
         datos["fecha_hora"]
     )
+
+    # ========================================================
+    # RESERVA SEGURA
+    # ========================================================
 
     resultado = crear_reserva_segura(
         inicio=inicio,
@@ -3622,12 +2988,10 @@ def completar_reserva(
     if resultado.get("ocupada"):
 
         datos["fecha_hora"] = None
+
         estado["paso"] = "seleccionar_hora"
 
-        horas = buscar_proximas_10_horas(
-            calendar_id=calendar_id,
-            rubro_codigo=rubro_codigo
-        )
+        horas = buscar_proximas_10_horas()
 
         estado["horas_ofrecidas"] = [
             h.isoformat()
@@ -3636,10 +3000,11 @@ def completar_reserva(
 
         return (
             "Justo esa hora acaba de ocuparse 😕.\n\n"
-            f"Volví a consultar la agenda de "
-            f"{profesional_nombre}:\n\n"
+            "Volví a consultar la agenda y estas son las "
+            "próximas 10 horas disponibles:\n\n"
             f"{formatear_opciones_horas(horas)}\n\n"
-            "Respóndeme con el número de la nueva hora."
+            "Respóndeme con el número de la nueva hora "
+            "que prefieras."
         )
 
     if not resultado["ok"]:
@@ -3651,9 +3016,13 @@ def completar_reserva(
 
         return (
             "No pude completar la reserva "
-            "en este momento.\n\n"
+            "en este momento .\n\n"
             "Intenta nuevamente en unos segundos."
         )
+
+    servicio = obtener_servicio(
+        datos["servicio"]
+    )
 
     meet_url = resultado.get(
         "meet_url"
@@ -3675,44 +3044,58 @@ def completar_reserva(
         inicio
     )
 
-    nombre_cliente = datos["nombre"]
-    telefono_cliente = datos["telefono"]
-    correo_cliente = datos["correo"]
+    # ========================================================
+    # GUARDAR MENSAJE DE CONFIRMACIÓN
+    # ========================================================
 
-    precio = (
-        f"${servicio['precio']:,}"
-        .replace(",", ".")
-    )
+    # Antes de resetear guardamos el estado.
+    telefono_guardar = datos["telefono"]
 
     resetear_reserva(
         estado
     )
 
     estado["datos_reserva"]["telefono"] = (
-        telefono_cliente
+        telefono_guardar
+    )
+
+    precio = (
+        f"${servicio['precio']:,}"
+        .replace(",", ".")
     )
 
     respuesta = (
-        "✅ ¡Reserva confirmada!\n\n"
-        f"👤 Profesional: {profesional_nombre}\n"
-        f"📌 Servicio: {servicio['nombre']}\n"
-        f"💰 Valor: {precio}\n"
-        f"🙋 Cliente: {nombre_cliente}\n"
-        f"📞 Teléfono: {telefono_cliente}\n"
-        f"📧 Correo: {correo_cliente}\n"
-        f"📅 {fecha_texto}\n\n"
-        f"Tu cita quedó registrada directamente "
-        f"en la agenda de {profesional_nombre}."
+        " ¡Reserva confirmada!\n\n"
+        f" Servicio: {servicio['nombre']}\n"
+        f" Valor: {precio}\n"
+        f" Cliente: {datos['nombre']}\n"
+        f" Teléfono: {datos['telefono']}\n"
+        f" Correo: {datos['correo']}\n"
+        f" {fecha_texto}\n\n"
+        f"Tu hora quedó agendada directamente "
+        f"en la agenda de {ESTILISTA_NOMBRE}.\n\n"
     )
 
     if meet_url:
 
         respuesta += (
-            "\n\n🔗 Google Meet:\n"
+            " Google Meet:\n"
             f"{meet_url}\n\n"
             "La invitación de Google Calendar fue enviada "
-            "al correo indicado."
+            "al correo indicado.\n\n"
         )
+
+    else:
+
+        respuesta += (
+            "La invitación de Google Calendar fue enviada "
+            "al correo indicado.\n\n"
+        )
+
+    respuesta += (
+        "La atención dura 1 hora.\n\n"
+        "¡Te esperamos! "
+    )
 
     return respuesta
 
@@ -3744,7 +3127,6 @@ def get_wa_session(wa_id):
 
             "datos_reserva": {
 
-                "rubro": None,
                 "servicio": None,
                 "fecha_hora": None,
                 "nombre": None,
@@ -3906,11 +3288,9 @@ def chat():
                 "content":
                     (
                         "¡Hola!  "
-                        "Soy tu Asistente Virtual de reservas 😊\n\n"
-                        "Puedo ayudarte con:\n"
-                        "💈 Estilista con Diego\n"
-                        "⚖️ Servicios legales con Camilo\n\n"
-                        "¿Qué necesitas?"
+                        "Soy el Asistente Virtual "
+                        "de Estilista Diego \n\n"
+                        "¿Cómo estás?"
                     ),
             }
         ]
@@ -3935,17 +3315,12 @@ def chat():
     if "datos_reserva" not in session:
 
         session["datos_reserva"] = {
-            "rubro": None,
             "servicio": None,
             "fecha_hora": None,
             "nombre": None,
             "telefono": None,
             "correo": None,
         }
-
-    # Compatibilidad con sesiones creadas antes de V17/V19.
-    if "rubro" not in session["datos_reserva"]:
-        session["datos_reserva"]["rubro"] = None
 
 
     if request.method == "POST":
@@ -4262,9 +3637,6 @@ def whatsapp_webhook():
         estado = get_wa_session(
             cliente_id
         )
-
-        if "rubro" not in estado["datos_reserva"]:
-            estado["datos_reserva"]["rubro"] = None
 
         # Twilio ya nos entrega el teléfono del cliente.
         # No necesitamos volver a pedirlo durante la reserva.
@@ -5696,9 +5068,6 @@ except Exception as e:
 # ============================================================
 
 print("APP_VERSION:", APP_VERSION)
-print("GOOGLE_CALENDAR_ID DIEGO:", CALENDAR_ID)
-print("CAMILO_CALENDAR_ID CONFIGURADO:", CAMILO_CALENDAR_ID)
-
 print("WHATSAPP: TWILIO + LOGICA COMPLETA DE RESERVAS")
 
 if __name__ == "__main__":
@@ -5718,3 +5087,4 @@ if __name__ == "__main__":
             == "development"
         )
     )
+
