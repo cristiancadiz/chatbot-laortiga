@@ -28,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-16-TWILIO-RESERVAS-V14-FALLBACK-10-HORAS"
+APP_VERSION = "2026-08-16-TWILIO-RESERVAS-V15-FLUJO-CALENDAR-COMPLETO"
 
 
 # ============================================================
@@ -2679,8 +2679,18 @@ def procesar_agenda(
         )
 
         # ====================================================
-        # SEGUNDA COMPROBACIÓN
+        # SEGUNDA COMPROBACIÓN EN GOOGLE CALENDAR
         # ====================================================
+
+        if canal == "whatsapp":
+
+            enviar_mensaje_progreso_twilio(
+                cliente_id,
+                (
+                    "🔎 Perfecto. Estoy verificando nuevamente "
+                    "esa hora en la agenda antes de continuar 😊"
+                )
+            )
 
         disponible = verificar_disponibilidad(
             fecha_hora,
@@ -2718,9 +2728,10 @@ def procesar_agenda(
         estado["paso"] = "nombre"
 
         return (
-            "¡Perfecto! \n\n"
-            f"Te reservamos "
-            f"{formato_fecha_larga(fecha_hora)}.\n\n"
+            "¡Perfecto! 😊\n\n"
+            "La hora sigue disponible:\n"
+            f"📅 {formato_fecha_larga(fecha_hora)}\n\n"
+            "Ahora necesito tus datos para cerrar la cita.\n\n"
             "¿Me indicas tu nombre?"
         )
 
@@ -2876,6 +2887,16 @@ def procesar_agenda(
 
         estado["paso"] = "confirmar"
 
+        if canal == "whatsapp":
+
+            enviar_mensaje_progreso_twilio(
+                cliente_id,
+                (
+                    "📅 Gracias. Estoy haciendo la última validación "
+                    "en la agenda y cerrando tu cita. Dame un momento 😊"
+                )
+            )
+
         return completar_reserva(
             estado,
             cliente_id,
@@ -2920,8 +2941,9 @@ def completar_reserva(
         ]
 
         return (
-            "Estas son las próximas horas disponibles:\n\n"
-            f"{formatear_opciones_horas(horas)}"
+            "Estas son las próximas 10 horas disponibles:\n\n"
+            f"{formatear_opciones_horas(horas)}\n\n"
+            "Respóndeme con el número de la hora que prefieras."
         )
 
     if not datos["nombre"]:
@@ -2977,11 +2999,12 @@ def completar_reserva(
         ]
 
         return (
-            "Justo esa hora acaba de ocuparse .\n\n"
-            "Estas son las nuevas próximas "
-            "horas disponibles:\n\n"
+            "Justo esa hora acaba de ocuparse 😕.\n\n"
+            "Volví a consultar la agenda y estas son las "
+            "próximas 10 horas disponibles:\n\n"
             f"{formatear_opciones_horas(horas)}\n\n"
-            "¿Cuál prefieres?"
+            "Respóndeme con el número de la nueva hora "
+            "que prefieras."
         )
 
     if not resultado["ok"]:
