@@ -28,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-17-V19-FINAL-DIEGO-CAMILO"
+APP_VERSION = "2026-08-17-V20-FIX-ROUTER-DIEGO-CAMILO"
 
 
 # ============================================================
@@ -2891,6 +2891,18 @@ def procesar_agenda(
         datos["rubro"] = rubro
         estado["paso"] = "servicio"
 
+        # IMPORTANTE:
+        # Si el usuario acaba de elegir el rubro con "1" o "2",
+        # no reutilizar ese mismo número como número de servicio.
+        # Primero mostramos los servicios del rubro seleccionado.
+        if re.fullmatch(
+            r"\s*[12]\s*",
+            texto or ""
+        ):
+            return mostrar_servicios(
+                rubro
+            )
+
     # Si está esperando rubro, intentar resolverlo.
     if estado["paso"] == "rubro":
 
@@ -2904,6 +2916,16 @@ def procesar_agenda(
 
         datos["rubro"] = rubro
         estado["paso"] = "servicio"
+
+        # Igual que arriba: 1/2 aquí representan el RUBRO,
+        # no un servicio del rubro.
+        if re.fullmatch(
+            r"\s*[12]\s*",
+            texto or ""
+        ):
+            return mostrar_servicios(
+                rubro
+            )
 
     rubro_codigo = datos["rubro"]
     rubro_info = obtener_rubro(
@@ -3986,6 +4008,10 @@ def chat():
             "telefono": None,
             "correo": None,
         }
+
+    # Compatibilidad con sesiones creadas antes de V17/V19.
+    if "rubro" not in session["datos_reserva"]:
+        session["datos_reserva"]["rubro"] = None
 
 
     if request.method == "POST":
@@ -5755,3 +5781,4 @@ if __name__ == "__main__":
             == "development"
         )
     )
+
