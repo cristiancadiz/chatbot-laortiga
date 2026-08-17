@@ -1275,6 +1275,15 @@ def buscar_proximas_10_horas(desde=None):
             []
         )
 
+        print(
+            "CALENDAR OK - EVENTOS EN RANGO:",
+            len(eventos),
+            "DESDE:",
+            inicio_rango.isoformat(),
+            "HASTA:",
+            fin_rango.isoformat(),
+        )
+
     except Exception as e:
 
         print(
@@ -1282,7 +1291,11 @@ def buscar_proximas_10_horas(desde=None):
             repr(e)
         )
 
-        return []
+        import traceback
+        print(traceback.format_exc())
+
+        # None permite distinguir un error técnico de "sin horas disponibles".
+        return None
 
 
     # Convertimos eventos del calendario en intervalos ocupados.
@@ -1721,6 +1734,18 @@ def es_intencion_agendar(texto):
         "quiero cortarme",
         "quiero corte",
         "me quiero cortar",
+        "disponibilidad",
+        "horas disponibles",
+        "hora disponible",
+        "que horas tienes",
+        "que hora tienes",
+        "tienes hora",
+        "tienes horas",
+        "hay hora",
+        "hay horas",
+        "tienes disponibilidad",
+        "disponible manana",
+        "disponible hoy",
     ]
 
     return any(
@@ -2409,6 +2434,12 @@ def procesar_agenda(
 
                 horas = buscar_proximas_10_horas()
 
+                if horas is None:
+                    return (
+                        "No pude consultar la agenda en este momento 😕.\n\n"
+                        "Revisa la conexión con Google Calendar e intenta nuevamente."
+                    )
+
                 if not horas:
 
                     return (
@@ -2451,6 +2482,13 @@ def procesar_agenda(
                 )
 
             horas = buscar_proximas_10_horas()
+
+            if horas is None:
+                return (
+                    "Elegiste el servicio, pero no pude consultar "
+                    "Google Calendar en este momento 😕.\n\n"
+                    "Intenta nuevamente en unos segundos."
+                )
 
             if not horas:
 
@@ -2591,6 +2629,12 @@ def procesar_agenda(
                     desde=siguiente_dia
                 )
 
+                if horas_siguientes is None:
+                    return (
+                        "No pude consultar las horas siguientes en Google Calendar 😕.\n\n"
+                        "Intenta nuevamente en unos segundos."
+                    )
+
                 if not horas_siguientes:
 
                     return (
@@ -2708,6 +2752,12 @@ def procesar_agenda(
         if not disponible:
 
             horas = buscar_proximas_10_horas()
+
+            if horas is None:
+                return (
+                    "Esa hora ya no está disponible y no pude actualizar "
+                    "la agenda en este momento 😕. Intenta nuevamente."
+                )
 
             estado["horas_ofrecidas"] = [
                 h.isoformat()
@@ -3665,6 +3715,16 @@ def whatsapp_webhook():
         # PROCESAR CON LA LÓGICA ORIGINAL
         # ====================================================
 
+        print(
+            "ESTADO WHATSAPP ANTES DE PROCESAR:",
+            {
+                "modo_agendar": estado.get("modo_agendar"),
+                "paso": estado.get("paso"),
+                "servicio": estado.get("datos_reserva", {}).get("servicio"),
+                "horas_guardadas": len(estado.get("horas_ofrecidas", [])),
+            }
+        )
+
         if estado["modo_agendar"]:
 
             respuesta = procesar_agenda(
@@ -3674,12 +3734,22 @@ def whatsapp_webhook():
                 "whatsapp"
             )
 
-        elif es_intencion_agendar(
-            text
+        elif (
+            es_intencion_agendar(text)
+            or detectar_servicio(text)
         ):
 
             estado["modo_agendar"] = True
             estado["paso"] = "inicio"
+
+            print(
+                "INICIANDO FLUJO AGENDA WHATSAPP:",
+                {
+                    "texto": text,
+                    "servicio_detectado": detectar_servicio(text),
+                    "intencion_agendar": es_intencion_agendar(text),
+                }
+            )
 
             respuesta = procesar_agenda(
                 estado,
@@ -5087,4 +5157,3 @@ if __name__ == "__main__":
             == "development"
         )
     )
-
