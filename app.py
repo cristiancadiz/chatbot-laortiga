@@ -28,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-17-V24-DIAGNOSTICO-CALENDAR"
+APP_VERSION = "2026-08-17-V25-DIAGNOSTICO-CALENDAR-FIX"
 
 
 # ============================================================
@@ -1126,6 +1126,16 @@ def crear_google_flow():
 
 
 def obtener_credentials_diego():
+
+    print(
+        "GOOGLE AUTH CONFIG:",
+        "refresh_token=",
+        bool(GOOGLE_REFRESH_TOKEN),
+        "| client_id=",
+        bool(GOOGLE_CLIENT_ID),
+        "| client_secret=",
+        bool(GOOGLE_CLIENT_SECRET),
+    )
 
     if not GOOGLE_REFRESH_TOKEN:
         raise Exception(
@@ -5688,8 +5698,6 @@ except Exception as e:
 print("APP_VERSION:", APP_VERSION)
 print("GOOGLE_CALENDAR_ID DIEGO:", CALENDAR_ID)
 print("CAMILO_CALENDAR_ID CONFIGURADO:", CAMILO_CALENDAR_ID)
-print("GOOGLE_REFRESH_TOKEN PRESENTE:", bool(GOOGLE_REFRESH_TOKEN))
-print("GOOGLE_CLIENT_ID PRESENTE:", bool(GOOGLE_CLIENT_ID))
 
 print("WHATSAPP: TWILIO + LOGICA COMPLETA DE RESERVAS")
 
