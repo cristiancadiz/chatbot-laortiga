@@ -16,7 +16,6 @@ from flask import (
     render_template_string,
 )
 
-
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
 
@@ -29,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-17-V20-FIX-ROUTER-DIEGO-CAMILO"
+APP_VERSION = "2026-08-17-V22-FIX-DUPLICADO-SERVICIOS"
 
 
 # ============================================================
@@ -1009,6 +1008,7 @@ def detectar_servicio_por_numero(
     return None
 
 
+
 def detectar_servicio(
     texto,
     rubro_codigo="estilista"
@@ -1067,6 +1067,7 @@ def detectar_servicio(
 
         return None
 
+    # Ruta estilista
     if (
         "corte" in texto_n
         and "barba" in texto_n
@@ -1095,41 +1096,13 @@ def detectar_servicio(
         or "cortarme" in texto_n
         or "cabello" in texto_n
         or "pelo" in texto_n
+        or "estilista" in texto_n
     ):
         return "corte"
 
     return None
 
 
-# ============================================================
-# GOOGLE
-# ============================================================
-
-GOOGLE_CLIENT_ID = os.getenv(
-    "GOOGLE_CLIENT_ID"
-)
-
-GOOGLE_CLIENT_SECRET = os.getenv(
-    "GOOGLE_CLIENT_SECRET"
-)
-
-GOOGLE_REFRESH_TOKEN = os.getenv(
-    "GOOGLE_REFRESH_TOKEN"
-)
-
-GOOGLE_REDIRECT_URI = os.getenv(
-    "GOOGLE_REDIRECT_URI",
-    "https://chatbot-laortiga-9.onrender.com/callback"
-)
-
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar"
-]
-
-
-# ============================================================
-# GOOGLE FLOW
-# ============================================================
 
 def crear_google_flow():
 
@@ -1307,68 +1280,6 @@ def mostrar_servicios():
         "Si quieres reservar, escríbeme el número "
         "del servicio que prefieres. "
     )
-
-
-def detectar_servicio_por_numero(texto):
-
-    match = re.fullmatch(
-        r"\s*([1-5])\s*",
-        texto or ""
-    )
-
-    if match:
-
-        numero = int(
-            match.group(1)
-        )
-
-        return SERVICIO_POR_NUMERO.get(
-            numero
-        )
-
-    return None
-
-
-def detectar_servicio(texto):
-
-    texto_n = normalizar_texto(texto)
-
-    servicio_numero = detectar_servicio_por_numero(
-        texto
-    )
-
-    if servicio_numero:
-        return servicio_numero
-
-    if (
-        "corte" in texto_n
-        and "barba" in texto_n
-    ):
-        return "corte_barba"
-
-    if (
-        "corte de nino" in texto_n
-        or "corte nino" in texto_n
-        or "nino" in texto_n
-    ):
-        return "corte_nino"
-
-    if "barba" in texto_n:
-        return "barba"
-
-    if (
-        "perfilado" in texto_n
-        or "perfil" in texto_n
-    ):
-        return "perfilado"
-
-    if (
-        "corte" in texto_n
-        or "cortar" in texto_n
-    ):
-        return "corte"
-
-    return None
 
 
 
@@ -5782,4 +5693,3 @@ if __name__ == "__main__":
             == "development"
         )
     )
-
