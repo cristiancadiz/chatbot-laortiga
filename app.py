@@ -28,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-17-V17-ROUTER-ESTILISTA-ABOGADO"
+APP_VERSION = "2026-08-17-V19-FINAL-DIEGO-CAMILO"
 
 
 # ============================================================
@@ -600,7 +600,7 @@ CALENDAR_ID = os.getenv(
 
 CAMILO_CALENDAR_ID = os.getenv(
     "CAMILO_CALENDAR_ID",
-    ""
+    "1a1be07fdd65289ef9695e88bff24ea54e44833abf0386c03670d089da325faf5@group.calendar.google.com"
 )
 
 RUBROS = {
@@ -612,6 +612,9 @@ RUBROS = {
         "profesional_codigo": "diego",
         "profesional_nombre": ESTILISTA_NOMBRE,
         "calendar_id": CALENDAR_ID,
+        "hora_apertura": 10,
+        "hora_cierre": 18,
+        "dias_atencion": [0, 1, 2, 3, 4, 5],
     },
 
     "abogado": {
@@ -621,6 +624,9 @@ RUBROS = {
         "profesional_codigo": "camilo",
         "profesional_nombre": "Camilo",
         "calendar_id": CAMILO_CALENDAR_ID,
+        "hora_apertura": 10,
+        "hora_cierre": 13,
+        "dias_atencion": [0, 1, 2, 3, 4],
     },
 }
 
@@ -659,6 +665,68 @@ def profesional_rubro(rubro_codigo):
         "nombre":
             rubro["profesional_nombre"],
     }
+
+
+def configuracion_horario_rubro(rubro_codigo):
+
+    rubro = obtener_rubro(
+        rubro_codigo
+    )
+
+    if not rubro:
+
+        return {
+            "hora_apertura": HORA_APERTURA,
+            "hora_cierre": HORA_CIERRE,
+            "dias_atencion": list(DIAS_ATENCION.keys()),
+        }
+
+    return {
+        "hora_apertura":
+            rubro.get("hora_apertura", HORA_APERTURA),
+        "hora_cierre":
+            rubro.get("hora_cierre", HORA_CIERRE),
+        "dias_atencion":
+            rubro.get(
+                "dias_atencion",
+                list(DIAS_ATENCION.keys())
+            ),
+    }
+
+
+def es_dia_atencion_rubro(
+    fecha,
+    rubro_codigo
+):
+
+    fecha = fecha.astimezone(
+        obtener_zona()
+    )
+
+    config = configuracion_horario_rubro(
+        rubro_codigo
+    )
+
+    return (
+        fecha.weekday()
+        in config["dias_atencion"]
+    )
+
+
+def horas_disponibles_rubro(
+    rubro_codigo
+):
+
+    config = configuracion_horario_rubro(
+        rubro_codigo
+    )
+
+    return list(
+        range(
+            config["hora_apertura"],
+            config["hora_cierre"]
+        )
+    )
 
 
 def mostrar_rubros():
@@ -904,6 +972,8 @@ def mostrar_servicios(
             "3. Revisión de contrato — $30.000\n"
             "4. Asesoría civil — $30.000\n"
             "5. Otra consulta legal — $30.000\n\n"
+            "🕐 Camilo atiende de lunes a viernes, "
+            "de 10:00 a 13:00.\n\n"
             "Escríbeme el número o cuéntame brevemente "
             "qué tipo de ayuda necesitas."
         )
@@ -1513,7 +1583,8 @@ def construir_fecha_hora_solicitada(texto):
 def verificar_disponibilidad(
     inicio,
     duracion=60,
-    calendar_id=None
+    calendar_id=None,
+    rubro_codigo="estilista"
 ):
 
     try:
@@ -1522,15 +1593,22 @@ def verificar_disponibilidad(
 
         inicio = inicio.astimezone(zona)
 
-        if not es_dia_atencion(inicio):
+        config_horario = configuracion_horario_rubro(
+            rubro_codigo
+        )
+
+        if not es_dia_atencion_rubro(
+            inicio,
+            rubro_codigo
+        ):
             return False
 
         if inicio.minute != 0:
             return False
 
         if (
-            inicio.hour < HORA_APERTURA
-            or inicio.hour >= HORA_CIERRE
+            inicio.hour < config_horario["hora_apertura"]
+            or inicio.hour >= config_horario["hora_cierre"]
         ):
             return False
 
@@ -1539,7 +1617,7 @@ def verificar_disponibilidad(
         )
 
         limite = inicio.replace(
-            hour=HORA_CIERRE,
+            hour=config_horario["hora_cierre"],
             minute=0,
             second=0,
             microsecond=0
@@ -1596,7 +1674,7 @@ def verificar_disponibilidad(
 # 10 PRÓXIMAS HORAS
 # ============================================================
 
-def buscar_proximas_10_horas(desde=None, calendar_id=None):
+def buscar_proximas_10_horas(desde=None, calendar_id=None, rubro_codigo="estilista"):
 
     """
     Busca las próximas 10 horas disponibles haciendo UNA sola
@@ -1609,6 +1687,14 @@ def buscar_proximas_10_horas(desde=None, calendar_id=None):
     zona = obtener_zona()
 
     calendar_id = calendar_id or CALENDAR_ID
+
+    config_horario = configuracion_horario_rubro(
+        rubro_codigo
+    )
+
+    horas_rubro = horas_disponibles_rubro(
+        rubro_codigo
+    )
 
     if desde is None:
         desde = ahora
@@ -1779,13 +1865,14 @@ def buscar_proximas_10_horas(desde=None, calendar_id=None):
             microsecond=0
         )
 
-        if not es_dia_atencion(
-            fecha
+        if not es_dia_atencion_rubro(
+            fecha,
+            rubro_codigo
         ):
 
             continue
 
-        for hora in HORAS_DISPONIBLES:
+        for hora in horas_rubro:
 
             inicio = fecha.replace(
                 hour=hora,
@@ -1811,7 +1898,7 @@ def buscar_proximas_10_horas(desde=None, calendar_id=None):
 
             # No permitir reservas que terminen después de las 18:00.
             limite = fecha.replace(
-                hour=HORA_CIERRE,
+                hour=config_horario["hora_cierre"],
                 minute=0,
                 second=0,
                 microsecond=0
@@ -1857,7 +1944,7 @@ def buscar_proximas_10_horas(desde=None, calendar_id=None):
     return resultados
 
 
-def buscar_horas_disponibles_dia(fecha_obj, calendar_id=None):
+def buscar_horas_disponibles_dia(fecha_obj, calendar_id=None, rubro_codigo="estilista"):
     """
     Devuelve todas las horas enteras disponibles del día solicitado
     dentro del horario 10:00 a 18:00, haciendo una sola consulta
@@ -1868,6 +1955,14 @@ def buscar_horas_disponibles_dia(fecha_obj, calendar_id=None):
     ahora = ahora_local()
 
     calendar_id = calendar_id or CALENDAR_ID
+
+    config_horario = configuracion_horario_rubro(
+        rubro_codigo
+    )
+
+    horas_rubro = horas_disponibles_rubro(
+        rubro_codigo
+    )
 
     fecha_obj = fecha_obj.astimezone(zona)
 
@@ -1883,7 +1978,10 @@ def buscar_horas_disponibles_dia(fecha_obj, calendar_id=None):
         + timedelta(days=1)
     )
 
-    if not es_dia_atencion(inicio_dia):
+    if not es_dia_atencion_rubro(
+        inicio_dia,
+        rubro_codigo
+    ):
         return []
 
     try:
@@ -1988,7 +2086,7 @@ def buscar_horas_disponibles_dia(fecha_obj, calendar_id=None):
 
     resultados = []
 
-    for hora in HORAS_DISPONIBLES:
+    for hora in horas_rubro:
 
         inicio = inicio_dia.replace(
             hour=hora,
@@ -2005,7 +2103,7 @@ def buscar_horas_disponibles_dia(fecha_obj, calendar_id=None):
         )
 
         limite = inicio_dia.replace(
-            hour=HORA_CIERRE,
+            hour=config_horario["hora_cierre"],
             minute=0,
             second=0,
             microsecond=0
@@ -2191,6 +2289,10 @@ Tienes DOS rutas de atención totalmente separadas:
    - Revisión de contrato
    - Asesoría civil
    - Otra consulta legal
+   Horario de Camilo:
+   - Lunes a viernes
+   - 10:00 a 13:00
+   - Última hora de inicio: 12:00
 
 Tu conversación debe sentirse natural, breve y humana.
 
@@ -2621,7 +2723,8 @@ def crear_reserva_segura(
         disponible = verificar_disponibilidad(
             inicio,
             duracion,
-            calendar_id=calendar_id
+            calendar_id=calendar_id,
+            rubro_codigo=rubro_codigo
         )
 
         if disponible is not True:
@@ -2900,7 +3003,8 @@ def procesar_agenda(
             disponible = verificar_disponibilidad(
                 hora_solicitada,
                 duracion,
-                calendar_id=calendar_id
+                calendar_id=calendar_id,
+                rubro_codigo=rubro_codigo
             )
 
             if disponible is None:
@@ -2947,7 +3051,8 @@ def procesar_agenda(
                 )
 
             horas = buscar_proximas_10_horas(
-                calendar_id=calendar_id
+                calendar_id=calendar_id,
+                rubro_codigo=rubro_codigo
             )
 
             if not horas:
@@ -3021,7 +3126,8 @@ def procesar_agenda(
 
             horas_dia = buscar_horas_disponibles_dia(
                 fecha_consultada,
-                calendar_id=calendar_id
+                calendar_id=calendar_id,
+                rubro_codigo=rubro_codigo
             )
 
             if horas_dia is None:
@@ -3049,7 +3155,8 @@ def procesar_agenda(
 
                 horas = buscar_proximas_10_horas(
                     desde=siguiente_dia,
-                    calendar_id=calendar_id
+                    calendar_id=calendar_id,
+                    rubro_codigo=rubro_codigo
                 )
 
                 if not horas:
@@ -3072,7 +3179,8 @@ def procesar_agenda(
                 )
 
             horas = buscar_proximas_10_horas(
-                calendar_id=calendar_id
+                calendar_id=calendar_id,
+                rubro_codigo=rubro_codigo
             )
 
         if not horas:
@@ -3153,7 +3261,8 @@ def procesar_agenda(
 
             horas_dia = buscar_horas_disponibles_dia(
                 fecha_consultada,
-                calendar_id=calendar_id
+                calendar_id=calendar_id,
+                rubro_codigo=rubro_codigo
             )
 
             if horas_dia is None:
@@ -3181,7 +3290,8 @@ def procesar_agenda(
 
                 horas = buscar_proximas_10_horas(
                     desde=siguiente_dia,
-                    calendar_id=calendar_id
+                    calendar_id=calendar_id,
+                    rubro_codigo=rubro_codigo
                 )
 
             if not horas:
@@ -3251,7 +3361,8 @@ def procesar_agenda(
         disponible = verificar_disponibilidad(
             fecha_hora,
             duracion,
-            calendar_id=calendar_id
+            calendar_id=calendar_id,
+            rubro_codigo=rubro_codigo
         )
 
         if disponible is None:
@@ -3264,7 +3375,8 @@ def procesar_agenda(
         if not disponible:
 
             horas = buscar_proximas_10_horas(
-                calendar_id=calendar_id
+                calendar_id=calendar_id,
+                rubro_codigo=rubro_codigo
             )
 
             estado["horas_ofrecidas"] = [
@@ -3509,7 +3621,8 @@ def completar_reserva(
         estado["paso"] = "seleccionar_hora"
 
         horas = buscar_proximas_10_horas(
-            calendar_id=calendar_id
+            calendar_id=calendar_id,
+            rubro_codigo=rubro_codigo
         )
 
         estado["horas_ofrecidas"] = [
@@ -3556,7 +3669,8 @@ def completar_reserva(
         estado["paso"] = "seleccionar_hora"
 
         horas = buscar_proximas_10_horas(
-            calendar_id=calendar_id
+            calendar_id=calendar_id,
+            rubro_codigo=rubro_codigo
         )
 
         estado["horas_ofrecidas"] = [
