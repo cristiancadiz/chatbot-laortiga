@@ -26,7 +26,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-19-FINAL-DIEGO-V19-SIN-POSTGRES-ULTIMOS-SERVICIOS"
+APP_VERSION = "2026-08-19-FINAL-DIEGO-V20-SIN-DB-15-HORAS-PRESENCIAL"
 
 
 # ============================================================
@@ -884,13 +884,13 @@ def verificar_disponibilidad(
 
 
 # ============================================================
-# 10 PRÓXIMAS HORAS
+# 15 PRÓXIMAS HORAS
 # ============================================================
 
-def buscar_proximas_10_horas(desde=None):
+def buscar_proximas_15_horas(desde=None):
 
     """
-    Busca las próximas 10 horas disponibles haciendo UNA sola
+    Busca las próximas 15 horas disponibles haciendo UNA sola
     consulta a Google Calendar para evitar timeouts de Twilio.
 
     Si recibe "desde", comienza a buscar desde esa fecha/hora.
@@ -1144,10 +1144,10 @@ def buscar_proximas_10_horas(desde=None):
                     inicio
                 )
 
-                if len(resultados) >= 10:
+                if len(resultados) >= 15:
 
                     print(
-                        "10 HORAS DISPONIBLES:",
+                        "15 HORAS DISPONIBLES:",
                         [
                             h.isoformat()
                             for h in resultados
@@ -1613,7 +1613,7 @@ def resetear_reserva(estado):
 
 
 # ============================================================
-# GOOGLE MEET + CALENDAR
+# GOOGLE CALENDAR - ATENCIÓN PRESENCIAL
 # ============================================================
 
 def crear_evento_diego(
@@ -1672,25 +1672,6 @@ def crear_evento_diego(
                 }
             ],
 
-            "conferenceData": {
-
-                "createRequest": {
-
-                    "requestId":
-                        hashlib.sha256(
-                            (
-                                str(inicio)
-                                + correo_cliente
-                                + str(datetime.now())
-                            ).encode()
-                        ).hexdigest()[:32],
-
-                    "conferenceSolutionKey": {
-                        "type": "hangoutsMeet"
-                    }
-                }
-            },
-
             "extendedProperties": {
 
                 "private": {
@@ -1722,52 +1703,17 @@ def crear_evento_diego(
             .insert(
                 calendarId=CALENDAR_ID,
                 body=evento,
-                conferenceDataVersion=1,
                 sendUpdates="all",
             )
             .execute()
         )
 
+        # Atención presencial: no se crea Google Meet.
         meet_url = None
-
-        conference_data = resultado.get(
-            "conferenceData",
-            {}
-        )
-
-        entry_points = conference_data.get(
-            "entryPoints",
-            []
-        )
-
-        for entry in entry_points:
-
-            if (
-                entry.get("entryPointType")
-                == "video"
-            ):
-
-                meet_url = entry.get(
-                    "uri"
-                )
-
-                break
-
-        if not meet_url:
-
-            meet_url = (
-                resultado
-                .get("hangoutLink")
-            )
 
         print(
             "EVENTO GOOGLE CREADO:",
             resultado.get("id")
-        )
-
-        print(
-            "GOOGLE MEET:",
-            meet_url
         )
 
         return {
@@ -1975,7 +1921,7 @@ def procesar_agenda(
                         )
                     )
 
-                horas = buscar_proximas_10_horas()
+                horas = buscar_proximas_15_horas()
 
                 if horas is None:
                     return (
@@ -2010,7 +1956,7 @@ def procesar_agenda(
                 )
 
             # ====================================================
-            # NO INDICÓ HORA: flujo normal de próximas 10 horas
+            # NO INDICÓ HORA: flujo normal de próximas 15 horas
             # ====================================================
 
             if canal == "whatsapp":
@@ -2024,7 +1970,7 @@ def procesar_agenda(
                     )
                 )
 
-            horas = buscar_proximas_10_horas()
+            horas = buscar_proximas_15_horas()
 
             if horas is None:
                 return (
@@ -2058,10 +2004,10 @@ def procesar_agenda(
                 f" {servicio_info['nombre']}\n"
                 f" {precio}\n\n"
                 "Estas son las próximas "
-                "10 horas disponibles:\n\n"
+                "15 horas disponibles:\n\n"
                 f"{formatear_opciones_horas(horas)}\n\n"
                 "Respóndeme con el número de la hora "
-                "que prefieras, del 1 al 10."
+                "que prefieras, del 1 al 15."
             )
 
         return mostrar_servicios()
@@ -2167,7 +2113,7 @@ def procesar_agenda(
                         )
                     )
 
-                horas_siguientes = buscar_proximas_10_horas(
+                horas_siguientes = buscar_proximas_15_horas(
                     desde=siguiente_dia
                 )
 
@@ -2200,11 +2146,11 @@ def procesar_agenda(
                     f"{DIAS_NOMBRES[fecha_consultada.weekday()]} "
                     f"{fecha_consultada.day}/{fecha_consultada.month} "
                     "no tengo horas disponibles 😕.\n\n"
-                    "Estas son las próximas 10 horas disponibles "
+                    "Estas son las próximas 15 horas disponibles "
                     "desde el día siguiente:\n\n"
                     f"{formatear_opciones_horas(horas_siguientes)}\n\n"
                     "Respóndeme con el número de la hora "
-                    "que prefieras, del 1 al 10."
+                    "que prefieras, del 1 al 15."
                 )
 
             estado["horas_ofrecidas"] = [
@@ -2293,7 +2239,7 @@ def procesar_agenda(
 
         if not disponible:
 
-            horas = buscar_proximas_10_horas()
+            horas = buscar_proximas_15_horas()
 
             if horas is None:
                 return (
@@ -2366,8 +2312,7 @@ def procesar_agenda(
                 "Ya tengo tu número de WhatsApp.\n\n"
                 "¿Cuál es tu correo electrónico?\n\n"
                 "Lo usaremos para enviarte la invitación "
-                "de Google Calendar con la cita y el enlace "
-                "de Google Meet."
+                "de Google Calendar con los datos de tu cita presencial."
             )
 
         estado["paso"] = "telefono"
@@ -2404,8 +2349,7 @@ def procesar_agenda(
                 "Ya tengo tu número de WhatsApp.\n\n"
                 "¿Cuál es tu correo electrónico?\n\n"
                 "Lo usaremos para enviarte la invitación "
-                "de Google Calendar con la cita y el enlace "
-                "de Google Meet."
+                "de Google Calendar con los datos de tu cita presencial."
             )
 
         telefono_limpio = re.sub(
@@ -2441,8 +2385,7 @@ def procesar_agenda(
             "Perfecto 😊\n\n"
             "¿Cuál es tu correo electrónico?\n\n"
             "Lo usaremos para enviarte la invitación "
-            "de Google Calendar con la cita y el enlace "
-            "de Google Meet."
+            "de Google Calendar con los datos de tu cita presencial."
         )
 
 
@@ -2525,7 +2468,7 @@ def completar_reserva(
 
         estado["paso"] = "seleccionar_hora"
 
-        horas = buscar_proximas_10_horas()
+        horas = buscar_proximas_15_horas()
 
         if horas is None:
             return (
@@ -2539,7 +2482,7 @@ def completar_reserva(
         ]
 
         return (
-            "Estas son las próximas 10 horas disponibles:\n\n"
+            "Estas son las próximas 15 horas disponibles:\n\n"
             f"{formatear_opciones_horas(horas)}\n\n"
             "Respóndeme con el número de la hora que prefieras."
         )
@@ -2589,7 +2532,7 @@ def completar_reserva(
 
         estado["paso"] = "seleccionar_hora"
 
-        horas = buscar_proximas_10_horas()
+        horas = buscar_proximas_15_horas()
 
         if horas is None:
             return (
@@ -2605,7 +2548,7 @@ def completar_reserva(
         return (
             "Justo esa hora acaba de ocuparse 😕.\n\n"
             "Volví a consultar la agenda y estas son las "
-            "próximas 10 horas disponibles:\n\n"
+            "próximas 15 horas disponibles:\n\n"
             f"{formatear_opciones_horas(horas)}\n\n"
             "Respóndeme con el número de la nueva hora "
             "que prefieras."
@@ -2679,21 +2622,10 @@ def completar_reserva(
         f"en la agenda de {ESTILISTA_NOMBRE}.\n\n"
     )
 
-    if meet_url:
-
-        respuesta += (
-            " Google Meet:\n"
-            f"{meet_url}\n\n"
-            "La invitación de Google Calendar fue enviada "
-            "al correo indicado.\n\n"
-        )
-
-    else:
-
-        respuesta += (
-            "La invitación de Google Calendar fue enviada "
-            "al correo indicado.\n\n"
-        )
+    respuesta += (
+        "La invitación de Google Calendar fue enviada "
+        "al correo indicado.\n\n"
+    )
 
     respuesta += (
         "La atención dura 1 hora.\n\n"
@@ -4381,7 +4313,7 @@ a {
 
 <a href="{{ conversacion['meet_url'] }}"
 target="_blank">
-Abrir Google Meet
+Abrir evento de Google Calendar
 </a>
 </p>
 
