@@ -26,7 +26,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-19-FINAL-DIEGO-V20-SIN-DB-15-HORAS-PRESENCIAL"
+APP_VERSION = "2026-08-19-FINAL-DIEGO-V21-FECHAS-MESES-MENU"
 
 
 # ============================================================
@@ -401,6 +401,107 @@ DIAS_NOMBRES = [
 ]
 
 
+MESES_NOMBRES = [
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
+]
+
+MESES_MAP = {
+    "enero": 1,
+    "febrero": 2,
+    "marzo": 3,
+    "abril": 4,
+    "mayo": 5,
+    "junio": 6,
+    "julio": 7,
+    "agosto": 8,
+    "septiembre": 9,
+    "setiembre": 9,
+    "octubre": 10,
+    "noviembre": 11,
+    "diciembre": 12,
+}
+
+
+def es_comando_menu(texto):
+    texto_n = normalizar_texto(texto)
+    comandos = {
+        "menu",
+        "menu principal",
+        "volver al menu",
+        "volver al menu principal",
+        "inicio",
+        "volver",
+    }
+    return texto_n in comandos
+
+
+def detectar_mes_solicitado(texto):
+    """
+    Detecta un mes indicado sin un día específico.
+    Ejemplos:
+    - "en septiembre"
+    - "quiero hora para octubre"
+
+    Devuelve el primer día del mes solicitado, en el año correcto.
+    Si el mes de este año ya pasó, usa el año siguiente.
+    Si el mensaje contiene un día explícito, devuelve None para que
+    detectar_fecha_solicitada() procese la fecha exacta.
+    """
+    texto_n = normalizar_texto(texto)
+
+    patron_dia_mes = (
+        r"\b(?:el\s+)?([0-3]?\d)\s*(?:de\s+)?"
+        r"(enero|febrero|marzo|abril|mayo|junio|julio|agosto|"
+        r"septiembre|setiembre|octubre|noviembre|diciembre)\b"
+    )
+    if re.search(patron_dia_mes, texto_n):
+        return None
+
+    ahora = ahora_local()
+
+    for nombre_mes, numero_mes in MESES_MAP.items():
+        if re.search(rf"\b{re.escape(nombre_mes)}\b", texto_n):
+            anio = ahora.year
+            if numero_mes < ahora.month:
+                anio += 1
+
+            return obtener_zona().localize(
+                datetime(
+                    anio,
+                    numero_mes,
+                    1,
+                    0,
+                    0,
+                    0
+                )
+            )
+
+    return None
+
+
+def texto_menciona_fecha_o_mes(texto):
+    texto_n = normalizar_texto(texto)
+
+    palabras = [
+        "hoy",
+        "manana",
+        "pasado manana",
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado",
+        "domingo",
+    ] + list(MESES_MAP.keys())
+
+    return any(
+        re.search(rf"\b{re.escape(p)}\b", texto_n)
+        for p in palabras
+    )
+
+
 def es_dia_atencion(fecha):
 
     fecha = fecha.astimezone(
@@ -665,32 +766,74 @@ def detectar_hora_solicitada(texto):
 
 def detectar_fecha_solicitada(texto, hora_data=None):
     """
-    Detecta hoy, mañana, pasado mañana o un día de la semana.
-
-    Si el cliente solo escribe una hora (ej. "a las 3"),
-    usa el próximo día de atención donde esa hora todavía
-    tenga sentido.
+    Detecta hoy, mañana, pasado mañana, días de la semana y fechas exactas
+    como "2 de septiembre" o "15 enero".
     """
 
     texto_n = normalizar_texto(texto)
     ahora = ahora_local()
+    zona = obtener_zona()
 
     fecha_base = ahora.replace(
         second=0,
         microsecond=0
     )
 
+    patron_dia_mes = (
+        r"\b(?:el\s+)?([0-3]?\d)\s*(?:de\s+)?"
+        r"(enero|febrero|marzo|abril|mayo|junio|julio|agosto|"
+        r"septiembre|setiembre|octubre|noviembre|diciembre)\b"
+    )
+
+    match_fecha = re.search(
+        patron_dia_mes,
+        texto_n
+    )
+
+    if match_fecha:
+
+        dia = int(match_fecha.group(1))
+        mes = MESES_MAP[match_fecha.group(2)]
+        anio = ahora.year
+
+        try:
+            candidato = zona.localize(
+                datetime(
+                    anio,
+                    mes,
+                    dia,
+                    0,
+                    0,
+                    0
+                )
+            )
+        except ValueError:
+            return None
+
+        if candidato.date() < ahora.date():
+            anio += 1
+
+            try:
+                candidato = zona.localize(
+                    datetime(
+                        anio,
+                        mes,
+                        dia,
+                        0,
+                        0,
+                        0
+                    )
+                )
+            except ValueError:
+                return None
+
+        return candidato
+
     if "pasado manana" in texto_n:
-        return (
-            fecha_base
-            + timedelta(days=2)
-        )
+        return fecha_base + timedelta(days=2)
 
     if "manana" in texto_n:
-        return (
-            fecha_base
-            + timedelta(days=1)
-        )
+        return fecha_base + timedelta(days=1)
 
     if "hoy" in texto_n:
         return fecha_base
@@ -714,12 +857,7 @@ def detectar_fecha_solicitada(texto, hora_data=None):
                 - ahora.weekday()
             ) % 7
 
-            # Si menciona el mismo día pero la hora ya pasó,
-            # tomar la semana siguiente.
-            if (
-                diferencia == 0
-                and hora_data
-            ):
+            if diferencia == 0 and hora_data:
 
                 hora, minuto = hora_data
 
@@ -733,13 +871,8 @@ def detectar_fecha_solicitada(texto, hora_data=None):
                 if candidato_hoy <= ahora:
                     diferencia = 7
 
-            return (
-                fecha_base
-                + timedelta(days=diferencia)
-            )
+            return fecha_base + timedelta(days=diferencia)
 
-    # Sin fecha explícita: usar hoy si todavía sirve,
-    # si no, avanzar al siguiente día de atención.
     if hora_data:
 
         hora, minuto = hora_data
@@ -756,9 +889,7 @@ def detectar_fecha_solicitada(texto, hora_data=None):
                 microsecond=0
             )
 
-            if not es_dia_atencion(
-                candidato_fecha
-            ):
+            if not es_dia_atencion(candidato_fecha):
                 continue
 
             if candidato_fecha <= ahora:
@@ -1408,6 +1539,15 @@ def es_intencion_agendar(texto):
         "hay horas",
         "disponible manana",
         "disponible hoy",
+        "quiero cortarme",
+        "quiero cortar",
+        "cortarme el pelo",
+        "cortarme el cabello",
+        "cortar el pelo",
+        "cortar el cabello",
+        "quiero un corte",
+        "quiero corte",
+        "necesito un corte",
     ]
 
     return any(
@@ -1609,6 +1749,8 @@ def resetear_reserva(estado):
         "nombre": None,
         "telefono": telefono,
         "correo": None,
+        "fecha_preferida": None,
+        "mes_desde": None,
     }
 
 
@@ -1813,6 +1955,25 @@ def procesar_agenda(
         texto or ""
     ).strip()
 
+    texto_n = normalizar_texto(texto)
+
+    fecha_exacta_detectada = detectar_fecha_solicitada(
+        texto,
+        None
+    )
+
+    mes_detectado = detectar_mes_solicitado(
+        texto
+    )
+
+    if fecha_exacta_detectada and texto_menciona_fecha_o_mes(texto):
+        datos["fecha_preferida"] = fecha_exacta_detectada.isoformat()
+        datos["mes_desde"] = None
+
+    elif mes_detectado:
+        datos["mes_desde"] = mes_detectado.isoformat()
+        datos["fecha_preferida"] = None
+
 
     # ========================================================
     # CANCELAR
@@ -1841,6 +2002,29 @@ def procesar_agenda(
         servicio = detectar_servicio(
             texto
         )
+
+        corte_ambiguo = (
+            "corte" in texto_n
+            or "cortar" in texto_n
+            or "cortarme" in texto_n
+        ) and (
+            "pelo" in texto_n
+            or "cabello" in texto_n
+            or texto_n in {"corte", "quiero corte", "quiero un corte"}
+        )
+
+        if not servicio and texto_n in {"hombre", "varon", "masculino"}:
+            servicio = "corte_hombre"
+
+        if not servicio and texto_n in {"mujer", "dama", "femenino"}:
+            servicio = "corte_mujer"
+
+        if not servicio and corte_ambiguo:
+            return (
+                "Perfecto ✂️ ¿El corte es para hombre o mujer?\n\n"
+                "Respóndeme HOMBRE o MUJER.\n"
+                "Mantendré la fecha o el mes que me indicaste."
+            )
 
         if servicio:
 
@@ -1956,7 +2140,7 @@ def procesar_agenda(
                 )
 
             # ====================================================
-            # NO INDICÓ HORA: flujo normal de próximas 15 horas
+            # NO INDICÓ HORA: respetar fecha o mes solicitado
             # ====================================================
 
             if canal == "whatsapp":
@@ -1964,29 +2148,119 @@ def procesar_agenda(
                 enviar_mensaje_progreso_twilio(
                     cliente_id,
                     (
-                        "🔎 Estoy buscando las horas más próximas "
-                        "disponibles en mi agenda. "
-                        "Dame un momento 😊"
+                        "🔎 Estoy buscando disponibilidad real "
+                        "en mi agenda. Dame un momento 😊"
                     )
                 )
 
-            horas = buscar_proximas_15_horas()
+            if datos.get("fecha_preferida"):
 
-            if horas is None:
-                return (
-                    "Elegiste el servicio, pero no pude consultar "
-                    "Google Calendar en este momento 😕.\n\n"
-                    "Intenta nuevamente en unos segundos."
+                fecha_preferida = datetime.fromisoformat(
+                    datos["fecha_preferida"]
                 )
 
-            if not horas:
-
-                return (
-                    f"Perfecto  Elegiste "
-                    f"{servicio_info['nombre']}.\n\n"
-                    "Pero por ahora no encontré "
-                    "horas disponibles."
+                horas = buscar_horas_disponibles_dia(
+                    fecha_preferida
                 )
+
+                if horas is None:
+                    return (
+                        "No pude consultar Google Calendar en este momento 😕.\n\n"
+                        "Intenta nuevamente en unos segundos."
+                    )
+
+                if not es_dia_atencion(fecha_preferida):
+                    return (
+                        f"El {DIAS_NOMBRES[fecha_preferida.weekday()]} "
+                        f"{fecha_preferida.day}/{fecha_preferida.month} no atendemos.\n\n"
+                        "Atendemos de lunes a sábado entre 10:00 y 18:00.\n\n"
+                        "Puedes indicarme otra fecha o escribir MENÚ."
+                    )
+
+                if not horas:
+                    desde = (
+                        fecha_preferida
+                        + timedelta(days=1)
+                    ).replace(
+                        hour=0,
+                        minute=0,
+                        second=0,
+                        microsecond=0
+                    )
+
+                    horas = buscar_proximas_15_horas(
+                        desde=desde
+                    )
+
+                    if horas is None:
+                        return (
+                            "Ese día está completo y no pude consultar "
+                            "las horas siguientes en este momento 😕."
+                        )
+
+                    if not horas:
+                        return (
+                            f"El {fecha_preferida.day}/{fecha_preferida.month} "
+                            "está completo y no encontré horas posteriores disponibles."
+                        )
+
+                    prefijo = (
+                        f"El {fecha_preferida.day}/{fecha_preferida.month} "
+                        "está completo 😕.\n\n"
+                        "Estas son las próximas 15 horas disponibles desde el día siguiente:\n\n"
+                    )
+
+                else:
+                    prefijo = (
+                        f"Sí 😊 Para el {fecha_preferida.day}/{fecha_preferida.month} "
+                        "tengo estas horas disponibles:\n\n"
+                    )
+
+            elif datos.get("mes_desde"):
+
+                desde_mes = datetime.fromisoformat(
+                    datos["mes_desde"]
+                )
+
+                horas = buscar_proximas_15_horas(
+                    desde=desde_mes
+                )
+
+                if horas is None:
+                    return (
+                        "No pude consultar Google Calendar en este momento 😕.\n\n"
+                        "Intenta nuevamente en unos segundos."
+                    )
+
+                if not horas:
+                    return (
+                        f"No encontré horas disponibles desde "
+                        f"{MESES_NOMBRES[desde_mes.month - 1]} por ahora."
+                    )
+
+                prefijo = (
+                    f"Perfecto 😊 Estas son las primeras 15 horas disponibles "
+                    f"desde {MESES_NOMBRES[desde_mes.month - 1]}:\n\n"
+                )
+
+            else:
+
+                horas = buscar_proximas_15_horas()
+
+                if horas is None:
+                    return (
+                        "Elegiste el servicio, pero no pude consultar "
+                        "Google Calendar en este momento 😕.\n\n"
+                        "Intenta nuevamente en unos segundos."
+                    )
+
+                if not horas:
+                    return (
+                        f"Perfecto. Elegiste {servicio_info['nombre']}.\n\n"
+                        "Pero por ahora no encontré horas disponibles."
+                    )
+
+                prefijo = "Estas son las próximas 15 horas disponibles:\n\n"
 
             estado["horas_ofrecidas"] = [
                 h.isoformat()
@@ -2000,14 +2274,12 @@ def procesar_agenda(
             )
 
             return (
-                f"Perfecto \n\n"
-                f" {servicio_info['nombre']}\n"
-                f" {precio}\n\n"
-                "Estas son las próximas "
-                "15 horas disponibles:\n\n"
+                f"💈 {servicio_info['nombre']}\n"
+                f"💰 {precio}\n\n"
+                f"{prefijo}"
                 f"{formatear_opciones_horas(horas)}\n\n"
-                "Respóndeme con el número de la hora "
-                "que prefieras, del 1 al 15."
+                "Respóndeme con el número de la hora que prefieras.\n"
+                "También puedes escribir otra fecha, otro mes o MENÚ."
             )
 
         return mostrar_servicios()
@@ -2032,22 +2304,55 @@ def procesar_agenda(
             None
         )
 
+        mes_consultado = detectar_mes_solicitado(
+            texto
+        )
+
         texto_n = normalizar_texto(texto)
 
-        menciona_dia = any(
-            palabra in texto_n
-            for palabra in [
-                "hoy",
-                "manana",
-                "pasado manana",
-                "lunes",
-                "martes",
-                "miercoles",
-                "jueves",
-                "viernes",
-                "sabado",
-                "domingo",
+        if mes_consultado:
+
+            if canal == "whatsapp":
+                enviar_mensaje_progreso_twilio(
+                    cliente_id,
+                    "🔎 Estoy revisando la disponibilidad desde ese mes 😊"
+                )
+
+            horas_mes = buscar_proximas_15_horas(
+                desde=mes_consultado
+            )
+
+            if horas_mes is None:
+                return (
+                    "No pude consultar Google Calendar en este momento 😕.\n\n"
+                    "Intenta nuevamente en unos segundos."
+                )
+
+            if not horas_mes:
+                return (
+                    f"No encontré horas disponibles desde "
+                    f"{MESES_NOMBRES[mes_consultado.month - 1]} por ahora."
+                )
+
+            estado["horas_ofrecidas"] = [
+                h.isoformat()
+                for h in horas_mes
             ]
+
+            datos["mes_desde"] = mes_consultado.isoformat()
+            datos["fecha_preferida"] = None
+
+            return (
+                f"Estas son las primeras 15 horas disponibles desde "
+                f"{MESES_NOMBRES[mes_consultado.month - 1]}:\n\n"
+                f"{formatear_opciones_horas(horas_mes)}\n\n"
+                "Respóndeme con el número de la hora que prefieras.\n"
+                "También puedes indicar una fecha exacta, por ejemplo "
+                "\"2 de septiembre\", o escribir MENÚ."
+            )
+
+        menciona_dia = texto_menciona_fecha_o_mes(
+            texto
         )
 
         if (
@@ -2177,11 +2482,13 @@ def procesar_agenda(
 
             return (
                 "Puedes responder con el número de una hora "
-                "o preguntarme por otro día 😊\n\n"
+                "o pedirme otra fecha o mes 😊\n\n"
                 "Por ejemplo:\n"
                 "• 1\n"
-                "• ¿Mañana tienes disponibilidad?\n"
-                "• ¿Y el viernes?"
+                "• 2 de septiembre\n"
+                "• septiembre\n"
+                "• ¿Mañana tienes disponibilidad?\n\n"
+                "Escribe MENÚ cuando quieras volver al menú principal."
             )
 
         numero = int(
@@ -2675,6 +2982,8 @@ def get_wa_session(wa_id):
                 "nombre": None,
                 "telefono": wa_id,
                 "correo": None,
+                "fecha_preferida": None,
+                "mes_desde": None,
             },
         }
 
@@ -3221,7 +3530,7 @@ def whatsapp_webhook():
         texto_n = normalizar_texto(text)
 
         # MENÚ siempre permite salir de cualquier flujo y comenzar de nuevo.
-        if texto_n in {"menu", "inicio", "volver"}:
+        if es_comando_menu(text):
 
             resetear_reserva(estado)
             estado["paso"] = "menu_principal"
