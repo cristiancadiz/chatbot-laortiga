@@ -28,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-19-FINAL-DIEGO-V17-SERVICIOS-AGENDA-TRANSFERENCIA"
+APP_VERSION = "2026-08-16-TWILIO-RESERVAS-V15-FLUJO-CALENDAR-COMPLETO"
 
 
 # ============================================================
@@ -611,109 +611,48 @@ HORAS_DISPONIBLES = list(
 
 SERVICIOS = {
 
-    "corte_hombre": {
+    "corte": {
         "numero": 1,
-        "nombre": "Corte de cabello hombre",
+        "nombre": "Corte de cabello",
         "duracion": 60,
-        "precio": 17000,
-        "precio_texto": "$17.000",
-        "detalle": "Incluye perfilado de cejas, lavado de cabello y aplicación de producto.",
+        "precio": 20000,
     },
 
-    "perfilado_barba": {
+    "corte_barba": {
         "numero": 2,
-        "nombre": "Perfilado de barba",
+        "nombre": "Corte + barba",
         "duracion": 60,
-        "precio": 10000,
-        "precio_texto": "$10.000",
+        "precio": 20000,
     },
 
-    "base_rizos": {
+    "barba": {
         "numero": 3,
-        "nombre": "Base de rizos permanente",
+        "nombre": "Arreglo de barba",
         "duracion": 60,
-        "precio": 65000,
-        "precio_texto": "$65.000",
+        "precio": 20000,
     },
 
-    "mechas_hombre": {
+    "corte_nino": {
         "numero": 4,
-        "nombre": "Mechas",
+        "nombre": "Corte de niño",
         "duracion": 60,
-        "precio": 70000,
-        "precio_texto": "desde $70.000",
+        "precio": 20000,
     },
 
-    "decoloracion_global": {
+    "perfilado": {
         "numero": 5,
-        "nombre": "Decoloración global",
+        "nombre": "Perfilado",
         "duracion": 60,
-        "precio": 120000,
-        "precio_texto": "$120.000",
-    },
-
-    "corte_mujer": {
-        "numero": 6,
-        "nombre": "Corte de cabello mujer",
-        "duracion": 60,
-        "precio": 30000,
-        "precio_texto": "$30.000",
-        "detalle": "Incluye lavado de cabello, hidratación y brushing.",
-    },
-
-    "masaje_hidratacion": {
-        "numero": 7,
-        "nombre": "Masaje de hidratación",
-        "duracion": 60,
-        "precio": 45000,
-        "precio_texto": "$45.000",
-    },
-
-    "botox_capilar": {
-        "numero": 8,
-        "nombre": "Botox capilar",
-        "duracion": 60,
-        "precio": 65000,
-        "precio_texto": "desde $65.000",
-    },
-
-    "alisado_permanente": {
-        "numero": 9,
-        "nombre": "Alisado permanente",
-        "duracion": 60,
-        "precio": 70000,
-        "precio_texto": "desde $70.000",
-    },
-
-    "retoque_raiz": {
-        "numero": 10,
-        "nombre": "Retoque de color de raíz",
-        "duracion": 60,
-        "precio": 50000,
-        "precio_texto": "$50.000",
-    },
-
-    "bano_color": {
-        "numero": 11,
-        "nombre": "Baño de color",
-        "duracion": 60,
-        "precio": 30000,
-        "precio_texto": "$30.000",
-    },
-
-    "diagnostico_balayage": {
-        "numero": 12,
-        "nombre": "Diagnóstico capilar gratuito para Balayage",
-        "duracion": 60,
-        "precio": 0,
-        "precio_texto": "Diagnóstico gratuito · Balayage estimado desde $150.000",
-        "detalle": "El valor final del Balayage se define después del diagnóstico capilar.",
+        "precio": 20000,
     },
 }
 
 SERVICIO_POR_NUMERO = {
-    servicio["numero"]: codigo
-    for codigo, servicio in SERVICIOS.items()
+    1: "corte",
+    2: "corte_barba",
+    3: "barba",
+    4: "corte_nino",
+    5: "perfilado",
 }
 
 
@@ -906,136 +845,86 @@ def obtener_servicio(codigo):
         {
             "nombre": "Servicio",
             "duracion": 60,
-            "precio": 0,
-            "precio_texto": "Valor a confirmar",
+            "precio": 20000,
         }
-    )
-
-
-def precio_texto_servicio(servicio):
-
-    if servicio.get("precio_texto"):
-        return servicio["precio_texto"]
-
-    precio = servicio.get("precio", 0)
-
-    return (
-        f"${precio:,}"
-        .replace(",", ".")
-    )
-
-
-def mensaje_menu_principal():
-
-    return (
-        f"¡Hola! 👋 Soy el asistente virtual de {ESTILISTA_NOMBRE}.\n\n"
-        "¿Qué te gustaría hacer?\n\n"
-        "1. Conocer servicios y precios 💇‍♂️💇‍♀️\n"
-        "2. Agendar una hora 📅\n\n"
-        "Respóndeme con 1 o 2."
     )
 
 
 def mostrar_servicios():
 
     return (
-        "Estos son nuestros servicios y precios 👇\n\n"
-        "👨 HOMBRE\n"
-        "1. Corte de cabello hombre — $17.000\n"
-        "   Incluye perfilado de cejas, lavado de cabello y aplicación de producto.\n\n"
-        "2. Perfilado de barba — $10.000\n"
-        "3. Base de rizos permanente — $65.000\n"
-        "4. Mechas — desde $70.000\n"
-        "5. Decoloración global — $120.000\n\n"
-        "👩 MUJER\n"
-        "6. Corte de cabello mujer — $30.000\n"
-        "   Incluye lavado de cabello, hidratación y brushing.\n\n"
-        "7. Masaje de hidratación — $45.000\n"
-        "8. Botox capilar — desde $65.000\n"
-        "9. Alisado permanente — desde $70.000\n"
-        "10. Retoque de color de raíz — $50.000\n"
-        "11. Baño de color — $30.000\n"
-        "12. Balayage — valor estimado desde $150.000\n"
-        "    Requiere agendar un diagnóstico capilar gratuito para definir el valor final.\n\n"
-        "Para agendar, respóndeme con el número del servicio (1 al 12).\n"
-        "Si solo querías revisar precios, puedes escribir MENÚ para volver."
+        "Claro  Estos son nuestros servicios:\n\n"
+        "1. Corte de cabello — $20.000\n"
+        "2. Corte + barba — $20.000\n"
+        "3. Arreglo de barba — $20.000\n"
+        "4. Corte de niño — $20.000\n"
+        "5. Perfilado — $20.000\n\n"
+        "Si quieres reservar, escríbeme el número "
+        "del servicio que prefieres. "
     )
 
 
 def detectar_servicio_por_numero(texto):
 
     match = re.fullmatch(
-        r"\s*(\d{1,2})\s*",
+        r"\s*([1-5])\s*",
         texto or ""
     )
 
-    if not match:
-        return None
+    if match:
 
-    numero = int(match.group(1))
+        numero = int(
+            match.group(1)
+        )
 
-    return SERVICIO_POR_NUMERO.get(numero)
+        return SERVICIO_POR_NUMERO.get(
+            numero
+        )
+
+    return None
 
 
 def detectar_servicio(texto):
 
     texto_n = normalizar_texto(texto)
 
-    servicio_numero = detectar_servicio_por_numero(texto)
+    servicio_numero = detectar_servicio_por_numero(
+        texto
+    )
 
     if servicio_numero:
         return servicio_numero
 
-    # Servicios con nombres suficientemente específicos.
-    if "corte" in texto_n and (
-        "mujer" in texto_n
-        or "dama" in texto_n
-        or "femenino" in texto_n
+    if (
+        "corte" in texto_n
+        and "barba" in texto_n
     ):
-        return "corte_mujer"
+        return "corte_barba"
 
-    if "corte" in texto_n and (
-        "hombre" in texto_n
-        or "varon" in texto_n
-        or "masculino" in texto_n
+    if (
+        "corte de nino" in texto_n
+        or "corte nino" in texto_n
+        or "nino" in texto_n
     ):
-        return "corte_hombre"
-
-    if "perfilado" in texto_n and "barba" in texto_n:
-        return "perfilado_barba"
+        return "corte_nino"
 
     if "barba" in texto_n:
-        return "perfilado_barba"
+        return "barba"
 
-    if "rizo" in texto_n or "permanente de rizo" in texto_n:
-        return "base_rizos"
+    if (
+        "perfilado" in texto_n
+        or "perfil" in texto_n
+    ):
+        return "perfilado"
 
-    if "mecha" in texto_n:
-        return "mechas_hombre"
+    if (
+        "corte" in texto_n
+        or "cortar" in texto_n
+    ):
+        return "corte"
 
-    if "decoloracion" in texto_n:
-        return "decoloracion_global"
-
-    if "masaje" in texto_n and "hidrat" in texto_n:
-        return "masaje_hidratacion"
-
-    if "botox" in texto_n:
-        return "botox_capilar"
-
-    if "alisado" in texto_n:
-        return "alisado_permanente"
-
-    if "retoque" in texto_n and "raiz" in texto_n:
-        return "retoque_raiz"
-
-    if "bano de color" in texto_n or ("bano" in texto_n and "color" in texto_n):
-        return "bano_color"
-
-    if "balayage" in texto_n:
-        return "diagnostico_balayage"
-
-    # "corte" a secas es ambiguo: no asumimos hombre o mujer.
     return None
+
 
 
 # ============================================================
@@ -1812,8 +1701,8 @@ def pregunta_servicios(texto):
         "valor",
         "valores",
         "tarifa",
-        "lista de precios",
-        "que hacen",
+        "cortes",
+        "barberia",
     ]
 
     return any(
@@ -1840,6 +1729,11 @@ def es_intencion_agendar(texto):
         "pedir hora",
         "cita",
         "turno",
+        "hora para corte",
+        "hora para barba",
+        "quiero cortarme",
+        "quiero corte",
+        "me quiero cortar",
         "disponibilidad",
         "horas disponibles",
         "hora disponible",
@@ -1849,6 +1743,7 @@ def es_intencion_agendar(texto):
         "tienes horas",
         "hay hora",
         "hay horas",
+        "tienes disponibilidad",
         "disponible manana",
         "disponible hoy",
     ]
@@ -1857,24 +1752,6 @@ def es_intencion_agendar(texto):
         p in texto_n
         for p in patrones
     )
-
-
-def es_saludo_o_menu(texto):
-
-    texto_n = normalizar_texto(texto)
-
-    return texto_n in {
-        "hola",
-        "holi",
-        "holaa",
-        "buenas",
-        "buenos dias",
-        "buenas tardes",
-        "buenas noches",
-        "menu",
-        "inicio",
-        "volver",
-    }
 
 
 def usuario_no_quiere(texto):
@@ -1918,40 +1795,56 @@ def responder_openai(
         )
 
     system_prompt = f"""
-Eres el asistente virtual de {ESTILISTA_NOMBRE}.
+Eres el Asistente Virtual de Estilista {ESTILISTA_NOMBRE}.
 
-Responde en español de Chile, de forma breve, clara y amable.
+Atiendes clientes por WhatsApp en español natural de Chile.
 
-REGLAS ESTRICTAS:
-- No inventes servicios, precios, promociones, horarios ni disponibilidad.
-- No agregues recomendaciones largas ni información que el cliente no pidió.
-- No divagues ni cambies de tema.
-- Tu objetivo es llevar al cliente a una de dos opciones:
-  1) conocer servicios y precios;
-  2) agendar una hora.
-- Si la consulta no corresponde a estas opciones, responde brevemente y vuelve a ofrecerlas.
-- Nunca confirmes una hora por tu cuenta. La aplicación consulta la agenda real.
-- Nunca hables de APIs, programación, Twilio, bases de datos ni sistemas internos.
+Tu conversación debe sentirse natural, breve y humana.
 
-SERVICIOS HOMBRE:
-1. Corte de cabello hombre — $17.000. Incluye perfilado de cejas, lavado de cabello y aplicación de producto.
-2. Perfilado de barba — $10.000.
-3. Base de rizos permanente — $65.000.
-4. Mechas — desde $70.000.
-5. Decoloración global — $120.000.
+IMPORTANTE:
 
-SERVICIOS MUJER:
-6. Corte de cabello mujer — $30.000. Incluye lavado de cabello, hidratación y brushing.
-7. Masaje de hidratación — $45.000.
-8. Botox capilar — desde $65.000.
-9. Alisado permanente — desde $70.000.
-10. Retoque de color de raíz — $50.000.
-11. Baño de color — $30.000.
-12. Balayage — estimado desde $150.000. Requiere diagnóstico capilar gratuito para definir el valor final.
+Si el cliente dice "hola", saluda normalmente.
+
+Si continúa la conversación, no vuelvas a empezar desde cero
+ni repitas el saludo anterior.
+
+Tu objetivo es ayudar al cliente con:
+
+1. Conocer los servicios.
+2. Consultar precios.
+3. Reservar una hora.
+
+SERVICIOS:
+
+1. Corte de cabello — $20.000
+2. Corte + barba — $20.000
+3. Arreglo de barba — $20.000
+4. Corte de niño — $20.000
+5. Perfilado — $20.000
 
 HORARIO:
-Lunes a sábado, de 10:00 a 18:00.
-La última hora de inicio es a las 17:00.
+
+Lunes a sábado.
+10:00 a 18:00.
+Cada reserva dura 1 hora.
+Última hora de inicio: 17:00.
+Domingo cerrado.
+
+Si el cliente quiere reservar, la aplicación se encargará
+del proceso de agenda y de consultar disponibilidad real.
+
+Nunca inventes horas disponibles.
+
+No confirmes una reserva por tu cuenta.
+
+No hables de APIs, programación, bases de datos,
+Google Calendar, Twilio ni sistemas internos.
+
+Si falta información para entender al cliente,
+pregunta de manera breve y natural.
+
+Nombre del estilista:
+{ESTILISTA_NOMBRE}
 """
 
     mensajes = [
@@ -2093,7 +1986,7 @@ def crear_evento_diego(
                     f"Teléfono: {telefono_cliente}\n"
                     f"Correo: {correo_cliente}\n"
                     f"Servicio: {servicio['nombre']}\n"
-                    f"Valor: {precio_texto_servicio(servicio)}\n"
+                    f"Valor: ${servicio['precio']}\n"
                     f"Duración: {DURACION_RESERVA} minutos\n"
                     "Origen: Asistente Virtual"
                 ),
@@ -2512,8 +2405,9 @@ def procesar_agenda(
 
                     estado["paso"] = "nombre"
 
-                    precio = precio_texto_servicio(
-                        servicio_info
+                    precio = (
+                        f"${servicio_info['precio']:,}"
+                        .replace(",", ".")
                     )
 
                     return (
@@ -2612,8 +2506,9 @@ def procesar_agenda(
 
             estado["paso"] = "seleccionar_hora"
 
-            precio = precio_texto_servicio(
-                servicio_info
+            precio = (
+                f"${servicio_info['precio']:,}"
+                .replace(",", ".")
             )
 
             return (
@@ -3090,12 +2985,6 @@ def completar_reserva(
 
         horas = buscar_proximas_10_horas()
 
-        if horas is None:
-            return (
-                "No pude consultar la agenda en este momento 😕. "
-                "Intenta nuevamente en unos segundos."
-            )
-
         estado["horas_ofrecidas"] = [
             h.isoformat()
             for h in horas
@@ -3153,12 +3042,6 @@ def completar_reserva(
         estado["paso"] = "seleccionar_hora"
 
         horas = buscar_proximas_10_horas()
-
-        if horas is None:
-            return (
-                "No pude actualizar la agenda en este momento 😕. "
-                "Intenta nuevamente en unos segundos."
-            )
 
         estado["horas_ofrecidas"] = [
             h.isoformat()
@@ -3226,8 +3109,9 @@ def completar_reserva(
         telefono_guardar
     )
 
-    precio = precio_texto_servicio(
-        servicio
+    precio = (
+        f"${servicio['precio']:,}"
+        .replace(",", ".")
     )
 
     respuesta = (
@@ -3260,15 +3144,7 @@ def completar_reserva(
 
     respuesta += (
         "La atención dura 1 hora.\n\n"
-        "📍 Dirección de atención:\n"
-        "2 Norte 280\n\n"
-        "💳 Datos de transferencia:\n"
-        "Nombre: Diego\n"
-        "RUT: 18.149.067-5\n"
-        "Banco: BancoEstado\n"
-        "Tipo de cuenta: Cuenta Vista\n"
-        "N° de cuenta: 18149067\n\n"
-        "¡Te esperamos! 😊"
+        "¡Te esperamos! "
     )
 
     return respuesta
@@ -3295,7 +3171,7 @@ def get_wa_session(wa_id):
 
             "modo_agendar": False,
 
-            "paso": "menu_principal",
+            "paso": "inicio",
 
             "horas_ofrecidas": [],
 
@@ -3849,18 +3725,7 @@ def whatsapp_webhook():
             }
         )
 
-        texto_n = normalizar_texto(text)
-
-        # MENÚ siempre permite salir de cualquier flujo y comenzar de nuevo.
-        if texto_n in {"menu", "inicio", "volver"}:
-
-            resetear_reserva(estado)
-            estado["paso"] = "menu_principal"
-            respuesta = mensaje_menu_principal()
-
-        # Si el cliente ya está dentro de una reserva, seguimos el flujo
-        # sin enviar la conversación a OpenAI.
-        elif estado["modo_agendar"]:
+        if estado["modo_agendar"]:
 
             respuesta = procesar_agenda(
                 estado,
@@ -3869,30 +3734,23 @@ def whatsapp_webhook():
                 "whatsapp"
             )
 
-        # Respuesta al menú inicial.
-        elif estado.get("paso") == "menu_principal":
-
-            if texto_n in {"1", "servicios", "precios", "servicios y precios"}:
-                estado["paso"] = "servicios_mostrados"
-                respuesta = mostrar_servicios()
-
-            elif texto_n in {"2", "agendar", "reservar", "agenda"}:
-                estado["modo_agendar"] = True
-                estado["paso"] = "inicio"
-                respuesta = (
-                    "Perfecto 📅 ¿Qué servicio quieres agendar?\n\n"
-                    + mostrar_servicios()
-                )
-
-            else:
-                respuesta = mensaje_menu_principal()
-
-        # Después de mostrar los precios, un número del 1 al 12
-        # se interpreta como selección del servicio y abre la agenda.
-        elif estado.get("paso") == "servicios_mostrados" and detectar_servicio(text):
+        elif (
+            es_intencion_agendar(text)
+            or detectar_servicio(text)
+        ):
 
             estado["modo_agendar"] = True
             estado["paso"] = "inicio"
+
+            print(
+                "INICIANDO FLUJO AGENDA WHATSAPP:",
+                {
+                    "texto": text,
+                    "servicio_detectado": detectar_servicio(text),
+                    "intencion_agendar": es_intencion_agendar(text),
+                }
+            )
+
             respuesta = procesar_agenda(
                 estado,
                 text,
@@ -3900,39 +3758,18 @@ def whatsapp_webhook():
                 "whatsapp"
             )
 
-        elif pregunta_servicios(text):
+        elif pregunta_servicios(
+            text
+        ):
 
-            estado["paso"] = "servicios_mostrados"
             respuesta = mostrar_servicios()
 
-        elif es_intencion_agendar(text):
-
-            estado["modo_agendar"] = True
-            estado["paso"] = "inicio"
-            respuesta = procesar_agenda(
-                estado,
-                text,
-                cliente_id,
-                "whatsapp"
-            )
-
-        elif detectar_servicio(text):
-
-            estado["modo_agendar"] = True
-            estado["paso"] = "inicio"
-            respuesta = procesar_agenda(
-                estado,
-                text,
-                cliente_id,
-                "whatsapp"
-            )
-
-        # Saludos y cualquier consulta fuera de flujo vuelven al menú.
-        # Así evitamos que el bot divague.
         else:
 
-            estado["paso"] = "menu_principal"
-            respuesta = mensaje_menu_principal()
+            respuesta = responder_openai(
+                estado["historial"],
+                text
+            )
 
 
         estado["historial"].append({
