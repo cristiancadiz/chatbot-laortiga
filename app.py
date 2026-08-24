@@ -26,7 +26,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-23-FINAL-DIEGO-V22-CONVERSACIONAL"
+APP_VERSION = "2026-08-23-FINAL-DIEGO-V24-HORAS-RANGOS"
 
 
 # ============================================================
@@ -588,11 +588,6 @@ def mensaje_menu_principal():
     return (
         f"¡Hola! 👋 Soy el asistente virtual de {ESTILISTA_NOMBRE}.\n\n"
         "Puedo ayudarte con nuestros servicios, precios y con tu reserva 📅.\n\n"
-        "Puedes preguntarme directamente lo que necesites, por ejemplo:\n"
-        "• ¿Qué servicios tienen?\n"
-        "• Quiero un corte de hombre\n"
-        "• Quiero reservar para el próximo miércoles\n"
-        "• ¿Qué horas tienen disponibles?\n\n"
         "¿En qué te puedo ayudar? 😊"
     )
 
@@ -766,6 +761,104 @@ def detectar_hora_solicitada(texto):
         return hora, 0
 
     return None
+
+
+
+def detectar_rango_horario(texto):
+    """
+    Detecta rangos horarios conversacionales.
+    Ejemplos:
+    - entre 10 y 12
+    - entre las 10 y las 12
+    - de 14 a 17
+    - entre 3 y 5 pm
+    - en la mañana / por la mañana
+    - en la tarde / por la tarde
+
+    Devuelve (hora_inicio, hora_fin), ambas inclusivas para los
+    horarios de inicio que se mostrarán.
+    """
+    texto_n = normalizar_texto(texto)
+
+    # Tramos naturales dentro del horario del negocio.
+    if (
+        "en la manana" in texto_n
+        or "por la manana" in texto_n
+        or "durante la manana" in texto_n
+    ):
+        return 10, 12
+
+    if (
+        "en la tarde" in texto_n
+        or "por la tarde" in texto_n
+        or "durante la tarde" in texto_n
+    ):
+        return 13, 17
+
+    # "entre las 10 y las 12", "de 10 a 12", etc.
+    patron = (
+        r"\b(?:entre(?:\s+las?)?|de(?:\s+las?)?)\s*"
+        r"(\d{1,2})(?::([0-5]\d))?\s*"
+        r"(am|pm)?\s*"
+        r"(?:y|a|hasta)\s*(?:las?\s*)?"
+        r"(\d{1,2})(?::([0-5]\d))?\s*"
+        r"(am|pm)?\b"
+    )
+
+    match = re.search(patron, texto_n)
+
+    if not match:
+        return None
+
+    h1 = int(match.group(1))
+    p1 = match.group(3)
+    h2 = int(match.group(4))
+    p2 = match.group(6)
+
+    def normalizar_hora(h, periodo):
+        if periodo == "pm" and h < 12:
+            h += 12
+        elif periodo == "am" and h == 12:
+            h = 0
+        return h
+
+    # Si solo el segundo extremo trae am/pm, aplicarlo al primero cuando
+    # sea razonable: "entre 3 y 5 pm" -> 15 a 17.
+    if not p1 and p2:
+        p1 = p2
+
+    h1 = normalizar_hora(h1, p1)
+    h2 = normalizar_hora(h2, p2)
+
+    # Dentro del horario del negocio, "3 a 5" se entiende 15 a 17.
+    if not p1 and not p2:
+        if 1 <= h1 <= 6:
+            h1 += 12
+        if 1 <= h2 <= 6:
+            h2 += 12
+
+    if h1 > h2:
+        h1, h2 = h2, h1
+
+    h1 = max(h1, HORA_APERTURA)
+    h2 = min(h2, HORA_CIERRE - 1)
+
+    if h1 > h2:
+        return None
+
+    return h1, h2
+
+
+def filtrar_horas_por_rango(horas, rango):
+    if not rango:
+        return horas
+
+    hora_inicio, hora_fin = rango
+
+    return [
+        h for h in horas
+        if hora_inicio <= h.hour <= hora_fin
+    ]
 
 
 def detectar_fecha_solicitada(texto, hora_data=None):
@@ -1677,10 +1770,12 @@ REGLAS ESTRICTAS:
 - Si preguntan algo ajeno al negocio, responde en una frase breve que solo puedes ayudar con servicios, precios, horarios o reservas, y vuelve a conducir la conversación a esos temas.
 - No obligues al cliente a usar un menú ni a responder 1 o 2. Puede escribir libremente.
 - Primero ayuda a identificar el servicio que le interesa y su precio. Luego invítalo a indicar qué día quiere venir.
-- Explícale que puede escribir una fecha de manera natural, por ejemplo: "próximo miércoles", "mañana" o "2 de septiembre".
-- También puedes ofrecer mostrar las próximas fechas/horas disponibles, pero nunca inventarlas: la aplicación consulta Google Calendar.
+- Cuando necesites una fecha, pregunta solamente qué día quiere venir. No des ejemplos de cómo escribir la fecha salvo que el cliente los pida.
+- Si el cliente pide disponibilidad o las próximas horas, la aplicación consulta Google Calendar. No repitas instrucciones innecesarias.
 - Si el cliente quiere salir, no continuar o cambiar de servicio, respétalo inmediatamente.
 - Sé breve, amable y orientado a avanzar la reserva paso a paso.
+- No digas frases como "puedes escribirme como te salga natural", no enumeres ejemplos de fechas y no repitas comandos como PRÓXIMAS, OTRO SERVICIO o SALIR salvo que el cliente los pregunte.
+- Si el cliente dice "mañana", "próximo miércoles" u otra fecha comprensible, continúa directamente con la consulta de agenda sin pedir que confirme el formato de la fecha.
 - Nunca confirmes una hora por tu cuenta. La aplicación consulta la agenda real.
 - Nunca hables de APIs, programación, Twilio, bases de datos ni sistemas internos.
 
@@ -2079,9 +2174,7 @@ def procesar_agenda(
             return (
                 f"Perfecto, cambiamos a {info['nombre']} 😊\n"
                 f"💰 {precio_texto_servicio(info)}\n\n"
-                "¿Qué día te gustaría venir? Puedes escribir, por ejemplo, "
-                "PRÓXIMO MIÉRCOLES, MAÑANA o 2 DE SEPTIEMBRE.\n"
-                "Si prefieres, escribe PRÓXIMAS y te muestro las próximas horas disponibles."
+                "¿Qué día te gustaría venir?"
             )
 
     # ========================================================
@@ -2352,13 +2445,7 @@ def procesar_agenda(
                     f"Perfecto 😊\n\n"
                     f"💈 {servicio_info['nombre']}\n"
                     f"💰 {precio}\n\n"
-                    "¿Qué día te gustaría venir?\n\n"
-                    "Puedes escribirme como te salga natural, por ejemplo:\n"
-                    "• próximo miércoles\n"
-                    "• mañana\n"
-                    "• 2 de septiembre\n\n"
-                    "Si prefieres, escribe PRÓXIMAS y te muestro las próximas horas disponibles.\n"
-                    "También puedes escribir OTRO SERVICIO o SALIR cuando quieras."
+                    "¿Qué día te gustaría venir?"
                 )
 
             estado["horas_ofrecidas"] = [
@@ -2378,7 +2465,7 @@ def procesar_agenda(
                 f"{prefijo}"
                 f"{formatear_opciones_horas(horas)}\n\n"
                 "Respóndeme con el número de la hora que prefieras.\n"
-                "También puedes escribir otra fecha, otro mes, OTRO SERVICIO o SALIR."
+                "También puedes escribir otra fecha si prefieres."
             )
 
         return mostrar_servicios()
@@ -2391,6 +2478,112 @@ def procesar_agenda(
     if estado["paso"] == "elegir_fecha":
 
         servicio_info = obtener_servicio(datos["servicio"])
+
+        # Si el cliente entrega una fecha + hora exacta, revisar directamente.
+        # Ej.: "mañana a las 11", "miércoles a las 15:00".
+        fecha_hora_directa = construir_fecha_hora_solicitada(texto)
+
+        if fecha_hora_directa:
+            if canal == "whatsapp":
+                enviar_mensaje_progreso_twilio(
+                    cliente_id,
+                    "🔎 Estoy revisando esa hora en la agenda 😊"
+                )
+
+            disponible = verificar_disponibilidad(
+                fecha_hora_directa,
+                DURACION_RESERVA
+            )
+
+            if disponible is None:
+                return (
+                    "No pude consultar la agenda en este momento 😕. "
+                    "Intenta nuevamente en unos segundos."
+                )
+
+            if disponible is True:
+                datos["fecha_hora"] = fecha_hora_directa.isoformat()
+                estado["paso"] = "nombre"
+
+                return (
+                    "¡Sí! Esa hora está disponible 😊\n\n"
+                    f"💈 {servicio_info['nombre']}\n"
+                    f"💰 {precio_texto_servicio(servicio_info)}\n"
+                    f"📅 {formato_fecha_larga(fecha_hora_directa)}\n\n"
+                    "¿Me indicas tu nombre para continuar con la reserva?"
+                )
+
+            # Si está ocupada, mostrar alternativas desde esa misma fecha/hora.
+            horas = buscar_proximas_15_horas(desde=fecha_hora_directa)
+
+            if horas is None:
+                return (
+                    "Esa hora no está disponible y no pude consultar "
+                    "las alternativas en este momento 😕."
+                )
+
+            estado["horas_ofrecidas"] = [h.isoformat() for h in horas]
+            estado["paso"] = "seleccionar_hora"
+
+            return (
+                "Esa hora no está disponible 😕.\n\n"
+                "Tengo estas alternativas:\n\n"
+                f"{formatear_opciones_horas(horas)}\n\n"
+                "¿Cuál prefieres?"
+            )
+
+        # Si pide un rango, revisar solo horas disponibles dentro de ese intervalo.
+        # Puede venir junto con la fecha o como mensaje siguiente; en ese caso
+        # reutilizamos la fecha que ya indicó.
+        rango_horario = detectar_rango_horario(texto)
+
+        if rango_horario:
+            fecha_rango = fecha_exacta_detectada
+
+            if not fecha_rango and datos.get("fecha_preferida"):
+                fecha_rango = datetime.fromisoformat(datos["fecha_preferida"])
+
+            if not fecha_rango:
+                return "¿Para qué día quieres que revise ese horario?"
+
+            if canal == "whatsapp":
+                enviar_mensaje_progreso_twilio(
+                    cliente_id,
+                    "🔎 Estoy revisando las horas disponibles en ese horario 😊"
+                )
+
+            horas_dia = buscar_horas_disponibles_dia(fecha_rango)
+
+            if horas_dia is None:
+                return (
+                    "No pude consultar la agenda en este momento 😕. "
+                    "Intenta nuevamente en unos segundos."
+                )
+
+            horas_rango = filtrar_horas_por_rango(
+                horas_dia,
+                rango_horario
+            )
+
+            h_ini, h_fin = rango_horario
+
+            if not horas_rango:
+                return (
+                    f"No tengo horas disponibles entre las {h_ini}:00 "
+                    f"y las {h_fin}:00 ese día. "
+                    "¿Quieres que revise otro horario?"
+                )
+
+            estado["horas_ofrecidas"] = [
+                h.isoformat() for h in horas_rango
+            ]
+            estado["paso"] = "seleccionar_hora"
+
+            return (
+                f"Sí 😊 En ese horario tengo disponible:\n\n"
+                f"{formatear_opciones_horas(horas_rango)}\n\n"
+                "¿Cuál prefieres?"
+            )
 
         # El cliente puede pedir directamente las próximas opciones.
         if quiere_proximas_fechas(texto):
@@ -2422,7 +2615,7 @@ def procesar_agenda(
                 f"Para {servicio_info['nombre']}, estas son las próximas horas disponibles:\n\n"
                 f"{formatear_opciones_horas(horas)}\n\n"
                 "Respóndeme con el número de la opción que prefieras.\n"
-                "También puedes escribir otra fecha, OTRO SERVICIO o SALIR."
+                "También puedes escribir otra fecha si prefieres."
             )
 
         # Mes sin día específico, por ejemplo "en septiembre".
@@ -2522,20 +2715,119 @@ def procesar_agenda(
                 "tengo estas horas disponibles:\n\n"
                 f"{formatear_opciones_horas(horas)}\n\n"
                 "Respóndeme con el número de la hora que prefieras.\n"
-                "También puedes escribir otra fecha, OTRO SERVICIO o SALIR."
+                "También puedes escribir otra fecha si prefieres."
             )
 
-        return (
-            "Dime qué día te gustaría venir 😊\n\n"
-            "Puedes escribirlo libremente, por ejemplo: PRÓXIMO MIÉRCOLES, MAÑANA "
-            "o 2 DE SEPTIEMBRE. Si quieres que yo te muestre opciones, escribe PRÓXIMAS."
-        )
+        return "¿Qué día te gustaría venir?"
 
     # ========================================================
     # HORA
     # ========================================================
 
     if estado["paso"] == "seleccionar_hora":
+
+        servicio_info = obtener_servicio(datos["servicio"])
+
+        # También puede escribir directamente una nueva fecha y hora.
+        fecha_hora_directa = construir_fecha_hora_solicitada(texto)
+
+        if fecha_hora_directa:
+            if canal == "whatsapp":
+                enviar_mensaje_progreso_twilio(
+                    cliente_id,
+                    "🔎 Estoy revisando esa hora en la agenda 😊"
+                )
+
+            disponible = verificar_disponibilidad(
+                fecha_hora_directa,
+                DURACION_RESERVA
+            )
+
+            if disponible is None:
+                return "No pude consultar la agenda en este momento 😕."
+
+            if disponible:
+                datos["fecha_hora"] = fecha_hora_directa.isoformat()
+                estado["paso"] = "nombre"
+                return (
+                    "¡Sí! Esa hora está disponible 😊\n\n"
+                    f"📅 {formato_fecha_larga(fecha_hora_directa)}\n\n"
+                    "¿Me indicas tu nombre?"
+                )
+
+            horas = buscar_proximas_15_horas(desde=fecha_hora_directa)
+            if horas is None:
+                return "Esa hora no está disponible y no pude consultar alternativas 😕."
+
+            estado["horas_ofrecidas"] = [h.isoformat() for h in horas]
+            return (
+                "Esa hora no está disponible 😕.\n\n"
+                "Estas son las alternativas más próximas:\n\n"
+                f"{formatear_opciones_horas(horas)}\n\n"
+                "¿Cuál prefieres?"
+            )
+
+        # También puede acotar por rango: "entre las 10 y las 12".
+        rango_horario = detectar_rango_horario(texto)
+
+        if rango_horario:
+            fecha_rango = detectar_fecha_solicitada(texto, None)
+
+            if not (
+                fecha_rango
+                and texto_menciona_fecha_o_mes(texto)
+            ):
+                fecha_rango = None
+
+            if not fecha_rango and datos.get("fecha_preferida"):
+                fecha_rango = datetime.fromisoformat(datos["fecha_preferida"])
+
+            # Si ya le mostramos opciones, usar el día de la primera opción.
+            if (
+                not fecha_rango
+                and estado.get("horas_ofrecidas")
+            ):
+                fecha_rango = datetime.fromisoformat(
+                    estado["horas_ofrecidas"][0]
+                )
+
+            if not fecha_rango:
+                return "¿Para qué día quieres que revise ese horario?"
+
+            if canal == "whatsapp":
+                enviar_mensaje_progreso_twilio(
+                    cliente_id,
+                    "🔎 Estoy revisando ese intervalo en la agenda 😊"
+                )
+
+            horas_dia = buscar_horas_disponibles_dia(fecha_rango)
+
+            if horas_dia is None:
+                return "No pude consultar la agenda en este momento 😕."
+
+            horas_rango = filtrar_horas_por_rango(
+                horas_dia,
+                rango_horario
+            )
+
+            h_ini, h_fin = rango_horario
+
+            if not horas_rango:
+                return (
+                    f"No tengo horas disponibles entre las {h_ini}:00 "
+                    f"y las {h_fin}:00 ese día. "
+                    "¿Quieres que revise otro horario?"
+                )
+
+            estado["horas_ofrecidas"] = [
+                h.isoformat() for h in horas_rango
+            ]
+
+            return (
+                "En ese intervalo tengo disponible:\n\n"
+                f"{formatear_opciones_horas(horas_rango)}\n\n"
+                "¿Cuál prefieres?"
+            )
 
         # ====================================================
         # EL CLIENTE PUEDE CAMBIAR DE DÍA EN LENGUAJE NATURAL
@@ -2727,14 +3019,7 @@ def procesar_agenda(
         if not match:
 
             return (
-                "Puedes responder con el número de una hora "
-                "o pedirme otra fecha o mes 😊\n\n"
-                "Por ejemplo:\n"
-                "• 1\n"
-                "• 2 de septiembre\n"
-                "• septiembre\n"
-                "• ¿Mañana tienes disponibilidad?\n\n"
-                "También puedes escribir OTRO SERVICIO o SALIR cuando quieras."
+                "¿Qué hora prefieres?"
             )
 
         numero = int(
