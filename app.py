@@ -26,7 +26,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-23-FINAL-DIEGO-V24-HORAS-RANGOS"
+APP_VERSION = "2026-08-23-FINAL-DIEGO-V25-FECHA-RANGO-PERSISTENTE"
 
 
 # ============================================================
@@ -486,6 +486,7 @@ def texto_menciona_fecha_o_mes(texto):
     palabras = [
         "hoy",
         "manana",
+        "manan",
         "pasado manana",
         "lunes",
         "martes",
@@ -929,7 +930,7 @@ def detectar_fecha_solicitada(texto, hora_data=None):
     if "pasado manana" in texto_n:
         return fecha_base + timedelta(days=2)
 
-    if "manana" in texto_n:
+    if re.search(r"\bmanan(?:a)?\b", texto_n):
         return fecha_base + timedelta(days=1)
 
     if "hoy" in texto_n:
@@ -1671,6 +1672,20 @@ def es_saludo_o_menu(texto):
     }
 
 
+def quiere_reiniciar_conversacion(texto):
+    texto_n = normalizar_texto(texto)
+
+    return texto_n in {
+        "de nuevo",
+        "empezar de nuevo",
+        "partir de nuevo",
+        "reiniciar",
+        "reinicia",
+        "comenzar de nuevo",
+        "otra vez",
+    }
+
+
 def usuario_no_quiere(texto):
 
     texto_n = normalizar_texto(texto)
@@ -1900,6 +1915,7 @@ def resetear_reserva(estado):
         "correo": None,
         "fecha_preferida": None,
         "mes_desde": None,
+            "rango_horario": None,
     }
 
 
@@ -2106,6 +2122,13 @@ def procesar_agenda(
 
     texto_n = normalizar_texto(texto)
 
+    if texto_n in {"hola", "holi", "holaa", "buenas"} and estado.get("modo_agendar"):
+        paso_actual = estado.get("paso")
+        if paso_actual == "elegir_fecha":
+            return "Hola 😊 ¿Qué día te gustaría venir?"
+        if paso_actual == "seleccionar_hora":
+            return "Hola 😊 ¿Qué hora prefieres?"
+
     fecha_exacta_detectada = detectar_fecha_solicitada(
         texto,
         None
@@ -2114,6 +2137,13 @@ def procesar_agenda(
     mes_detectado = detectar_mes_solicitado(
         texto
     )
+
+    rango_detectado = detectar_rango_horario(
+        texto
+    )
+
+    if rango_detectado:
+        datos["rango_horario"] = list(rango_detectado)
 
     if fecha_exacta_detectada and texto_menciona_fecha_o_mes(texto):
         datos["fecha_preferida"] = fecha_exacta_detectada.isoformat()
@@ -2125,8 +2155,15 @@ def procesar_agenda(
 
 
     # ========================================================
-    # CANCELAR
+    # REINICIAR / CANCELAR
     # ========================================================
+
+    if quiere_reiniciar_conversacion(texto):
+        telefono_guardado = datos.get("telefono")
+        resetear_reserva(estado)
+        estado["datos_reserva"]["telefono"] = telefono_guardado
+        estado["paso"] = "menu_principal"
+        return mensaje_menu_principal()
 
     if usuario_no_quiere(texto):
 
@@ -2168,6 +2205,7 @@ def procesar_agenda(
             datos["fecha_hora"] = None
             datos["fecha_preferida"] = None
             datos["mes_desde"] = None
+            datos["rango_horario"] = None
             estado["horas_ofrecidas"] = []
 
             info = obtener_servicio(nuevo_servicio)
@@ -2205,9 +2243,7 @@ def procesar_agenda(
 
         if not servicio and corte_ambiguo:
             return (
-                "Perfecto ✂️ ¿El corte es para hombre o mujer?\n\n"
-                "Respóndeme HOMBRE o MUJER.\n"
-                "Mantendré la fecha o el mes que me indicaste."
+                "Perfecto ✂️ ¿El corte es para hombre o mujer?"
             )
 
         if servicio:
@@ -2324,8 +2360,61 @@ def procesar_agenda(
                 )
 
             # ====================================================
-            # NO INDICÓ HORA: respetar fecha o mes solicitado
+            # NO INDICÓ HORA: respetar fecha, rango o mes solicitado
             # ====================================================
+
+            if datos.get("fecha_preferida") and datos.get("rango_horario"):
+
+                fecha_preferida = datetime.fromisoformat(
+                    datos["fecha_preferida"]
+                )
+
+                rango_guardado = tuple(datos["rango_horario"])
+
+                if canal == "whatsapp":
+                    enviar_mensaje_progreso_twilio(
+                        cliente_id,
+                        "🔎 Estoy revisando las horas disponibles en ese horario 😊"
+                    )
+
+                horas_dia = buscar_horas_disponibles_dia(
+                    fecha_preferida
+                )
+
+                if horas_dia is None:
+                    return (
+                        "No pude consultar la agenda en este momento 😕. "
+                        "Intenta nuevamente en unos segundos."
+                    )
+
+                horas = filtrar_horas_por_rango(
+                    horas_dia,
+                    rango_guardado
+                )
+
+                if not horas:
+                    h_ini, h_fin = rango_guardado
+                    estado["paso"] = "elegir_fecha"
+                    return (
+                        f"No tengo horas disponibles entre las {h_ini}:00 "
+                        f"y las {h_fin}:00 ese día. "
+                        "¿Quieres revisar otro horario?"
+                    )
+
+                estado["horas_ofrecidas"] = [
+                    h.isoformat() for h in horas
+                ]
+                estado["paso"] = "seleccionar_hora"
+
+                precio = precio_texto_servicio(servicio_info)
+
+                return (
+                    f"💈 {servicio_info['nombre']}\n"
+                    f"💰 {precio}\n\n"
+                    f"Tengo estas horas disponibles:\n\n"
+                    f"{formatear_opciones_horas(horas)}\n\n"
+                    "¿Cuál prefieres?"
+                )
 
             if datos.get("fecha_preferida"):
 
@@ -2533,11 +2622,12 @@ def procesar_agenda(
             )
 
         # Si pide un rango, revisar solo horas disponibles dentro de ese intervalo.
-        # Puede venir junto con la fecha o como mensaje siguiente; en ese caso
-        # reutilizamos la fecha que ya indicó.
+        # Si el rango venía en un mensaje anterior ("mañana por la tarde"),
+        # también lo conservamos.
         rango_horario = detectar_rango_horario(texto)
 
         if rango_horario:
+            datos["rango_horario"] = list(rango_horario)
             fecha_rango = fecha_exacta_detectada
 
             if not fecha_rango and datos.get("fecha_preferida"):
@@ -2657,6 +2747,50 @@ def procesar_agenda(
 
             fecha_consultada = fecha_exacta_detectada
 
+            # Si había un rango guardado previamente, respetarlo.
+            if datos.get("rango_horario"):
+                rango_guardado = tuple(datos["rango_horario"])
+
+                if canal == "whatsapp":
+                    enviar_mensaje_progreso_twilio(
+                        cliente_id,
+                        "🔎 Estoy revisando las horas disponibles en ese horario 😊"
+                    )
+
+                horas_dia = buscar_horas_disponibles_dia(
+                    fecha_consultada
+                )
+
+                if horas_dia is None:
+                    return (
+                        "No pude consultar la agenda en este momento 😕. "
+                        "Intenta nuevamente en unos segundos."
+                    )
+
+                horas_rango = filtrar_horas_por_rango(
+                    horas_dia,
+                    rango_guardado
+                )
+
+                if horas_rango:
+                    estado["horas_ofrecidas"] = [
+                        h.isoformat() for h in horas_rango
+                    ]
+                    estado["paso"] = "seleccionar_hora"
+
+                    return (
+                        f"Tengo estas horas disponibles:\n\n"
+                        f"{formatear_opciones_horas(horas_rango)}\n\n"
+                        "¿Cuál prefieres?"
+                    )
+
+                h_ini, h_fin = rango_guardado
+                return (
+                    f"No tengo horas disponibles entre las {h_ini}:00 "
+                    f"y las {h_fin}:00 ese día. "
+                    "¿Quieres revisar otro horario?"
+                )
+
             if not es_dia_atencion(fecha_consultada):
                 return (
                     f"Ese {DIAS_NOMBRES[fecha_consultada.weekday()]} no atendemos.\n\n"
@@ -2771,6 +2905,7 @@ def procesar_agenda(
         rango_horario = detectar_rango_horario(texto)
 
         if rango_horario:
+            datos["rango_horario"] = list(rango_horario)
             fecha_rango = detectar_fecha_solicitada(texto, None)
 
             if not (
@@ -3515,6 +3650,7 @@ def get_wa_session(wa_id):
                 "correo": None,
                 "fecha_preferida": None,
                 "mes_desde": None,
+            "rango_horario": None,
             },
         }
 
