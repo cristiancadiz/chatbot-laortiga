@@ -26,7 +26,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-23-FINAL-DIEGO-V26-CORRIGE-MANANA"
+APP_VERSION = "2026-08-24-FINAL-DIEGO-V27-SERVICIO-HORA-DIRECTA"
 
 
 # ============================================================
@@ -2326,7 +2326,7 @@ def procesar_agenda(
                         )
                     )
 
-                horas = buscar_proximas_15_horas()
+                horas = buscar_proximas_15_horas(desde=hora_solicitada)
 
                 if horas is None:
                     return (
@@ -2531,6 +2531,7 @@ def procesar_agenda(
                     servicio_info
                 )
 
+                estado["paso"] = "elegir_fecha"
                 return (
                     f"Perfecto 😊\n\n"
                     f"💈 {servicio_info['nombre']}\n"
