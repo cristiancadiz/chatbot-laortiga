@@ -26,7 +26,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-19-FINAL-DIEGO-V21-FECHAS-MESES-MENU"
+APP_VERSION = "2026-08-23-FINAL-DIEGO-V22-CONVERSACIONAL"
 
 
 # ============================================================
@@ -292,7 +292,7 @@ GOOGLE_REFRESH_TOKEN = os.getenv(
 
 GOOGLE_REDIRECT_URI = os.getenv(
     "GOOGLE_REDIRECT_URI",
-    "https://chatbot-laortiga-9.onrender.com/callback"
+    "https://chatbot-laortiga-hddw.onrender.com/callback"
 )
 
 SCOPES = [
@@ -587,10 +587,13 @@ def mensaje_menu_principal():
 
     return (
         f"¡Hola! 👋 Soy el asistente virtual de {ESTILISTA_NOMBRE}.\n\n"
-        "¿Qué te gustaría hacer?\n\n"
-        "1. Conocer servicios y precios 💇‍♂️💇‍♀️\n"
-        "2. Agendar una hora 📅\n\n"
-        "Respóndeme con 1 o 2."
+        "Puedo ayudarte con nuestros servicios, precios y con tu reserva 📅.\n\n"
+        "Puedes preguntarme directamente lo que necesites, por ejemplo:\n"
+        "• ¿Qué servicios tienen?\n"
+        "• Quiero un corte de hombre\n"
+        "• Quiero reservar para el próximo miércoles\n"
+        "• ¿Qué horas tienen disponibles?\n\n"
+        "¿En qué te puedo ayudar? 😊"
     )
 
 
@@ -615,8 +618,9 @@ def mostrar_servicios():
         "11. Baño de color — $30.000\n"
         "12. Balayage — valor estimado desde $150.000\n"
         "    Requiere agendar un diagnóstico capilar gratuito para definir el valor final.\n\n"
-        "Para agendar, respóndeme con el número del servicio (1 al 12).\n"
-        "Si solo querías revisar precios, puedes escribir MENÚ para volver."
+        "¿Cuál te interesa? Puedes escribir el número o el nombre del servicio.\n"
+        "Después puedes decirme el día que quieres venir, por ejemplo: \"próximo miércoles\".\n"
+        "Si prefieres salir, escribe SALIR o MENÚ en cualquier momento."
     )
 
 
@@ -1589,12 +1593,59 @@ def usuario_no_quiere(texto):
         "no por ahora",
         "despues",
         "no necesito",
+        "salir",
+        "quiero salir",
+        "prefiero no reservar",
+        "no quiero reservar",
+        "no quiero agendar",
+        "adios",
+        "chao",
     ]
 
     return any(
         p in texto_n
         for p in patrones
     )
+
+
+def quiere_proximas_fechas(texto):
+
+    texto_n = normalizar_texto(texto)
+
+    patrones = [
+        "proximas",
+        "proximas fechas",
+        "proximas horas",
+        "horas disponibles",
+        "fechas disponibles",
+        "disponibilidad",
+        "que horas tienes",
+        "que fechas tienes",
+        "cuando tienes hora",
+        "cuando hay hora",
+        "lo antes posible",
+        "primera disponible",
+    ]
+
+    return any(p in texto_n for p in patrones)
+
+
+def quiere_cambiar_servicio(texto):
+
+    texto_n = normalizar_texto(texto)
+
+    patrones = [
+        "otro servicio",
+        "otra cosa",
+        "cambiar servicio",
+        "cambio de servicio",
+        "quiero cambiar",
+        "ver servicios",
+        "mostrar servicios",
+        "servicios y precios",
+    ]
+
+    return any(p in texto_n for p in patrones)
 
 
 # ============================================================
@@ -1620,13 +1671,16 @@ Eres el asistente virtual de {ESTILISTA_NOMBRE}.
 Responde en español de Chile, de forma breve, clara y amable.
 
 REGLAS ESTRICTAS:
+- Conversa de manera natural, como asistente de recepción de una peluquería/estilista.
+- Solo puedes conversar sobre los servicios ofrecidos, sus precios, horarios de atención y agenda/reservas.
 - No inventes servicios, precios, promociones, horarios ni disponibilidad.
-- No agregues recomendaciones largas ni información que el cliente no pidió.
-- No divagues ni cambies de tema.
-- Tu objetivo es llevar al cliente a una de dos opciones:
-  1) conocer servicios y precios;
-  2) agendar una hora.
-- Si la consulta no corresponde a estas opciones, responde brevemente y vuelve a ofrecerlas.
+- Si preguntan algo ajeno al negocio, responde en una frase breve que solo puedes ayudar con servicios, precios, horarios o reservas, y vuelve a conducir la conversación a esos temas.
+- No obligues al cliente a usar un menú ni a responder 1 o 2. Puede escribir libremente.
+- Primero ayuda a identificar el servicio que le interesa y su precio. Luego invítalo a indicar qué día quiere venir.
+- Explícale que puede escribir una fecha de manera natural, por ejemplo: "próximo miércoles", "mañana" o "2 de septiembre".
+- También puedes ofrecer mostrar las próximas fechas/horas disponibles, pero nunca inventarlas: la aplicación consulta Google Calendar.
+- Si el cliente quiere salir, no continuar o cambiar de servicio, respétalo inmediatamente.
+- Sé breve, amable y orientado a avanzar la reserva paso a paso.
 - Nunca confirmes una hora por tu cuenta. La aplicación consulta la agenda real.
 - Nunca hables de APIs, programación, Twilio, bases de datos ni sistemas internos.
 
@@ -1994,6 +2048,43 @@ def procesar_agenda(
 
 
     # ========================================================
+    # CAMBIAR DE SERVICIO EN CUALQUIER MOMENTO
+    # ========================================================
+
+    if quiere_cambiar_servicio(texto):
+
+        telefono_guardado = datos.get("telefono")
+        resetear_reserva(estado)
+        estado["modo_agendar"] = True
+        estado["paso"] = "inicio"
+        estado["datos_reserva"]["telefono"] = telefono_guardado
+
+        return (
+            "Claro 😊 Podemos cambiar de servicio.\n\n"
+            + mostrar_servicios()
+        )
+
+    # Si escribe el nombre de otro servicio durante la reserva,
+    # cambiamos el servicio sin obligarlo a volver al menú principal.
+    if datos.get("servicio") and not re.fullmatch(r"\s*\d{1,2}\s*", texto):
+        nuevo_servicio = detectar_servicio(texto)
+        if nuevo_servicio and nuevo_servicio != datos.get("servicio"):
+            datos["servicio"] = nuevo_servicio
+            datos["fecha_hora"] = None
+            datos["fecha_preferida"] = None
+            datos["mes_desde"] = None
+            estado["horas_ofrecidas"] = []
+
+            info = obtener_servicio(nuevo_servicio)
+            return (
+                f"Perfecto, cambiamos a {info['nombre']} 😊\n"
+                f"💰 {precio_texto_servicio(info)}\n\n"
+                "¿Qué día te gustaría venir? Puedes escribir, por ejemplo, "
+                "PRÓXIMO MIÉRCOLES, MAÑANA o 2 DE SEPTIEMBRE.\n"
+                "Si prefieres, escribe PRÓXIMAS y te muestro las próximas horas disponibles."
+            )
+
+    # ========================================================
     # SERVICIO
     # ========================================================
 
@@ -2143,17 +2234,13 @@ def procesar_agenda(
             # NO INDICÓ HORA: respetar fecha o mes solicitado
             # ====================================================
 
-            if canal == "whatsapp":
-
-                enviar_mensaje_progreso_twilio(
-                    cliente_id,
-                    (
-                        "🔎 Estoy buscando disponibilidad real "
-                        "en mi agenda. Dame un momento 😊"
-                    )
-                )
-
             if datos.get("fecha_preferida"):
+
+                if canal == "whatsapp":
+                    enviar_mensaje_progreso_twilio(
+                        cliente_id,
+                        "🔎 Estoy revisando las horas disponibles para ese día 😊"
+                    )
 
                 fecha_preferida = datetime.fromisoformat(
                     datos["fecha_preferida"]
@@ -2222,6 +2309,12 @@ def procesar_agenda(
                     datos["mes_desde"]
                 )
 
+                if canal == "whatsapp":
+                    enviar_mensaje_progreso_twilio(
+                        cliente_id,
+                        "🔎 Estoy revisando la disponibilidad desde ese mes 😊"
+                    )
+
                 horas = buscar_proximas_15_horas(
                     desde=desde_mes
                 )
@@ -2245,22 +2338,28 @@ def procesar_agenda(
 
             else:
 
-                horas = buscar_proximas_15_horas()
+                # Flujo conversacional: después de elegir el servicio,
+                # primero preguntamos qué día quiere venir. No consultamos
+                # Calendar hasta que el cliente indique una fecha o pida
+                # explícitamente las próximas horas disponibles.
+                estado["paso"] = "elegir_fecha"
 
-                if horas is None:
-                    return (
-                        "Elegiste el servicio, pero no pude consultar "
-                        "Google Calendar en este momento 😕.\n\n"
-                        "Intenta nuevamente en unos segundos."
-                    )
+                precio = precio_texto_servicio(
+                    servicio_info
+                )
 
-                if not horas:
-                    return (
-                        f"Perfecto. Elegiste {servicio_info['nombre']}.\n\n"
-                        "Pero por ahora no encontré horas disponibles."
-                    )
-
-                prefijo = "Estas son las próximas 15 horas disponibles:\n\n"
+                return (
+                    f"Perfecto 😊\n\n"
+                    f"💈 {servicio_info['nombre']}\n"
+                    f"💰 {precio}\n\n"
+                    "¿Qué día te gustaría venir?\n\n"
+                    "Puedes escribirme como te salga natural, por ejemplo:\n"
+                    "• próximo miércoles\n"
+                    "• mañana\n"
+                    "• 2 de septiembre\n\n"
+                    "Si prefieres, escribe PRÓXIMAS y te muestro las próximas horas disponibles.\n"
+                    "También puedes escribir OTRO SERVICIO o SALIR cuando quieras."
+                )
 
             estado["horas_ofrecidas"] = [
                 h.isoformat()
@@ -2279,11 +2378,158 @@ def procesar_agenda(
                 f"{prefijo}"
                 f"{formatear_opciones_horas(horas)}\n\n"
                 "Respóndeme con el número de la hora que prefieras.\n"
-                "También puedes escribir otra fecha, otro mes o MENÚ."
+                "También puedes escribir otra fecha, otro mes, OTRO SERVICIO o SALIR."
             )
 
         return mostrar_servicios()
 
+
+    # ========================================================
+    # ELEGIR FECHA - CONVERSACIÓN NATURAL
+    # ========================================================
+
+    if estado["paso"] == "elegir_fecha":
+
+        servicio_info = obtener_servicio(datos["servicio"])
+
+        # El cliente puede pedir directamente las próximas opciones.
+        if quiere_proximas_fechas(texto):
+
+            if canal == "whatsapp":
+                enviar_mensaje_progreso_twilio(
+                    cliente_id,
+                    "🔎 Estoy buscando las próximas horas disponibles en la agenda 😊"
+                )
+
+            horas = buscar_proximas_15_horas()
+
+            if horas is None:
+                return (
+                    "No pude consultar la agenda en este momento 😕.\n\n"
+                    "Intenta nuevamente en unos segundos."
+                )
+
+            if not horas:
+                return (
+                    "Por ahora no encontré horas disponibles. "
+                    "Puedes indicarme otra fecha para revisar."
+                )
+
+            estado["horas_ofrecidas"] = [h.isoformat() for h in horas]
+            estado["paso"] = "seleccionar_hora"
+
+            return (
+                f"Para {servicio_info['nombre']}, estas son las próximas horas disponibles:\n\n"
+                f"{formatear_opciones_horas(horas)}\n\n"
+                "Respóndeme con el número de la opción que prefieras.\n"
+                "También puedes escribir otra fecha, OTRO SERVICIO o SALIR."
+            )
+
+        # Mes sin día específico, por ejemplo "en septiembre".
+        if mes_detectado:
+
+            if canal == "whatsapp":
+                enviar_mensaje_progreso_twilio(
+                    cliente_id,
+                    "🔎 Estoy revisando la disponibilidad desde ese mes 😊"
+                )
+
+            horas = buscar_proximas_15_horas(desde=mes_detectado)
+
+            if horas is None:
+                return (
+                    "No pude consultar la agenda en este momento 😕.\n\n"
+                    "Intenta nuevamente en unos segundos."
+                )
+
+            if not horas:
+                return (
+                    f"No encontré horas disponibles desde "
+                    f"{MESES_NOMBRES[mes_detectado.month - 1]} por ahora. "
+                    "Puedes indicarme otra fecha."
+                )
+
+            estado["horas_ofrecidas"] = [h.isoformat() for h in horas]
+            estado["paso"] = "seleccionar_hora"
+
+            return (
+                f"Perfecto 😊 Estas son las primeras horas disponibles desde "
+                f"{MESES_NOMBRES[mes_detectado.month - 1]}:\n\n"
+                f"{formatear_opciones_horas(horas)}\n\n"
+                "Respóndeme con el número que prefieras o escribe otra fecha."
+            )
+
+        # Día natural: mañana, próximo miércoles, 2 de septiembre, etc.
+        if fecha_exacta_detectada and texto_menciona_fecha_o_mes(texto):
+
+            fecha_consultada = fecha_exacta_detectada
+
+            if not es_dia_atencion(fecha_consultada):
+                return (
+                    f"Ese {DIAS_NOMBRES[fecha_consultada.weekday()]} no atendemos.\n\n"
+                    "Atendemos de lunes a sábado, de 10:00 a 18:00. "
+                    "¿Qué otro día te acomoda?"
+                )
+
+            if canal == "whatsapp":
+                enviar_mensaje_progreso_twilio(
+                    cliente_id,
+                    "🔎 Estoy revisando las horas disponibles para ese día 😊"
+                )
+
+            horas = buscar_horas_disponibles_dia(fecha_consultada)
+
+            if horas is None:
+                return (
+                    "No pude consultar la agenda en este momento 😕.\n\n"
+                    "Intenta nuevamente en unos segundos."
+                )
+
+            if not horas:
+                desde = (
+                    fecha_consultada + timedelta(days=1)
+                ).replace(hour=0, minute=0, second=0, microsecond=0)
+
+                horas = buscar_proximas_15_horas(desde=desde)
+
+                if horas is None:
+                    return (
+                        "Ese día está completo y no pude consultar las fechas siguientes 😕. "
+                        "Intenta nuevamente en unos segundos."
+                    )
+
+                if not horas:
+                    return (
+                        "Ese día está completo y por ahora no encontré horas posteriores. "
+                        "Puedes indicarme otra fecha."
+                    )
+
+                estado["horas_ofrecidas"] = [h.isoformat() for h in horas]
+                estado["paso"] = "seleccionar_hora"
+
+                return (
+                    f"El {fecha_consultada.day}/{fecha_consultada.month} está completo 😕.\n\n"
+                    "Estas son las próximas opciones disponibles:\n\n"
+                    f"{formatear_opciones_horas(horas)}\n\n"
+                    "Respóndeme con el número que prefieras o escribe otra fecha."
+                )
+
+            estado["horas_ofrecidas"] = [h.isoformat() for h in horas]
+            estado["paso"] = "seleccionar_hora"
+
+            return (
+                f"Sí 😊 Para el {fecha_consultada.day}/{fecha_consultada.month} "
+                "tengo estas horas disponibles:\n\n"
+                f"{formatear_opciones_horas(horas)}\n\n"
+                "Respóndeme con el número de la hora que prefieras.\n"
+                "También puedes escribir otra fecha, OTRO SERVICIO o SALIR."
+            )
+
+        return (
+            "Dime qué día te gustaría venir 😊\n\n"
+            "Puedes escribirlo libremente, por ejemplo: PRÓXIMO MIÉRCOLES, MAÑANA "
+            "o 2 DE SEPTIEMBRE. Si quieres que yo te muestre opciones, escribe PRÓXIMAS."
+        )
 
     # ========================================================
     # HORA
@@ -2488,7 +2734,7 @@ def procesar_agenda(
                 "• 2 de septiembre\n"
                 "• septiembre\n"
                 "• ¿Mañana tienes disponibilidad?\n\n"
-                "Escribe MENÚ cuando quieras volver al menú principal."
+                "También puedes escribir OTRO SERVICIO o SALIR cuando quieras."
             )
 
         numero = int(
@@ -3529,15 +3775,24 @@ def whatsapp_webhook():
 
         texto_n = normalizar_texto(text)
 
-        # MENÚ siempre permite salir de cualquier flujo y comenzar de nuevo.
+        # MENÚ reinicia el flujo conversacional sin perder el teléfono.
         if es_comando_menu(text):
 
             resetear_reserva(estado)
             estado["paso"] = "menu_principal"
             respuesta = mensaje_menu_principal()
 
-        # Si el cliente ya está dentro de una reserva, seguimos el flujo
-        # sin enviar la conversación a OpenAI.
+        # El cliente puede cerrar la conversación en cualquier momento.
+        elif usuario_no_quiere(text):
+
+            resetear_reserva(estado)
+            estado["paso"] = "menu_principal"
+            respuesta = (
+                "No hay problema 😊. Cuando quieras revisar servicios, precios "
+                "o reservar una hora con Diego, aquí estaré. ¡Que estés muy bien!"
+            )
+
+        # Si ya está armando una reserva, mantenemos el contexto.
         elif estado["modo_agendar"]:
 
             respuesta = procesar_agenda(
@@ -3547,53 +3802,13 @@ def whatsapp_webhook():
                 "whatsapp"
             )
 
-        # Respuesta al menú inicial.
-        elif estado.get("paso") == "menu_principal":
-
-            if texto_n in {"1", "servicios", "precios", "servicios y precios"}:
-                estado["paso"] = "servicios_mostrados"
-                respuesta = mostrar_servicios()
-
-            elif texto_n in {"2", "agendar", "reservar", "agenda"}:
-                estado["modo_agendar"] = True
-                estado["paso"] = "inicio"
-                respuesta = (
-                    "Perfecto 📅 ¿Qué servicio quieres agendar?\n\n"
-                    + mostrar_servicios()
-                )
-
-            else:
-                respuesta = mensaje_menu_principal()
-
-        # Después de mostrar los precios, un número del 1 al 12
-        # se interpreta como selección del servicio y abre la agenda.
-        elif estado.get("paso") == "servicios_mostrados" and detectar_servicio(text):
-
-            estado["modo_agendar"] = True
-            estado["paso"] = "inicio"
-            respuesta = procesar_agenda(
-                estado,
-                text,
-                cliente_id,
-                "whatsapp"
-            )
-
+        # Consultas directas por servicios/precios.
         elif pregunta_servicios(text):
 
             estado["paso"] = "servicios_mostrados"
             respuesta = mostrar_servicios()
 
-        elif es_intencion_agendar(text):
-
-            estado["modo_agendar"] = True
-            estado["paso"] = "inicio"
-            respuesta = procesar_agenda(
-                estado,
-                text,
-                cliente_id,
-                "whatsapp"
-            )
-
+        # Si nombra un servicio, comenzamos la reserva directamente.
         elif detectar_servicio(text):
 
             estado["modo_agendar"] = True
@@ -3605,12 +3820,33 @@ def whatsapp_webhook():
                 "whatsapp"
             )
 
-        # Saludos y cualquier consulta fuera de flujo vuelven al menú.
-        # Así evitamos que el bot divague.
-        else:
+        # Puede pedir una reserva o incluso comenzar diciendo una fecha
+        # como "próximo miércoles". La fecha se conserva mientras elegimos servicio.
+        elif es_intencion_agendar(text) or texto_menciona_fecha_o_mes(text):
+
+            estado["modo_agendar"] = True
+            estado["paso"] = "inicio"
+            respuesta = procesar_agenda(
+                estado,
+                text,
+                cliente_id,
+                "whatsapp"
+            )
+
+        # Saludos reciben una apertura natural, sin obligar a usar menú 1/2.
+        elif es_saludo_o_menu(text):
 
             estado["paso"] = "menu_principal"
             respuesta = mensaje_menu_principal()
+
+        # El resto pasa por OpenAI, limitado estrictamente a servicios,
+        # precios, horarios y agenda. Si el tema es ajeno, redirige brevemente.
+        else:
+
+            respuesta = responder_openai(
+                estado["historial"],
+                text
+            )
 
 
         estado["historial"].append({
