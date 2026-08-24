@@ -26,7 +26,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-23-FINAL-DIEGO-V25-FECHA-RANGO-PERSISTENTE"
+APP_VERSION = "2026-08-23-FINAL-DIEGO-V26-CORRIGE-MANANA"
 
 
 # ============================================================
@@ -382,6 +382,7 @@ def normalizar_texto(texto):
         "ó": "o",
         "ú": "u",
         "ü": "u",
+        "ñ": "n",
     }
 
     for a, b in reemplazos.items():
