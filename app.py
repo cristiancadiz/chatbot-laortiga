@@ -26,7 +26,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-24-FINAL-DIEGO-V27-SERVICIO-HORA-DIRECTA"
+APP_VERSION = "2026-08-25-V28-CANCELAR-REAGENDAR-GSHEET"
 
 
 # ============================================================
@@ -97,7 +97,93 @@ def asegurar_conversacion(cliente_id, canal="web"):
     return None
 
 def guardar_mensaje(cliente_id, canal, role, contenido):
-    return None
+    """
+    Guarda cada mensaje en Google Sheets.
+
+    Columnas esperadas en la pestaña configurada:
+    FechaHora | Canal | ClienteID | Telefono | Rol | Mensaje
+
+    Si Sheets no está configurado o falla, la conversación sigue funcionando:
+    el error solo queda registrado en Render.
+    """
+    if not GOOGLE_SHEET_ID:
+        return None
+
+    try:
+        credentials = obtener_credentials_sheets()
+        service = build(
+            "sheets",
+            "v4",
+            credentials=credentials,
+            cache_discovery=False,
+        )
+
+        telefono = normalizar_telefono_twilio(cliente_id) if canal == "whatsapp" else ""
+        # Crear automáticamente la pestaña y encabezados la primera vez.
+        global GSHEET_READY
+        if not GSHEET_READY:
+            meta = service.spreadsheets().get(
+                spreadsheetId=GOOGLE_SHEET_ID,
+                fields="sheets.properties.title",
+            ).execute()
+            titulos = [
+                sh.get("properties", {}).get("title")
+                for sh in meta.get("sheets", [])
+            ]
+            if GOOGLE_SHEET_TAB not in titulos:
+                service.spreadsheets().batchUpdate(
+                    spreadsheetId=GOOGLE_SHEET_ID,
+                    body={
+                        "requests": [{
+                            "addSheet": {
+                                "properties": {"title": GOOGLE_SHEET_TAB}
+                            }
+                        }]
+                    },
+                ).execute()
+
+            encabezado = service.spreadsheets().values().get(
+                spreadsheetId=GOOGLE_SHEET_ID,
+                range=f"'{GOOGLE_SHEET_TAB}'!A1:F1",
+            ).execute().get("values", [])
+
+            if not encabezado:
+                service.spreadsheets().values().update(
+                    spreadsheetId=GOOGLE_SHEET_ID,
+                    range=f"'{GOOGLE_SHEET_TAB}'!A1:F1",
+                    valueInputOption="RAW",
+                    body={
+                        "values": [[
+                            "FechaHora", "Canal", "ClienteID",
+                            "Telefono", "Rol", "Mensaje"
+                        ]]
+                    },
+                ).execute()
+
+            GSHEET_READY = True
+
+        fila = [[
+            ahora_local().isoformat(),
+            canal,
+            cliente_id,
+            telefono,
+            role,
+            contenido,
+        ]]
+
+        service.spreadsheets().values().append(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            range=f"'{GOOGLE_SHEET_TAB}'!A:F",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": fila},
+        ).execute()
+
+        return True
+
+    except Exception as e:
+        print("ERROR GUARDANDO MENSAJE EN GOOGLE SHEETS:", repr(e))
+        return False
 
 def actualizar_conversacion_datos(
     cliente_id, canal, nombre=None, telefono=None, correo=None,
@@ -295,9 +381,21 @@ GOOGLE_REDIRECT_URI = os.getenv(
     "https://chatbot-laortiga-hddw.onrender.com/callback"
 )
 
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar"
+CALENDAR_SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
 ]
+
+SHEETS_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+]
+
+# El login OAuth pide ambos permisos, pero Calendar y Sheets se refrescan
+# por separado para que Sheets nunca rompa la agenda si aún no está autorizado.
+SCOPES = CALENDAR_SCOPES + SHEETS_SCOPES
+
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
+GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "Conversaciones")
+GSHEET_READY = False
 
 
 # ============================================================
@@ -338,7 +436,21 @@ def obtener_credentials_diego():
         token_uri="https://oauth2.googleapis.com/token",
         client_id=GOOGLE_CLIENT_ID,
         client_secret=GOOGLE_CLIENT_SECRET,
-        scopes=SCOPES,
+        scopes=CALENDAR_SCOPES,
+    )
+
+
+def obtener_credentials_sheets():
+    if not GOOGLE_REFRESH_TOKEN:
+        raise Exception("Falta GOOGLE_REFRESH_TOKEN.")
+
+    return Credentials(
+        token=None,
+        refresh_token=GOOGLE_REFRESH_TOKEN,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        scopes=SHEETS_SCOPES,
     )
 
 
@@ -2105,6 +2217,255 @@ def crear_reserva_segura(
 
 
 # ============================================================
+# CANCELAR / REAGENDAR CITA POR EL MISMO WHATSAPP
+# ============================================================
+
+def es_intencion_cancelar_cita(texto):
+    texto_n = normalizar_texto(texto)
+    patrones = [
+        "cancelar mi hora", "cancelar mi cita", "cancelar reserva",
+        "anular mi hora", "anular mi cita", "anular reserva",
+        "cancela mi hora", "cancela mi cita", "elimina mi hora",
+    ]
+    return any(p in texto_n for p in patrones)
+
+
+def es_intencion_reagendar_cita(texto):
+    texto_n = normalizar_texto(texto)
+    patrones = [
+        "reagendar", "reagendar mi hora", "reagendar mi cita",
+        "cambiar mi hora", "cambiar mi cita", "mover mi hora",
+        "mover mi cita", "cambiar la hora", "cambiar la cita",
+    ]
+    return any(p in texto_n for p in patrones)
+
+
+def es_respuesta_si(texto):
+    return normalizar_texto(texto) in {
+        "si", "sí", "s", "ok", "okay", "confirmo", "confirmar",
+        "correcto", "dale", "ya", "si confirmo", "sí confirmo"
+    }
+
+
+def es_respuesta_no(texto):
+    return normalizar_texto(texto) in {
+        "no", "n", "no gracias", "mejor no", "cancelar", "volver"
+    }
+
+
+def buscar_citas_futuras_por_telefono(telefono):
+    """Busca eventos futuros creados por el bot para el mismo teléfono."""
+    try:
+        service = obtener_calendar_service()
+        ahora = ahora_local()
+
+        resultado = service.events().list(
+            calendarId=CALENDAR_ID,
+            timeMin=ahora.isoformat(),
+            singleEvents=True,
+            orderBy="startTime",
+            maxResults=20,
+            privateExtendedProperty=[f"telefono={telefono}"],
+        ).execute()
+
+        citas = []
+        for evento in resultado.get("items", []):
+            inicio_str = evento.get("start", {}).get("dateTime")
+            if not inicio_str:
+                continue
+            try:
+                inicio = datetime.fromisoformat(inicio_str.replace("Z", "+00:00")).astimezone(obtener_zona())
+            except Exception:
+                continue
+            citas.append({
+                "evento_id": evento.get("id"),
+                "inicio": inicio,
+                "summary": evento.get("summary", "Reserva"),
+                "evento": evento,
+            })
+
+        return citas
+
+    except Exception as e:
+        print("ERROR BUSCANDO CITA POR TELEFONO:", repr(e))
+        return None
+
+
+def cancelar_evento_calendar(evento_id):
+    try:
+        service = obtener_calendar_service()
+        service.events().delete(
+            calendarId=CALENDAR_ID,
+            eventId=evento_id,
+            sendUpdates="all",
+        ).execute()
+        return True
+    except Exception as e:
+        print("ERROR CANCELANDO EVENTO:", repr(e))
+        return False
+
+
+def reagendar_evento_calendar(evento_id, nuevo_inicio):
+    """Valida primero la nueva hora y solo después mueve la cita existente."""
+    disponible = verificar_disponibilidad(nuevo_inicio, DURACION_RESERVA)
+    if disponible is not True:
+        return {"ok": False, "ocupada": True}
+
+    try:
+        service = obtener_calendar_service()
+        evento = service.events().get(
+            calendarId=CALENDAR_ID,
+            eventId=evento_id,
+        ).execute()
+
+        nuevo_fin = nuevo_inicio + timedelta(minutes=DURACION_RESERVA)
+        evento["start"] = {
+            "dateTime": nuevo_inicio.isoformat(),
+            "timeZone": TIMEZONE,
+        }
+        evento["end"] = {
+            "dateTime": nuevo_fin.isoformat(),
+            "timeZone": TIMEZONE,
+        }
+
+        actualizado = service.events().update(
+            calendarId=CALENDAR_ID,
+            eventId=evento_id,
+            body=evento,
+            sendUpdates="all",
+        ).execute()
+
+        return {"ok": True, "evento": actualizado}
+
+    except Exception as e:
+        print("ERROR REAGENDANDO EVENTO:", repr(e))
+        return {"ok": False, "error": str(e)}
+
+
+def iniciar_gestion_cita(estado, telefono, accion):
+    citas = buscar_citas_futuras_por_telefono(telefono)
+
+    if citas is None:
+        return "No pude consultar tu reserva en este momento 😕. Intenta nuevamente en unos segundos."
+
+    if not citas:
+        return (
+            "No encontré una cita futura asociada a este mismo número de WhatsApp. "
+            "Si reservaste desde otro número, debes escribirnos desde ese número."
+        )
+
+    # Por seguridad usamos la próxima cita futura. Si luego hay varias, podemos ampliar el selector.
+    cita = citas[0]
+    estado["gestion_cita"] = {
+        "accion": accion,
+        "evento_id": cita["evento_id"],
+        "inicio_original": cita["inicio"].isoformat(),
+        "summary": cita["summary"],
+        "horas_ofrecidas": [],
+    }
+
+    if accion == "cancelar":
+        estado["paso_gestion_cita"] = "confirmar_cancelacion"
+        return (
+            f"Encontré tu próxima cita: {cita['summary']} · {formato_fecha_larga(cita['inicio'])}.\n\n"
+            "¿Confirmas que deseas cancelarla? Responde SÍ o NO."
+        )
+
+    horas = buscar_proximas_15_horas()
+    if horas is None:
+        estado.pop("gestion_cita", None)
+        return "No pude consultar nuevas horas en este momento 😕. Intenta nuevamente en unos segundos."
+
+    estado["gestion_cita"]["horas_ofrecidas"] = [h.isoformat() for h in horas]
+    estado["paso_gestion_cita"] = "seleccionar_reagenda"
+    return (
+        f"Encontré tu cita actual: {cita['summary']} · {formato_fecha_larga(cita['inicio'])}.\n\n"
+        "No la eliminaré mientras buscamos otra hora. Estas son las próximas opciones:\n\n"
+        f"{formatear_opciones_horas(horas)}\n\n"
+        "Respóndeme con el número de la nueva hora que prefieras."
+    )
+
+
+def procesar_gestion_cita(estado, texto, telefono):
+    gestion = estado.get("gestion_cita") or {}
+    paso = estado.get("paso_gestion_cita")
+
+    if paso == "confirmar_cancelacion":
+        if es_respuesta_no(texto):
+            estado.pop("gestion_cita", None)
+            estado.pop("paso_gestion_cita", None)
+            return "Perfecto 😊. Tu cita se mantiene sin cambios."
+        if not es_respuesta_si(texto):
+            return "Para evitar errores, responde SÍ para cancelar tu cita o NO para mantenerla."
+
+        if cancelar_evento_calendar(gestion.get("evento_id")):
+            estado.pop("gestion_cita", None)
+            estado.pop("paso_gestion_cita", None)
+            resetear_reserva(estado)
+            estado["datos_reserva"]["telefono"] = telefono
+            return "✅ Tu cita fue cancelada correctamente. Cuando quieras, puedo ayudarte a reservar una nueva hora."
+
+        return "No pude cancelar tu cita en este momento 😕. Tu reserva sigue vigente; intenta nuevamente."
+
+    if paso == "seleccionar_reagenda":
+        match = re.fullmatch(r"\s*(\d{1,2})\s*", texto or "")
+        horas = gestion.get("horas_ofrecidas", [])
+        if not match:
+            return "Respóndeme con el número de la nueva hora que prefieras."
+
+        indice = int(match.group(1)) - 1
+        if indice < 0 or indice >= len(horas):
+            return f"Elige un número entre 1 y {len(horas)}, por favor."
+
+        nuevo_inicio = datetime.fromisoformat(horas[indice])
+        gestion["nuevo_inicio"] = nuevo_inicio.isoformat()
+        estado["paso_gestion_cita"] = "confirmar_reagenda"
+        return (
+            f"Tu cita actual es {formato_fecha_larga(datetime.fromisoformat(gestion['inicio_original']))}.\n"
+            f"La nueva hora sería {formato_fecha_larga(nuevo_inicio)}.\n\n"
+            "¿Confirmas el cambio? Responde SÍ o NO."
+        )
+
+    if paso == "confirmar_reagenda":
+        if es_respuesta_no(texto):
+            estado.pop("gestion_cita", None)
+            estado.pop("paso_gestion_cita", None)
+            return "Perfecto 😊. Tu cita original se mantiene sin cambios."
+        if not es_respuesta_si(texto):
+            return "Para evitar errores, responde SÍ para reagendar o NO para mantener tu cita actual."
+
+        nuevo_inicio = datetime.fromisoformat(gestion["nuevo_inicio"])
+        resultado = reagendar_evento_calendar(gestion.get("evento_id"), nuevo_inicio)
+
+        if resultado.get("ocupada"):
+            horas = buscar_proximas_15_horas()
+            if horas is None:
+                return "Esa hora ya no está disponible y no pude actualizar la agenda. Tu cita original sigue intacta."
+            gestion["horas_ofrecidas"] = [h.isoformat() for h in horas]
+            gestion.pop("nuevo_inicio", None)
+            estado["paso_gestion_cita"] = "seleccionar_reagenda"
+            return (
+                "Esa hora acaba de ocuparse 😕. Tu cita original sigue intacta.\n\n"
+                "Estas son las próximas horas disponibles:\n\n"
+                f"{formatear_opciones_horas(horas)}\n\n"
+                "Respóndeme con el número de otra hora."
+            )
+
+        if not resultado.get("ok"):
+            return "No pude reagendar en este momento 😕. Tu cita original sigue intacta; intenta nuevamente."
+
+        estado.pop("gestion_cita", None)
+        estado.pop("paso_gestion_cita", None)
+        resetear_reserva(estado)
+        estado["datos_reserva"]["telefono"] = telefono
+        return f"✅ Tu cita fue reagendada correctamente para {formato_fecha_larga(nuevo_inicio)}."
+
+    estado.pop("gestion_cita", None)
+    estado.pop("paso_gestion_cita", None)
+    return "No pude continuar con la gestión de tu cita. Intenta nuevamente."
+
+
+# ============================================================
 # PROCESAR AGENDA
 # ============================================================
 
@@ -3643,6 +4004,9 @@ def get_wa_session(wa_id):
 
             "horas_ofrecidas": [],
 
+            "gestion_cita": None,
+            "paso_gestion_cita": None,
+
             "datos_reserva": {
 
                 "servicio": None,
@@ -3723,6 +4087,14 @@ def enviar_mensaje_progreso_twilio(
             from_=TWILIO_WHATSAPP_FROM,
             to=destino,
             body=texto
+        )
+
+        # Este mensaje no pasa por la respuesta TwiML, así que lo registramos aquí.
+        guardar_mensaje(
+            telefono_twilio,
+            "whatsapp",
+            "assistant",
+            texto
         )
 
         print(
@@ -4198,8 +4570,19 @@ def whatsapp_webhook():
 
         texto_n = normalizar_texto(text)
 
+        # Gestión de una cita ya existente: cancelar o reagendar siempre
+        # usando el mismo número de WhatsApp guardado en Google Calendar.
+        if estado.get("gestion_cita"):
+            respuesta = procesar_gestion_cita(estado, text, telefono_cliente)
+
+        elif es_intencion_cancelar_cita(text):
+            respuesta = iniciar_gestion_cita(estado, telefono_cliente, "cancelar")
+
+        elif es_intencion_reagendar_cita(text):
+            respuesta = iniciar_gestion_cita(estado, telefono_cliente, "reagendar")
+
         # MENÚ reinicia el flujo conversacional sin perder el teléfono.
-        if es_comando_menu(text):
+        elif es_comando_menu(text):
 
             resetear_reserva(estado)
             estado["paso"] = "menu_principal"
@@ -5402,6 +5785,8 @@ En Render:
 <li>Environment</li>
 
 <li>GOOGLE_REFRESH_TOKEN</li>
+<li>GOOGLE_SHEET_ID</li>
+<li>GOOGLE_SHEET_TAB (opcional; por defecto Conversaciones)</li>
 
 <li>Pega el token</li>
 
