@@ -1,6 +1,8 @@
 import os
 import re
 import hashlib
+import hmac
+import uuid
 import requests
 import pytz
 from openai import OpenAI
@@ -14,6 +16,8 @@ from flask import (
     render_template_string,
 )
 
+from twilio.twiml.messaging_response import MessagingResponse
+from twilio.rest import Client as TwilioClient
 
 from datetime import timedelta, datetime
 from dotenv import load_dotenv
@@ -24,7 +28,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-27-V29-META-CLOUD-API"
+APP_VERSION = "2026-08-27-V30-TWILIO-MERCADOPAGO-100-PCT"
 
 
 # ============================================================
@@ -218,6 +222,35 @@ CALENDAR_ID = os.getenv(
     "GOOGLE_CALENDAR_ID",
     "primary"
 )
+
+
+# ============================================================
+# MERCADO PAGO - CHECKOUT PRO (PRODUCCIÓN)
+# ============================================================
+
+MERCADOPAGO_ACCESS_TOKEN = os.getenv("MERCADOPAGO_ACCESS_TOKEN")
+
+# URL pública del servicio en Render, sin slash final.
+# Ejemplo: https://chatbot-laortiga-hddw.onrender.com
+APP_BASE_URL = (
+    os.getenv("APP_BASE_URL")
+    or os.getenv("RENDER_EXTERNAL_URL")
+    or "https://chatbot-laortiga-hddw.onrender.com"
+).rstrip("/")
+
+MERCADOPAGO_NOTIFICATION_URL = (
+    os.getenv("MERCADOPAGO_NOTIFICATION_URL")
+    or f"{APP_BASE_URL}/mercadopago/webhook"
+)
+
+# Tiempo máximo que protegemos la hora mientras el cliente paga.
+PAGO_EXPIRA_MINUTOS = int(os.getenv("PAGO_EXPIRA_MINUTOS", "15"))
+
+# En Chile Checkout Pro cobra en CLP.
+MERCADOPAGO_CURRENCY = "CLP"
+
+if not MERCADOPAGO_ACCESS_TOKEN:
+    print("ADVERTENCIA: falta MERCADOPAGO_ACCESS_TOKEN. Los pagos no funcionarán.")
 
 
 # ============================================================
@@ -1146,10 +1179,14 @@ def construir_fecha_hora_solicitada(texto):
 
 def verificar_disponibilidad(
     inicio,
-    duracion=60
+    duracion=60,
+    limpiar_expirados=True
 ):
 
     try:
+
+        if limpiar_expirados:
+            limpiar_bloqueos_pago_expirados()
 
         zona = obtener_zona()
 
@@ -1236,6 +1273,7 @@ def buscar_proximas_15_horas(desde=None):
     Si recibe "desde", comienza a buscar desde esa fecha/hora.
     """
 
+    limpiar_bloqueos_pago_expirados()
     ahora = ahora_local()
     zona = obtener_zona()
 
@@ -1506,6 +1544,7 @@ def buscar_horas_disponibles_dia(fecha_obj):
     a Google Calendar.
     """
 
+    limpiar_bloqueos_pago_expirados()
     zona = obtener_zona()
     ahora = ahora_local()
 
@@ -2017,6 +2056,7 @@ def resetear_reserva(estado):
     estado["modo_agendar"] = False
     estado["paso"] = "inicio"
     estado["horas_ofrecidas"] = []
+    estado["pago_pendiente"] = None
 
     estado["datos_reserva"] = {
         "servicio": None,
@@ -2155,6 +2195,396 @@ def crear_evento_diego(
             "ok": False,
             "error": str(e)
         }
+
+
+# ============================================================
+# MERCADO PAGO - PAGO ANTES DE CONFIRMAR LA RESERVA
+# ============================================================
+
+def limpiar_bloqueos_pago_expirados():
+    """Elimina bloqueos temporales cuyo link de pago ya venció."""
+    try:
+        service = obtener_calendar_service()
+        ahora = ahora_local()
+        desde = ahora - timedelta(days=1)
+        hasta = ahora + timedelta(days=45)
+
+        resultado = service.events().list(
+            calendarId=CALENDAR_ID,
+            timeMin=desde.isoformat(),
+            timeMax=hasta.isoformat(),
+            singleEvents=True,
+            maxResults=250,
+            privateExtendedProperty=["tipo=bloqueo_pago"],
+        ).execute()
+
+        for evento in resultado.get("items", []):
+            props = evento.get("extendedProperties", {}).get("private", {})
+            expira_str = props.get("pago_expira")
+            if not expira_str:
+                continue
+            try:
+                expira = datetime.fromisoformat(expira_str.replace("Z", "+00:00")).astimezone(obtener_zona())
+            except Exception:
+                continue
+
+            if expira <= ahora:
+                try:
+                    service.events().delete(
+                        calendarId=CALENDAR_ID,
+                        eventId=evento.get("id"),
+                        sendUpdates="none",
+                    ).execute()
+                    print("BLOQUEO DE PAGO EXPIRADO ELIMINADO:", evento.get("id"))
+                except Exception as e:
+                    print("ERROR ELIMINANDO BLOQUEO EXPIRADO:", repr(e))
+
+        return True
+    except Exception as e:
+        print("ERROR LIMPIANDO BLOQUEOS DE PAGO:", repr(e))
+        return False
+
+
+def crear_bloqueo_pago_calendar(inicio, datos, pago_ref, expira):
+    """Protege temporalmente una hora mientras se completa Checkout Pro."""
+    try:
+        disponible = verificar_disponibilidad(inicio, DURACION_RESERVA, limpiar_expirados=False)
+        if disponible is not True:
+            return {"ok": False, "ocupada": True}
+
+        service = obtener_calendar_service()
+        servicio = obtener_servicio(datos["servicio"])
+        fin = inicio + timedelta(minutes=DURACION_RESERVA)
+
+        evento = {
+            "summary": f"PENDIENTE PAGO - {servicio['nombre']}",
+            "description": (
+                "Bloqueo temporal generado por el Asistente Virtual.\n"
+                "La cita NO está confirmada hasta que Mercado Pago apruebe el pago.\n\n"
+                f"Cliente: {datos['nombre']}\n"
+                f"Teléfono: {datos['telefono']}\n"
+                f"Correo: {datos['correo']}\n"
+                f"Servicio: {servicio['nombre']}\n"
+                f"Valor: {precio_texto_servicio(servicio)}\n"
+                f"Referencia pago: {pago_ref}\n"
+                f"Vence: {expira.isoformat()}"
+            ),
+            "start": {"dateTime": inicio.isoformat(), "timeZone": TIMEZONE},
+            "end": {"dateTime": fin.isoformat(), "timeZone": TIMEZONE},
+            "transparency": "opaque",
+            "extendedProperties": {
+                "private": {
+                    "tipo": "bloqueo_pago",
+                    "pago_ref": pago_ref,
+                    "pago_expira": expira.isoformat(),
+                    "servicio_codigo": datos["servicio"],
+                    "cliente_pago": datos["nombre"][:120],
+                    "telefono_pago": datos["telefono"][:40],
+                    "correo_pago": datos["correo"][:200],
+                    "monto_pago": str(int(servicio.get("precio", 0))),
+                }
+            },
+        }
+
+        resultado = service.events().insert(
+            calendarId=CALENDAR_ID,
+            body=evento,
+            sendUpdates="none",
+        ).execute()
+
+        return {"ok": True, "evento_id": resultado.get("id")}
+
+    except Exception as e:
+        print("ERROR CREANDO BLOQUEO DE PAGO:", repr(e))
+        return {"ok": False, "error": str(e)}
+
+
+def eliminar_bloqueo_pago(evento_id):
+    if not evento_id:
+        return False
+    try:
+        obtener_calendar_service().events().delete(
+            calendarId=CALENDAR_ID,
+            eventId=evento_id,
+            sendUpdates="none",
+        ).execute()
+        return True
+    except Exception as e:
+        print("ERROR ELIMINANDO BLOQUEO DE PAGO:", repr(e))
+        return False
+
+
+def buscar_bloqueo_pago(pago_ref):
+    try:
+        service = obtener_calendar_service()
+        ahora = ahora_local()
+        resultado = service.events().list(
+            calendarId=CALENDAR_ID,
+            timeMin=(ahora - timedelta(days=1)).isoformat(),
+            timeMax=(ahora + timedelta(days=45)).isoformat(),
+            singleEvents=True,
+            maxResults=50,
+            privateExtendedProperty=[
+                "tipo=bloqueo_pago",
+                f"pago_ref={pago_ref}",
+            ],
+        ).execute()
+        eventos = resultado.get("items", [])
+        return eventos[0] if eventos else None
+    except Exception as e:
+        print("ERROR BUSCANDO BLOQUEO DE PAGO:", repr(e))
+        return None
+
+
+def crear_preferencia_mercadopago(datos, pago_ref, expira):
+    """Crea un Checkout Pro productivo y devuelve su init_point."""
+    if not MERCADOPAGO_ACCESS_TOKEN:
+        return {"ok": False, "error": "Falta MERCADOPAGO_ACCESS_TOKEN"}
+
+    servicio = obtener_servicio(datos["servicio"])
+    monto = int(servicio.get("precio", 0))
+    if monto <= 0:
+        return {"ok": False, "error": "El servicio no tiene un monto cobrable"}
+
+    ahora = ahora_local()
+    payload = {
+        "items": [{
+            "id": datos["servicio"],
+            "title": f"Reserva - {servicio['nombre']}",
+            "description": f"Reserva presencial con {ESTILISTA_NOMBRE}",
+            "currency_id": MERCADOPAGO_CURRENCY,
+            "quantity": 1,
+            "unit_price": monto,
+        }],
+        "payer": {
+            "name": datos["nombre"],
+            "email": datos["correo"],
+        },
+        "external_reference": pago_ref,
+        "notification_url": MERCADOPAGO_NOTIFICATION_URL,
+        "back_urls": {
+            "success": f"{APP_BASE_URL}/pago/exitoso",
+            "pending": f"{APP_BASE_URL}/pago/pendiente",
+            "failure": f"{APP_BASE_URL}/pago/fallido",
+        },
+        "auto_return": "approved",
+        # Para reservas necesitamos aprobación inmediata: aprobado o rechazado.
+        "binary_mode": True,
+        "expires": True,
+        "expiration_date_from": ahora.isoformat(),
+        "expiration_date_to": expira.isoformat(),
+    }
+
+    try:
+        r = requests.post(
+            "https://api.mercadopago.com/checkout/preferences",
+            headers={
+                "Authorization": f"Bearer {MERCADOPAGO_ACCESS_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=20,
+        )
+        data = r.json() if r.content else {}
+        if r.status_code not in (200, 201):
+            print("ERROR MERCADO PAGO PREFERENCE:", r.status_code, data)
+            return {"ok": False, "error": data}
+
+        init_point = data.get("init_point")
+        if not init_point:
+            return {"ok": False, "error": "Mercado Pago no devolvió init_point"}
+
+        return {
+            "ok": True,
+            "preference_id": data.get("id"),
+            "init_point": init_point,
+        }
+    except Exception as e:
+        print("ERROR CREANDO PREFERENCIA MP:", repr(e))
+        return {"ok": False, "error": str(e)}
+
+
+def iniciar_pago_reserva(estado, cliente_id, canal):
+    """Bloquea la hora, crea Checkout Pro y devuelve el enlace al cliente."""
+    datos = estado["datos_reserva"]
+    inicio = datetime.fromisoformat(datos["fecha_hora"])
+    servicio = obtener_servicio(datos["servicio"])
+    monto = int(servicio.get("precio", 0))
+
+    # Servicios gratuitos continúan sin Mercado Pago.
+    if monto <= 0:
+        return confirmar_reserva_sin_pago(estado, cliente_id, canal)
+
+    limpiar_bloqueos_pago_expirados()
+
+    # Referencia sin PII: máximo corto y apto para external_reference.
+    pago_ref = "RES_" + uuid.uuid4().hex[:24]
+    expira = ahora_local() + timedelta(minutes=PAGO_EXPIRA_MINUTOS)
+
+    bloqueo = crear_bloqueo_pago_calendar(inicio, datos, pago_ref, expira)
+    if bloqueo.get("ocupada"):
+        datos["fecha_hora"] = None
+        estado["paso"] = "seleccionar_hora"
+        horas = buscar_proximas_15_horas()
+        if horas is None:
+            return "No pude actualizar la agenda en este momento 😕. Intenta nuevamente."
+        estado["horas_ofrecidas"] = [h.isoformat() for h in horas]
+        return (
+            "Justo esa hora acaba de ocuparse 😕.\n\n"
+            "Estas son las próximas horas disponibles:\n\n"
+            f"{formatear_opciones_horas(horas)}\n\n"
+            "Respóndeme con el número de la nueva hora que prefieras."
+        )
+    if not bloqueo.get("ok"):
+        return "No pude proteger la hora para el pago en este momento 😕. Intenta nuevamente."
+
+    preferencia = crear_preferencia_mercadopago(datos, pago_ref, expira)
+    if not preferencia.get("ok"):
+        eliminar_bloqueo_pago(bloqueo.get("evento_id"))
+        return (
+            "No pude generar el enlace de pago en este momento 😕. "
+            "Tu hora no fue reservada ni cobrada. Intenta nuevamente en unos segundos."
+        )
+
+    # Ya no dependemos de WA_SESSIONS para confirmar el pago: todos los datos
+    # necesarios quedaron en el bloqueo temporal de Google Calendar.
+    estado["pago_pendiente"] = {
+        "referencia": pago_ref,
+        "preference_id": preferencia.get("preference_id"),
+        "evento_id": bloqueo.get("evento_id"),
+        "expira": expira.isoformat(),
+    }
+    estado["paso"] = "esperando_pago"
+
+    precio = precio_texto_servicio(servicio)
+    return (
+        "💳 Para confirmar tu reserva debes pagar el 100% del servicio.\n\n"
+        f"Servicio: {servicio['nombre']}\n"
+        f"Total a pagar: {precio}\n"
+        f"Hora: {formato_fecha_larga(inicio)}\n\n"
+        f"Paga aquí:\n{preferencia['init_point']}\n\n"
+        f"⏳ La hora quedará protegida durante {PAGO_EXPIRA_MINUTOS} minutos. "
+        "Cuando Mercado Pago apruebe el pago, recibirás la confirmación por este mismo WhatsApp."
+    )
+
+
+def confirmar_bloqueo_pagado(evento, payment_id):
+    """Convierte el bloqueo temporal en una reserva confirmada."""
+    try:
+        service = obtener_calendar_service()
+        props = evento.get("extendedProperties", {}).get("private", {})
+        servicio_codigo = props.get("servicio_codigo")
+        nombre = props.get("cliente_pago") or "Cliente"
+        telefono = props.get("telefono_pago") or ""
+        correo = props.get("correo_pago") or ""
+        servicio = obtener_servicio(servicio_codigo)
+
+        inicio_str = evento.get("start", {}).get("dateTime")
+        if not inicio_str:
+            return {"ok": False, "error": "Bloqueo sin fecha"}
+        inicio = datetime.fromisoformat(inicio_str.replace("Z", "+00:00")).astimezone(obtener_zona())
+        fin = inicio + timedelta(minutes=DURACION_RESERVA)
+
+        evento["summary"] = f"{servicio['nombre']} - {nombre}"
+        evento["description"] = (
+            "Reserva PAGADA creada por el Asistente Virtual de "
+            f"Estilista {ESTILISTA_NOMBRE}.\n\n"
+            f"Cliente: {nombre}\n"
+            f"Teléfono: {telefono}\n"
+            f"Correo: {correo}\n"
+            f"Servicio: {servicio['nombre']}\n"
+            f"Valor pagado: {precio_texto_servicio(servicio)}\n"
+            f"Mercado Pago payment_id: {payment_id}\n"
+            f"Duración: {DURACION_RESERVA} minutos\n"
+            "Origen: Asistente Virtual"
+        )
+        evento["start"] = {"dateTime": inicio.isoformat(), "timeZone": TIMEZONE}
+        evento["end"] = {"dateTime": fin.isoformat(), "timeZone": TIMEZONE}
+        if correo:
+            evento["attendees"] = [{"email": correo, "displayName": nombre}]
+
+        evento["extendedProperties"] = {
+            "private": {
+                "cliente": nombre,
+                "telefono": telefono,
+                "correo": correo,
+                "servicio": servicio["nombre"],
+                "servicio_codigo": servicio_codigo or "",
+                "origen": f"Asistente Virtual {ESTILISTA_NOMBRE}",
+                "estado_pago": "approved",
+                "mercadopago_payment_id": str(payment_id),
+                "pago_ref": props.get("pago_ref", ""),
+            }
+        }
+
+        actualizado = service.events().update(
+            calendarId=CALENDAR_ID,
+            eventId=evento.get("id"),
+            body=evento,
+            sendUpdates="all" if correo else "none",
+        ).execute()
+
+        return {
+            "ok": True,
+            "evento": actualizado,
+            "inicio": inicio,
+            "servicio": servicio,
+            "nombre": nombre,
+            "telefono": telefono,
+            "correo": correo,
+        }
+    except Exception as e:
+        print("ERROR CONFIRMANDO BLOQUEO PAGADO:", repr(e))
+        return {"ok": False, "error": str(e)}
+
+
+def obtener_pago_mercadopago(payment_id):
+    if not MERCADOPAGO_ACCESS_TOKEN:
+        return None
+    try:
+        r = requests.get(
+            f"https://api.mercadopago.com/v1/payments/{payment_id}",
+            headers={"Authorization": f"Bearer {MERCADOPAGO_ACCESS_TOKEN}"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            print("ERROR CONSULTANDO PAGO MP:", r.status_code, r.text[:500])
+            return None
+        return r.json()
+    except Exception as e:
+        print("ERROR CONSULTANDO PAGO MP:", repr(e))
+        return None
+
+
+def confirmar_reserva_sin_pago(estado, cliente_id, canal):
+    """Mantiene el comportamiento previo para servicios con precio $0."""
+    datos = estado["datos_reserva"]
+    inicio = datetime.fromisoformat(datos["fecha_hora"])
+    resultado = crear_reserva_segura(inicio, datos, cliente_id, canal)
+    if resultado.get("ocupada"):
+        datos["fecha_hora"] = None
+        estado["paso"] = "seleccionar_hora"
+        return "Esa hora acaba de ocuparse. Elige otra hora disponible, por favor."
+    if not resultado.get("ok"):
+        return "No pude completar la reserva en este momento. Intenta nuevamente."
+
+    servicio = obtener_servicio(datos["servicio"])
+    fecha_texto = formato_fecha_larga(inicio)
+    telefono_guardar = datos["telefono"]
+    nombre = datos["nombre"]
+    correo = datos["correo"]
+    resetear_reserva(estado)
+    estado["datos_reserva"]["telefono"] = telefono_guardar
+    return (
+        "✅ ¡Reserva confirmada!\n\n"
+        f"Servicio: {servicio['nombre']}\n"
+        f"Cliente: {nombre}\n"
+        f"Correo: {correo}\n"
+        f"{fecha_texto}\n\n"
+        "La atención dura 1 hora.\n\n"
+        "📍 Dirección de atención:\n2 Norte 280\n\n"
+        "¡Te esperamos! 😊"
+    )
 
 
 # ============================================================
@@ -2481,6 +2911,19 @@ def procesar_agenda(
     ).strip()
 
     texto_n = normalizar_texto(texto)
+
+    if estado.get("paso") == "esperando_pago":
+        if es_comando_menu(texto) or usuario_no_quiere(texto):
+            pendiente = estado.get("pago_pendiente") or {}
+            eliminar_bloqueo_pago(pendiente.get("evento_id"))
+            resetear_reserva(estado)
+            estado["paso"] = "menu_principal"
+            return mensaje_menu_principal()
+        return (
+            "Tu reserva todavía está pendiente de pago 💳. "
+            "Cuando Mercado Pago apruebe el pago recibirás la confirmación automáticamente. "
+            "Si ya pagaste, no necesitas hacer nada más 😊."
+        )
 
     if texto_n in {"hola", "holi", "holaa", "buenas"} and estado.get("modo_agendar"):
         paso_actual = estado.get("paso")
@@ -3845,136 +4288,13 @@ def completar_reserva(
             "¿Cuál es tu correo electrónico? "
         )
 
-    inicio = datetime.fromisoformat(
-        datos["fecha_hora"]
-    )
-
-    # ========================================================
-    # RESERVA SEGURA
-    # ========================================================
-
-    resultado = crear_reserva_segura(
-        inicio=inicio,
-        datos=datos,
-        cliente_id=cliente_id,
-        canal=canal
-    )
-
-    if resultado.get("ocupada"):
-
-        datos["fecha_hora"] = None
-
-        estado["paso"] = "seleccionar_hora"
-
-        horas = buscar_proximas_15_horas()
-
-        if horas is None:
-            return (
-                "No pude actualizar la agenda en este momento 😕. "
-                "Intenta nuevamente en unos segundos."
-            )
-
-        estado["horas_ofrecidas"] = [
-            h.isoformat()
-            for h in horas
-        ]
-
-        return (
-            "Justo esa hora acaba de ocuparse 😕.\n\n"
-            "Volví a consultar la agenda y estas son las "
-            "próximas 15 horas disponibles:\n\n"
-            f"{formatear_opciones_horas(horas)}\n\n"
-            "Respóndeme con el número de la nueva hora "
-            "que prefieras."
-        )
-
-    if not resultado["ok"]:
-
-        print(
-            "ERROR RESERVANDO:",
-            resultado.get("error")
-        )
-
-        return (
-            "No pude completar la reserva "
-            "en este momento .\n\n"
-            "Intenta nuevamente en unos segundos."
-        )
-
-    servicio = obtener_servicio(
-        datos["servicio"]
-    )
-
-    meet_url = resultado.get(
-        "meet_url"
-    )
-
-    actualizar_conversacion_datos(
+    # En V30 la reserva pagada NO se crea aquí.
+    # Primero se genera Checkout Pro y un bloqueo temporal en Calendar.
+    return iniciar_pago_reserva(
+        estado,
         cliente_id,
-        canal,
-        nombre=datos["nombre"],
-        telefono=datos["telefono"],
-        correo=datos["correo"],
-        servicio=servicio["nombre"],
-        fecha_reserva=inicio,
-        meet_url=meet_url,
-        estado="reserva_confirmada"
+        canal
     )
-
-    fecha_texto = formato_fecha_larga(
-        inicio
-    )
-
-    # ========================================================
-    # GUARDAR MENSAJE DE CONFIRMACIÓN
-    # ========================================================
-
-    # Antes de resetear guardamos el estado.
-    telefono_guardar = datos["telefono"]
-
-    resetear_reserva(
-        estado
-    )
-
-    estado["datos_reserva"]["telefono"] = (
-        telefono_guardar
-    )
-
-    precio = precio_texto_servicio(
-        servicio
-    )
-
-    respuesta = (
-        " ¡Reserva confirmada!\n\n"
-        f" Servicio: {servicio['nombre']}\n"
-        f" Valor: {precio}\n"
-        f" Cliente: {datos['nombre']}\n"
-        f" Teléfono: {datos['telefono']}\n"
-        f" Correo: {datos['correo']}\n"
-        f" {fecha_texto}\n\n"
-        f"Tu hora quedó agendada directamente "
-        f"en la agenda de {ESTILISTA_NOMBRE}.\n\n"
-    )
-
-    respuesta += (
-        "La invitación de Google Calendar fue enviada "
-        "al correo indicado.\n\n"
-    )
-
-    respuesta += (
-        "La atención dura 1 hora.\n\n"
-        "📍 Dirección de atención:\n"
-        "2 Norte 280\n\n"
-        "💳 Datos de transferencia:\n"
-        "Nombre: Diego\n"
-        "RUT: 18.149.067-5\n"
-        "Banco: BancoEstado\n"
-        "Tipo de cuenta: Cuenta Vista\n"
-        "N° de cuenta: 18149067\n\n"
-        "¡Te esperamos! 😊"
-    )
-
-    return respuesta
 
 
 # ============================================================
@@ -4004,6 +4324,7 @@ def get_wa_session(wa_id):
 
             "gestion_cita": None,
             "paso_gestion_cita": None,
+            "pago_pendiente": None,
 
             "datos_reserva": {
 
@@ -4022,58 +4343,111 @@ def get_wa_session(wa_id):
 
 
 # ============================================================
-# META WHATSAPP CLOUD API
+# TWILIO / WHATSAPP
 # ============================================================
 
-META_WHATSAPP_TOKEN = os.getenv("META_WHATSAPP_TOKEN")
-META_PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
-META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN")
-META_GRAPH_VERSION = os.getenv("META_GRAPH_VERSION", "v23.0")
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_FROM = os.getenv(
+    "TWILIO_WHATSAPP_FROM",
+    "whatsapp:+14155238886"
+)
+
+if (
+    TWILIO_WHATSAPP_FROM
+    and not TWILIO_WHATSAPP_FROM.startswith("whatsapp:")
+):
+    TWILIO_WHATSAPP_FROM = (
+        "whatsapp:" + TWILIO_WHATSAPP_FROM
+    )
+
+
+twilio_client = None
+
+if (
+    TWILIO_ACCOUNT_SID
+    and TWILIO_AUTH_TOKEN
+):
+    try:
+        twilio_client = TwilioClient(
+            TWILIO_ACCOUNT_SID,
+            TWILIO_AUTH_TOKEN
+        )
+    except Exception as e:
+        print(
+            "ERROR INICIALIZANDO TWILIO CLIENT:",
+            repr(e)
+        )
+
+
+def enviar_mensaje_progreso_twilio(
+    telefono_twilio,
+    texto
+):
+    """
+    Envía un mensaje inmediato mientras el webhook continúa
+    procesando la búsqueda de disponibilidad.
+    """
+
+    if not twilio_client:
+        return False
+
+    if not telefono_twilio:
+        return False
+
+    try:
+
+        destino = telefono_twilio
+
+        if not destino.startswith("whatsapp:"):
+            destino = "whatsapp:" + destino
+
+        twilio_client.messages.create(
+            from_=TWILIO_WHATSAPP_FROM,
+            to=destino,
+            body=texto
+        )
+
+        # Este mensaje no pasa por la respuesta TwiML, así que lo registramos aquí.
+        guardar_mensaje(
+            telefono_twilio,
+            "whatsapp",
+            "assistant",
+            texto
+        )
+
+        print(
+            "MENSAJE PROGRESO TWILIO ENVIADO:",
+            destino
+        )
+
+        return True
+
+    except Exception as e:
+
+        print(
+            "ERROR MENSAJE PROGRESO TWILIO:",
+            repr(e)
+        )
+
+        return False
+
 
 def normalizar_telefono_twilio(valor):
-    # Se conserva el nombre para no modificar el resto de la lógica existente.
+    """
+    Twilio entrega:
+    whatsapp:+56912345678
+
+    Para guardar la reserva usamos:
+    +56912345678
+    """
     valor = (valor or "").strip()
+
     if valor.startswith("whatsapp:"):
-        valor = valor[len("whatsapp:"):]
-    if valor and not valor.startswith("+"):
-        valor = "+" + valor
+        return valor[len("whatsapp:"):]
+
     return valor
 
-def telefono_meta_destino(valor):
-    return normalizar_telefono_twilio(valor).lstrip("+")
-
-def enviar_mensaje_meta(telefono, texto):
-    if not META_WHATSAPP_TOKEN or not META_PHONE_NUMBER_ID:
-        print("META ERROR: faltan META_WHATSAPP_TOKEN o META_PHONE_NUMBER_ID")
-        return False
-    url = f"https://graph.facebook.com/{META_GRAPH_VERSION}/{META_PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {META_WHATSAPP_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": telefono_meta_destino(telefono),
-        "type": "text",
-        "text": {"preview_url": False, "body": texto},
-    }
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=20)
-        if not r.ok:
-            print("META SEND ERROR:", r.status_code, r.text)
-            return False
-        return True
-    except Exception as e:
-        print("META SEND EXCEPTION:", repr(e))
-        return False
-
-def enviar_mensaje_progreso_twilio(telefono_twilio, texto):
-    # Alias conservado para no tocar procesar_agenda(). Ahora envía por Meta.
-    ok = enviar_mensaje_meta(telefono_twilio, texto)
-    if ok:
-        guardar_mensaje(telefono_twilio, "whatsapp", "assistant", texto)
-    return ok
 
 # ============================================================
 # HOME
@@ -4336,111 +4710,466 @@ def chat():
 
 
 # ============================================================
-# WHATSAPP / META CLOUD API WEBHOOK
+# WHATSAPP / TWILIO WEBHOOK
 # ============================================================
 
-@app.route("/whatsapp/webhook", methods=["GET", "POST"])
-@app.route("/webhook/whatsapp", methods=["GET", "POST"])
+@app.route(
+    "/whatsapp/webhook",
+    methods=["POST"]
+)
+@app.route(
+    "/webhook/whatsapp",
+    methods=["POST"]
+)
 def whatsapp_webhook():
-    # Meta verifica el webhook mediante GET.
-    if request.method == "GET":
-        mode = request.args.get("hub.mode")
-        token = request.args.get("hub.verify_token")
-        challenge = request.args.get("hub.challenge")
-        if mode == "subscribe" and token == META_VERIFY_TOKEN:
-            print("META WEBHOOK VERIFICADO")
-            return challenge or "", 200
-        return "Forbidden", 403
 
     try:
-        payload = request.get_json(silent=True) or {}
-        print("META WEBHOOK:", payload)
 
-        entries = payload.get("entry", [])
-        for entry in entries:
-            for change in entry.get("changes", []):
-                value = change.get("value", {})
-                # Los callbacks de estado (sent/delivered/read) no son mensajes del cliente.
-                for message in value.get("messages", []):
-                    msg_id = message.get("id", "")
-                    from_number = message.get("from", "")
-                    msg_type = message.get("type", "")
-                    telefono_cliente = normalizar_telefono_twilio(from_number)
-                    cliente_id = telefono_cliente
+        telefono_twilio = (
+            request.form
+            .get(
+                "From",
+                ""
+            )
+            .strip()
+        )
 
-                    if msg_type == "text":
-                        text = (message.get("text", {}).get("body") or "").strip()
-                    else:
-                        text = ""
+        text = (
+            request.form
+            .get(
+                "Body",
+                ""
+            )
+            .strip()
+        )
 
-                    ahora_timestamp = datetime.now().timestamp()
-                    if msg_id:
-                        for old_id in list(PROCESSED_MSG_IDS.keys()):
-                            if ahora_timestamp - PROCESSED_MSG_IDS[old_id] > DEDUP_TTL_SECONDS:
-                                del PROCESSED_MSG_IDS[old_id]
-                        if msg_id in PROCESSED_MSG_IDS:
-                            continue
-                        PROCESSED_MSG_IDS[msg_id] = ahora_timestamp
+        msg_id = (
+            request.form
+            .get(
+                "MessageSid",
+                ""
+            )
+            .strip()
+        )
 
-                    if not telefono_cliente:
-                        continue
+        print("=" * 60)
+        print("TWILIO WEBHOOK")
+        print("From:", telefono_twilio)
+        print("Body:", text)
+        print("MessageSid:", msg_id)
+        print("=" * 60)
 
-                    if not text:
-                        enviar_mensaje_meta(telefono_cliente, "Por ahora puedo ayudarte por mensaje de texto 😊.")
-                        continue
+        twiml = MessagingResponse()
 
-                    estado = get_wa_session(cliente_id)
-                    estado["datos_reserva"]["telefono"] = telefono_cliente
-                    estado["historial"].append({"role": "user", "content": text})
-                    guardar_mensaje(cliente_id, "whatsapp", "user", text)
+        if not telefono_twilio:
 
-                    texto_n = normalizar_texto(text)
-                    if estado.get("gestion_cita"):
-                        respuesta = procesar_gestion_cita(estado, text, telefono_cliente)
-                    elif es_intencion_cancelar_cita(text):
-                        respuesta = iniciar_gestion_cita(estado, telefono_cliente, "cancelar")
-                    elif es_intencion_reagendar_cita(text):
-                        respuesta = iniciar_gestion_cita(estado, telefono_cliente, "reagendar")
-                    elif es_comando_menu(text):
-                        resetear_reserva(estado)
-                        estado["paso"] = "menu_principal"
-                        respuesta = mensaje_menu_principal()
-                    elif usuario_no_quiere(text):
-                        resetear_reserva(estado)
-                        estado["paso"] = "menu_principal"
-                        respuesta = ("No hay problema 😊. Cuando quieras revisar servicios, precios "
-                                     "o reservar una hora con Diego, aquí estaré. ¡Que estés muy bien!")
-                    elif estado["modo_agendar"]:
-                        respuesta = procesar_agenda(estado, text, cliente_id, "whatsapp")
-                    elif pregunta_servicios(text):
-                        estado["paso"] = "servicios_mostrados"
-                        respuesta = mostrar_servicios()
-                    elif detectar_servicio(text):
-                        estado["modo_agendar"] = True
-                        estado["paso"] = "inicio"
-                        respuesta = procesar_agenda(estado, text, cliente_id, "whatsapp")
-                    elif es_intencion_agendar(text) or texto_menciona_fecha_o_mes(text):
-                        estado["modo_agendar"] = True
-                        estado["paso"] = "inicio"
-                        respuesta = procesar_agenda(estado, text, cliente_id, "whatsapp")
-                    elif es_saludo_o_menu(text):
-                        estado["paso"] = "menu_principal"
-                        respuesta = mensaje_menu_principal()
-                    else:
-                        respuesta = responder_openai(estado["historial"], text)
+            twiml.message(
+                "No pude identificar tu número de WhatsApp."
+            )
 
-                    estado["historial"].append({"role": "assistant", "content": respuesta})
-                    guardar_mensaje(cliente_id, "whatsapp", "assistant", respuesta)
-                    enviar_mensaje_meta(telefono_cliente, respuesta)
+            return (
+                str(twiml),
+                200,
+                {
+                    "Content-Type":
+                        "application/xml; charset=utf-8"
+                }
+            )
 
-        # Meta necesita un 200 rápido para considerar recibido el webhook.
-        return "EVENT_RECEIVED", 200
+        if not text:
+
+            twiml.message(
+                "Por ahora puedo ayudarte por mensaje de texto 😊."
+            )
+
+            return (
+                str(twiml),
+                200,
+                {
+                    "Content-Type":
+                        "application/xml; charset=utf-8"
+                }
+            )
+
+
+        # ====================================================
+        # DEDUPLICACIÓN TWILIO
+        # ====================================================
+
+        ahora_timestamp = (
+            datetime.now().timestamp()
+        )
+
+        if msg_id:
+
+            for old_id in list(
+                PROCESSED_MSG_IDS.keys()
+            ):
+
+                if (
+                    ahora_timestamp
+                    - PROCESSED_MSG_IDS[old_id]
+                    > DEDUP_TTL_SECONDS
+                ):
+
+                    del PROCESSED_MSG_IDS[
+                        old_id
+                    ]
+
+            if msg_id in PROCESSED_MSG_IDS:
+
+                # Twilio puede reintentar webhooks.
+                # Devolvemos TwiML vacío para no responder dos veces.
+                return (
+                    str(twiml),
+                    200,
+                    {
+                        "Content-Type":
+                            "application/xml; charset=utf-8"
+                    }
+                )
+
+            PROCESSED_MSG_IDS[
+                msg_id
+            ] = ahora_timestamp
+
+
+        # ====================================================
+        # SESIÓN POR NÚMERO
+        # ====================================================
+
+        cliente_id = telefono_twilio
+
+        telefono_cliente = (
+            normalizar_telefono_twilio(
+                telefono_twilio
+            )
+        )
+
+        estado = get_wa_session(
+            cliente_id
+        )
+
+        # Twilio ya nos entrega el teléfono del cliente.
+        # No necesitamos volver a pedirlo durante la reserva.
+        estado[
+            "datos_reserva"
+        ][
+            "telefono"
+        ] = telefono_cliente
+
+        estado["historial"].append({
+            "role":
+                "user",
+            "content":
+                text,
+        })
+
+        guardar_mensaje(
+            cliente_id,
+            "whatsapp",
+            "user",
+            text
+        )
+
+
+        # ====================================================
+        # PROCESAR CON LA LÓGICA ORIGINAL
+        # ====================================================
+
+        print(
+            "ESTADO WHATSAPP ANTES DE PROCESAR:",
+            {
+                "modo_agendar": estado.get("modo_agendar"),
+                "paso": estado.get("paso"),
+                "servicio": estado.get("datos_reserva", {}).get("servicio"),
+                "horas_guardadas": len(estado.get("horas_ofrecidas", [])),
+            }
+        )
+
+        texto_n = normalizar_texto(text)
+
+        # Gestión de una cita ya existente: cancelar o reagendar siempre
+        # usando el mismo número de WhatsApp guardado en Google Calendar.
+        if estado.get("gestion_cita"):
+            respuesta = procesar_gestion_cita(estado, text, telefono_cliente)
+
+        elif es_intencion_cancelar_cita(text):
+            respuesta = iniciar_gestion_cita(estado, telefono_cliente, "cancelar")
+
+        elif es_intencion_reagendar_cita(text):
+            respuesta = iniciar_gestion_cita(estado, telefono_cliente, "reagendar")
+
+        # MENÚ reinicia el flujo conversacional sin perder el teléfono.
+        elif es_comando_menu(text):
+
+            resetear_reserva(estado)
+            estado["paso"] = "menu_principal"
+            respuesta = mensaje_menu_principal()
+
+        # El cliente puede cerrar la conversación en cualquier momento.
+        elif usuario_no_quiere(text):
+
+            resetear_reserva(estado)
+            estado["paso"] = "menu_principal"
+            respuesta = (
+                "No hay problema 😊. Cuando quieras revisar servicios, precios "
+                "o reservar una hora con Diego, aquí estaré. ¡Que estés muy bien!"
+            )
+
+        # Si ya está armando una reserva, mantenemos el contexto.
+        elif estado["modo_agendar"]:
+
+            respuesta = procesar_agenda(
+                estado,
+                text,
+                cliente_id,
+                "whatsapp"
+            )
+
+        # Consultas directas por servicios/precios.
+        elif pregunta_servicios(text):
+
+            estado["paso"] = "servicios_mostrados"
+            respuesta = mostrar_servicios()
+
+        # Si nombra un servicio, comenzamos la reserva directamente.
+        elif detectar_servicio(text):
+
+            estado["modo_agendar"] = True
+            estado["paso"] = "inicio"
+            respuesta = procesar_agenda(
+                estado,
+                text,
+                cliente_id,
+                "whatsapp"
+            )
+
+        # Puede pedir una reserva o incluso comenzar diciendo una fecha
+        # como "próximo miércoles". La fecha se conserva mientras elegimos servicio.
+        elif es_intencion_agendar(text) or texto_menciona_fecha_o_mes(text):
+
+            estado["modo_agendar"] = True
+            estado["paso"] = "inicio"
+            respuesta = procesar_agenda(
+                estado,
+                text,
+                cliente_id,
+                "whatsapp"
+            )
+
+        # Saludos reciben una apertura natural, sin obligar a usar menú 1/2.
+        elif es_saludo_o_menu(text):
+
+            estado["paso"] = "menu_principal"
+            respuesta = mensaje_menu_principal()
+
+        # El resto pasa por OpenAI, limitado estrictamente a servicios,
+        # precios, horarios y agenda. Si el tema es ajeno, redirige brevemente.
+        else:
+
+            respuesta = responder_openai(
+                estado["historial"],
+                text
+            )
+
+
+        estado["historial"].append({
+            "role":
+                "assistant",
+            "content":
+                respuesta,
+        })
+
+        guardar_mensaje(
+            cliente_id,
+            "whatsapp",
+            "assistant",
+            respuesta
+        )
+
+        twiml.message(
+            respuesta
+        )
+
+        return (
+            str(twiml),
+            200,
+            {
+                "Content-Type":
+                    "application/xml; charset=utf-8"
+            }
+        )
 
     except Exception as e:
-        print("META WHATSAPP ERROR:", repr(e))
+
+        print(
+            "TWILIO WHATSAPP ERROR:",
+            repr(e)
+        )
+
+        import traceback
+        print(
+            traceback.format_exc()
+        )
+
+        twiml = MessagingResponse()
+
+        twiml.message(
+            "Disculpa 🙏 Estoy teniendo un problema técnico. "
+            "Intenta nuevamente en unos segundos."
+        )
+
+        return (
+            str(twiml),
+            200,
+            {
+                "Content-Type":
+                    "application/xml; charset=utf-8"
+            }
+        )
+
+
+# ============================================================
+# MERCADO PAGO - WEBHOOK Y PÁGINAS DE RETORNO
+# ============================================================
+
+@app.route("/mercadopago/webhook", methods=["POST", "GET"])
+def mercadopago_webhook():
+    """Recibe notificaciones y confirma solamente pagos reales consultados a MP."""
+    try:
+        body = request.get_json(silent=True) or {}
+
+        payment_id = None
+        data = body.get("data") if isinstance(body, dict) else None
+        if isinstance(data, dict):
+            payment_id = data.get("id")
+
+        if not payment_id:
+            payment_id = request.args.get("data.id") or request.args.get("id")
+
+        tipo = body.get("type") or request.args.get("type") or request.args.get("topic")
+
+        # Mercado Pago también puede notificar otros tópicos. Los ignoramos.
+        if tipo and tipo not in ("payment", "payments"):
+            return "ok", 200
+
+        if not payment_id:
+            return "ok", 200
+
+        pago = obtener_pago_mercadopago(payment_id)
+        if not pago:
+            # Respondemos 200 para no provocar una tormenta de reintentos por un ID inválido.
+            return "ok", 200
+
+        if pago.get("status") != "approved":
+            return "ok", 200
+
+        pago_ref = (pago.get("external_reference") or "").strip()
+        if not pago_ref.startswith("RES_"):
+            return "ok", 200
+
+        evento = buscar_bloqueo_pago(pago_ref)
+        if not evento:
+            # Puede ser una notificación repetida después de que ya convertimos el bloqueo.
+            # Buscamos una reserva ya confirmada con la misma referencia.
+            try:
+                service = obtener_calendar_service()
+                ahora = ahora_local()
+                res = service.events().list(
+                    calendarId=CALENDAR_ID,
+                    timeMin=(ahora - timedelta(days=30)).isoformat(),
+                    timeMax=(ahora + timedelta(days=90)).isoformat(),
+                    singleEvents=True,
+                    maxResults=50,
+                    privateExtendedProperty=[f"pago_ref={pago_ref}"],
+                ).execute()
+                for ev in res.get("items", []):
+                    props = ev.get("extendedProperties", {}).get("private", {})
+                    if props.get("estado_pago") == "approved":
+                        return "ok", 200
+            except Exception:
+                pass
+            print("PAGO APROBADO SIN BLOQUEO ENCONTRADO:", payment_id, pago_ref)
+            return "ok", 200
+
+        props = evento.get("extendedProperties", {}).get("private", {})
+        monto_esperado = int(props.get("monto_pago") or 0)
+        monto_pagado = int(round(float(pago.get("transaction_amount") or 0)))
+        moneda = pago.get("currency_id")
+
+        if monto_pagado != monto_esperado or moneda != MERCADOPAGO_CURRENCY:
+            print(
+                "PAGO NO COINCIDE CON RESERVA:",
+                payment_id, monto_pagado, monto_esperado, moneda
+            )
+            return "ok", 200
+
+        resultado = confirmar_bloqueo_pagado(evento, payment_id)
+        if not resultado.get("ok"):
+            print("NO SE PUDO CONFIRMAR RESERVA PAGADA:", resultado)
+            return "ok", 200
+
+        inicio = resultado["inicio"]
+        servicio = resultado["servicio"]
+        nombre = resultado["nombre"]
+        telefono = resultado["telefono"]
+        correo = resultado["correo"]
+
+        mensaje = (
+            "✅ ¡Pago recibido y reserva confirmada!\n\n"
+            f"Servicio: {servicio['nombre']}\n"
+            f"Valor pagado: {precio_texto_servicio(servicio)}\n"
+            f"Cliente: {nombre}\n"
+            f"Fecha: {formato_fecha_larga(inicio)}\n"
+            "Duración: 1 hora\n\n"
+            "📍 Dirección de atención:\n"
+            "2 Norte 280\n\n"
+            "Tu cita ya quedó registrada en Google Calendar. ¡Te esperamos! 😊"
+        )
+
+        if telefono:
+            enviar_mensaje_progreso_twilio(telefono, mensaje)
+
+        print("PAGO Y RESERVA CONFIRMADOS:", payment_id, pago_ref, correo)
+        return "ok", 200
+
+    except Exception as e:
+        print("ERROR WEBHOOK MERCADO PAGO:", repr(e))
         import traceback
         print(traceback.format_exc())
-        return "EVENT_RECEIVED", 200
+        return "ok", 200
+
+
+@app.route("/pago/exitoso")
+def pago_exitoso():
+    return (
+        "<html><body style='font-family:Arial;text-align:center;padding:40px'>"
+        "<h2>✅ Pago recibido</h2>"
+        "<p>Estamos validando el pago. Recibirás la confirmación de tu reserva por WhatsApp.</p>"
+        "<p>Ya puedes cerrar esta ventana.</p>"
+        "</body></html>"
+    )
+
+
+@app.route("/pago/pendiente")
+def pago_pendiente():
+    return (
+        "<html><body style='font-family:Arial;text-align:center;padding:40px'>"
+        "<h2>⏳ Pago pendiente</h2>"
+        "<p>La reserva se confirmará automáticamente cuando Mercado Pago apruebe el pago.</p>"
+        "</body></html>"
+    )
+
+
+@app.route("/pago/fallido")
+def pago_fallido():
+    return (
+        "<html><body style='font-family:Arial;text-align:center;padding:40px'>"
+        "<h2>❌ Pago no completado</h2>"
+        "<p>La cita no fue confirmada. Puedes volver a WhatsApp e intentarlo nuevamente.</p>"
+        "</body></html>"
+    )
 
 
 # ============================================================
