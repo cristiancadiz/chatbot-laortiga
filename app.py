@@ -14,8 +14,6 @@ from flask import (
     render_template_string,
 )
 
-from twilio.twiml.messaging_response import MessagingResponse
-from twilio.rest import Client as TwilioClient
 
 from datetime import timedelta, datetime
 from dotenv import load_dotenv
@@ -26,7 +24,7 @@ from google.oauth2.credentials import Credentials
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_VERSION = "2026-08-25-V28-CANCELAR-REAGENDAR-GSHEET"
+APP_VERSION = "2026-08-27-V29-META-CLOUD-API"
 
 
 # ============================================================
@@ -4024,111 +4022,58 @@ def get_wa_session(wa_id):
 
 
 # ============================================================
-# TWILIO / WHATSAPP
+# META WHATSAPP CLOUD API
 # ============================================================
 
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP_FROM = os.getenv(
-    "TWILIO_WHATSAPP_FROM",
-    "whatsapp:+14155238886"
-)
-
-if (
-    TWILIO_WHATSAPP_FROM
-    and not TWILIO_WHATSAPP_FROM.startswith("whatsapp:")
-):
-    TWILIO_WHATSAPP_FROM = (
-        "whatsapp:" + TWILIO_WHATSAPP_FROM
-    )
-
-
-twilio_client = None
-
-if (
-    TWILIO_ACCOUNT_SID
-    and TWILIO_AUTH_TOKEN
-):
-    try:
-        twilio_client = TwilioClient(
-            TWILIO_ACCOUNT_SID,
-            TWILIO_AUTH_TOKEN
-        )
-    except Exception as e:
-        print(
-            "ERROR INICIALIZANDO TWILIO CLIENT:",
-            repr(e)
-        )
-
-
-def enviar_mensaje_progreso_twilio(
-    telefono_twilio,
-    texto
-):
-    """
-    Envía un mensaje inmediato mientras el webhook continúa
-    procesando la búsqueda de disponibilidad.
-    """
-
-    if not twilio_client:
-        return False
-
-    if not telefono_twilio:
-        return False
-
-    try:
-
-        destino = telefono_twilio
-
-        if not destino.startswith("whatsapp:"):
-            destino = "whatsapp:" + destino
-
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP_FROM,
-            to=destino,
-            body=texto
-        )
-
-        # Este mensaje no pasa por la respuesta TwiML, así que lo registramos aquí.
-        guardar_mensaje(
-            telefono_twilio,
-            "whatsapp",
-            "assistant",
-            texto
-        )
-
-        print(
-            "MENSAJE PROGRESO TWILIO ENVIADO:",
-            destino
-        )
-
-        return True
-
-    except Exception as e:
-
-        print(
-            "ERROR MENSAJE PROGRESO TWILIO:",
-            repr(e)
-        )
-
-        return False
-
+META_WHATSAPP_TOKEN = os.getenv("META_WHATSAPP_TOKEN")
+META_PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
+META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN")
+META_GRAPH_VERSION = os.getenv("META_GRAPH_VERSION", "v23.0")
 
 def normalizar_telefono_twilio(valor):
-    """
-    Twilio entrega:
-    whatsapp:+56912345678
-
-    Para guardar la reserva usamos:
-    +56912345678
-    """
+    # Se conserva el nombre para no modificar el resto de la lógica existente.
     valor = (valor or "").strip()
-
     if valor.startswith("whatsapp:"):
-        return valor[len("whatsapp:"):]
-
+        valor = valor[len("whatsapp:"):]
+    if valor and not valor.startswith("+"):
+        valor = "+" + valor
     return valor
 
+def telefono_meta_destino(valor):
+    return normalizar_telefono_twilio(valor).lstrip("+")
+
+def enviar_mensaje_meta(telefono, texto):
+    if not META_WHATSAPP_TOKEN or not META_PHONE_NUMBER_ID:
+        print("META ERROR: faltan META_WHATSAPP_TOKEN o META_PHONE_NUMBER_ID")
+        return False
+    url = f"https://graph.facebook.com/{META_GRAPH_VERSION}/{META_PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {META_WHATSAPP_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": telefono_meta_destino(telefono),
+        "type": "text",
+        "text": {"preview_url": False, "body": texto},
+    }
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=20)
+        if not r.ok:
+            print("META SEND ERROR:", r.status_code, r.text)
+            return False
+        return True
+    except Exception as e:
+        print("META SEND EXCEPTION:", repr(e))
+        return False
+
+def enviar_mensaje_progreso_twilio(telefono_twilio, texto):
+    # Alias conservado para no tocar procesar_agenda(). Ahora envía por Meta.
+    ok = enviar_mensaje_meta(telefono_twilio, texto)
+    if ok:
+        guardar_mensaje(telefono_twilio, "whatsapp", "assistant", texto)
+    return ok
 
 # ============================================================
 # HOME
@@ -4391,324 +4336,111 @@ def chat():
 
 
 # ============================================================
-# WHATSAPP / TWILIO WEBHOOK
+# WHATSAPP / META CLOUD API WEBHOOK
 # ============================================================
 
-@app.route(
-    "/whatsapp/webhook",
-    methods=["POST"]
-)
-@app.route(
-    "/webhook/whatsapp",
-    methods=["POST"]
-)
+@app.route("/whatsapp/webhook", methods=["GET", "POST"])
+@app.route("/webhook/whatsapp", methods=["GET", "POST"])
 def whatsapp_webhook():
+    # Meta verifica el webhook mediante GET.
+    if request.method == "GET":
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        if mode == "subscribe" and token == META_VERIFY_TOKEN:
+            print("META WEBHOOK VERIFICADO")
+            return challenge or "", 200
+        return "Forbidden", 403
 
     try:
+        payload = request.get_json(silent=True) or {}
+        print("META WEBHOOK:", payload)
 
-        telefono_twilio = (
-            request.form
-            .get(
-                "From",
-                ""
-            )
-            .strip()
-        )
+        entries = payload.get("entry", [])
+        for entry in entries:
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                # Los callbacks de estado (sent/delivered/read) no son mensajes del cliente.
+                for message in value.get("messages", []):
+                    msg_id = message.get("id", "")
+                    from_number = message.get("from", "")
+                    msg_type = message.get("type", "")
+                    telefono_cliente = normalizar_telefono_twilio(from_number)
+                    cliente_id = telefono_cliente
 
-        text = (
-            request.form
-            .get(
-                "Body",
-                ""
-            )
-            .strip()
-        )
+                    if msg_type == "text":
+                        text = (message.get("text", {}).get("body") or "").strip()
+                    else:
+                        text = ""
 
-        msg_id = (
-            request.form
-            .get(
-                "MessageSid",
-                ""
-            )
-            .strip()
-        )
+                    ahora_timestamp = datetime.now().timestamp()
+                    if msg_id:
+                        for old_id in list(PROCESSED_MSG_IDS.keys()):
+                            if ahora_timestamp - PROCESSED_MSG_IDS[old_id] > DEDUP_TTL_SECONDS:
+                                del PROCESSED_MSG_IDS[old_id]
+                        if msg_id in PROCESSED_MSG_IDS:
+                            continue
+                        PROCESSED_MSG_IDS[msg_id] = ahora_timestamp
 
-        print("=" * 60)
-        print("TWILIO WEBHOOK")
-        print("From:", telefono_twilio)
-        print("Body:", text)
-        print("MessageSid:", msg_id)
-        print("=" * 60)
+                    if not telefono_cliente:
+                        continue
 
-        twiml = MessagingResponse()
+                    if not text:
+                        enviar_mensaje_meta(telefono_cliente, "Por ahora puedo ayudarte por mensaje de texto 😊.")
+                        continue
 
-        if not telefono_twilio:
+                    estado = get_wa_session(cliente_id)
+                    estado["datos_reserva"]["telefono"] = telefono_cliente
+                    estado["historial"].append({"role": "user", "content": text})
+                    guardar_mensaje(cliente_id, "whatsapp", "user", text)
 
-            twiml.message(
-                "No pude identificar tu número de WhatsApp."
-            )
+                    texto_n = normalizar_texto(text)
+                    if estado.get("gestion_cita"):
+                        respuesta = procesar_gestion_cita(estado, text, telefono_cliente)
+                    elif es_intencion_cancelar_cita(text):
+                        respuesta = iniciar_gestion_cita(estado, telefono_cliente, "cancelar")
+                    elif es_intencion_reagendar_cita(text):
+                        respuesta = iniciar_gestion_cita(estado, telefono_cliente, "reagendar")
+                    elif es_comando_menu(text):
+                        resetear_reserva(estado)
+                        estado["paso"] = "menu_principal"
+                        respuesta = mensaje_menu_principal()
+                    elif usuario_no_quiere(text):
+                        resetear_reserva(estado)
+                        estado["paso"] = "menu_principal"
+                        respuesta = ("No hay problema 😊. Cuando quieras revisar servicios, precios "
+                                     "o reservar una hora con Diego, aquí estaré. ¡Que estés muy bien!")
+                    elif estado["modo_agendar"]:
+                        respuesta = procesar_agenda(estado, text, cliente_id, "whatsapp")
+                    elif pregunta_servicios(text):
+                        estado["paso"] = "servicios_mostrados"
+                        respuesta = mostrar_servicios()
+                    elif detectar_servicio(text):
+                        estado["modo_agendar"] = True
+                        estado["paso"] = "inicio"
+                        respuesta = procesar_agenda(estado, text, cliente_id, "whatsapp")
+                    elif es_intencion_agendar(text) or texto_menciona_fecha_o_mes(text):
+                        estado["modo_agendar"] = True
+                        estado["paso"] = "inicio"
+                        respuesta = procesar_agenda(estado, text, cliente_id, "whatsapp")
+                    elif es_saludo_o_menu(text):
+                        estado["paso"] = "menu_principal"
+                        respuesta = mensaje_menu_principal()
+                    else:
+                        respuesta = responder_openai(estado["historial"], text)
 
-            return (
-                str(twiml),
-                200,
-                {
-                    "Content-Type":
-                        "application/xml; charset=utf-8"
-                }
-            )
+                    estado["historial"].append({"role": "assistant", "content": respuesta})
+                    guardar_mensaje(cliente_id, "whatsapp", "assistant", respuesta)
+                    enviar_mensaje_meta(telefono_cliente, respuesta)
 
-        if not text:
-
-            twiml.message(
-                "Por ahora puedo ayudarte por mensaje de texto 😊."
-            )
-
-            return (
-                str(twiml),
-                200,
-                {
-                    "Content-Type":
-                        "application/xml; charset=utf-8"
-                }
-            )
-
-
-        # ====================================================
-        # DEDUPLICACIÓN TWILIO
-        # ====================================================
-
-        ahora_timestamp = (
-            datetime.now().timestamp()
-        )
-
-        if msg_id:
-
-            for old_id in list(
-                PROCESSED_MSG_IDS.keys()
-            ):
-
-                if (
-                    ahora_timestamp
-                    - PROCESSED_MSG_IDS[old_id]
-                    > DEDUP_TTL_SECONDS
-                ):
-
-                    del PROCESSED_MSG_IDS[
-                        old_id
-                    ]
-
-            if msg_id in PROCESSED_MSG_IDS:
-
-                # Twilio puede reintentar webhooks.
-                # Devolvemos TwiML vacío para no responder dos veces.
-                return (
-                    str(twiml),
-                    200,
-                    {
-                        "Content-Type":
-                            "application/xml; charset=utf-8"
-                    }
-                )
-
-            PROCESSED_MSG_IDS[
-                msg_id
-            ] = ahora_timestamp
-
-
-        # ====================================================
-        # SESIÓN POR NÚMERO
-        # ====================================================
-
-        cliente_id = telefono_twilio
-
-        telefono_cliente = (
-            normalizar_telefono_twilio(
-                telefono_twilio
-            )
-        )
-
-        estado = get_wa_session(
-            cliente_id
-        )
-
-        # Twilio ya nos entrega el teléfono del cliente.
-        # No necesitamos volver a pedirlo durante la reserva.
-        estado[
-            "datos_reserva"
-        ][
-            "telefono"
-        ] = telefono_cliente
-
-        estado["historial"].append({
-            "role":
-                "user",
-            "content":
-                text,
-        })
-
-        guardar_mensaje(
-            cliente_id,
-            "whatsapp",
-            "user",
-            text
-        )
-
-
-        # ====================================================
-        # PROCESAR CON LA LÓGICA ORIGINAL
-        # ====================================================
-
-        print(
-            "ESTADO WHATSAPP ANTES DE PROCESAR:",
-            {
-                "modo_agendar": estado.get("modo_agendar"),
-                "paso": estado.get("paso"),
-                "servicio": estado.get("datos_reserva", {}).get("servicio"),
-                "horas_guardadas": len(estado.get("horas_ofrecidas", [])),
-            }
-        )
-
-        texto_n = normalizar_texto(text)
-
-        # Gestión de una cita ya existente: cancelar o reagendar siempre
-        # usando el mismo número de WhatsApp guardado en Google Calendar.
-        if estado.get("gestion_cita"):
-            respuesta = procesar_gestion_cita(estado, text, telefono_cliente)
-
-        elif es_intencion_cancelar_cita(text):
-            respuesta = iniciar_gestion_cita(estado, telefono_cliente, "cancelar")
-
-        elif es_intencion_reagendar_cita(text):
-            respuesta = iniciar_gestion_cita(estado, telefono_cliente, "reagendar")
-
-        # MENÚ reinicia el flujo conversacional sin perder el teléfono.
-        elif es_comando_menu(text):
-
-            resetear_reserva(estado)
-            estado["paso"] = "menu_principal"
-            respuesta = mensaje_menu_principal()
-
-        # El cliente puede cerrar la conversación en cualquier momento.
-        elif usuario_no_quiere(text):
-
-            resetear_reserva(estado)
-            estado["paso"] = "menu_principal"
-            respuesta = (
-                "No hay problema 😊. Cuando quieras revisar servicios, precios "
-                "o reservar una hora con Diego, aquí estaré. ¡Que estés muy bien!"
-            )
-
-        # Si ya está armando una reserva, mantenemos el contexto.
-        elif estado["modo_agendar"]:
-
-            respuesta = procesar_agenda(
-                estado,
-                text,
-                cliente_id,
-                "whatsapp"
-            )
-
-        # Consultas directas por servicios/precios.
-        elif pregunta_servicios(text):
-
-            estado["paso"] = "servicios_mostrados"
-            respuesta = mostrar_servicios()
-
-        # Si nombra un servicio, comenzamos la reserva directamente.
-        elif detectar_servicio(text):
-
-            estado["modo_agendar"] = True
-            estado["paso"] = "inicio"
-            respuesta = procesar_agenda(
-                estado,
-                text,
-                cliente_id,
-                "whatsapp"
-            )
-
-        # Puede pedir una reserva o incluso comenzar diciendo una fecha
-        # como "próximo miércoles". La fecha se conserva mientras elegimos servicio.
-        elif es_intencion_agendar(text) or texto_menciona_fecha_o_mes(text):
-
-            estado["modo_agendar"] = True
-            estado["paso"] = "inicio"
-            respuesta = procesar_agenda(
-                estado,
-                text,
-                cliente_id,
-                "whatsapp"
-            )
-
-        # Saludos reciben una apertura natural, sin obligar a usar menú 1/2.
-        elif es_saludo_o_menu(text):
-
-            estado["paso"] = "menu_principal"
-            respuesta = mensaje_menu_principal()
-
-        # El resto pasa por OpenAI, limitado estrictamente a servicios,
-        # precios, horarios y agenda. Si el tema es ajeno, redirige brevemente.
-        else:
-
-            respuesta = responder_openai(
-                estado["historial"],
-                text
-            )
-
-
-        estado["historial"].append({
-            "role":
-                "assistant",
-            "content":
-                respuesta,
-        })
-
-        guardar_mensaje(
-            cliente_id,
-            "whatsapp",
-            "assistant",
-            respuesta
-        )
-
-        twiml.message(
-            respuesta
-        )
-
-        return (
-            str(twiml),
-            200,
-            {
-                "Content-Type":
-                    "application/xml; charset=utf-8"
-            }
-        )
+        # Meta necesita un 200 rápido para considerar recibido el webhook.
+        return "EVENT_RECEIVED", 200
 
     except Exception as e:
-
-        print(
-            "TWILIO WHATSAPP ERROR:",
-            repr(e)
-        )
-
+        print("META WHATSAPP ERROR:", repr(e))
         import traceback
-        print(
-            traceback.format_exc()
-        )
-
-        twiml = MessagingResponse()
-
-        twiml.message(
-            "Disculpa 🙏 Estoy teniendo un problema técnico. "
-            "Intenta nuevamente en unos segundos."
-        )
-
-        return (
-            str(twiml),
-            200,
-            {
-                "Content-Type":
-                    "application/xml; charset=utf-8"
-            }
-        )
+        print(traceback.format_exc())
+        return "EVENT_RECEIVED", 200
 
 
 # ============================================================
