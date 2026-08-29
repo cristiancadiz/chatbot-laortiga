@@ -21,7 +21,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-29-V37-LAORTIGA-TWILIO-TARIFAS-JUMPSELLER"
+APP_VERSION = "2026-08-29-V38-LAORTIGA-TWILIO-TARIFAS-JUMPSELLER-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -676,7 +676,7 @@ def _puntaje_ubicacion_tabla(locations, comuna, geo):
 
 def cotizar_despacho_jumpseller(carrito, comuna):
     """Calcula el despacho usando las Tablas de Tarifas configuradas en Jumpseller."""
-    data = js_request("GET", "/shipping_methods.json", params={"enabled": True})
+    data = js_request("GET", "/shipping_methods.json")
     items = data if isinstance(data, list) else data.get("shipping_methods", [])
     metodos = [_unwrap_shipping_method(x) for x in items]
     metodos = [m for m in metodos if m and m.get("enabled") is not False and normalizar_texto(m.get("type")) == "tables"]
