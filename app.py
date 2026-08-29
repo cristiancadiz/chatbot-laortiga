@@ -20,7 +20,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-29-V31-LAORTIGA-TWILIO-JUMPSELLER-MERCADOPAGO"
+APP_VERSION = "2026-08-29-V32-LAORTIGA-TWILIO-CARRITO-CONTEXTO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -575,6 +575,7 @@ def estado_inicial(telefono):
         "paso": "inicio",
         "carrito": [],
         "ultimos_productos": [],
+        "producto_seleccionado": None,
         "checkout": {},
         "historial": [],
     }
@@ -640,9 +641,23 @@ def listar_resultados(productos):
     for i, p in enumerate(productos, 1):
         lineas.append(texto_producto(p, i))
     lineas.append("")
-    lineas.append("Para comprar, escribe por ejemplo: *comprar 1*.")
+    lineas.append("Escribe el *número* para ver el detalle o *comprar 1* para agregarlo al carrito.")
     return "\n".join(lineas)
 
+
+
+def detalle_producto(p):
+    nombre = p.get("name", "Producto")
+    precio = precio_producto(p)
+    stock = stock_producto(p)
+    descripcion = re.sub(r"<[^>]+>", " ", str(p.get("description", "") or ""))
+    descripcion = re.sub(r"\s+", " ", descripcion).strip()
+    stock_txt = "Stock no informado" if stock is None else (f"Stock: {stock} unidades" if stock > 0 else "Sin stock")
+    partes = [f"🌱 *{nombre}*", f"Precio: *{clp(precio)}*", stock_txt]
+    if descripcion:
+        partes += ["", descripcion[:1200]]
+    partes += ["", "¿Cuántos quieres agregar al carrito? Puedes responder con una cantidad, o escribir *comprar 1*."]
+    return "\n".join(partes)
 
 def total_carrito(carrito):
     return sum(float(i["unit_price"]) * int(i["qty"]) for i in carrito)
@@ -849,6 +864,9 @@ def procesar_texto(telefono, texto):
         estado = reset_estado(telefono)
         return mensaje_bienvenida()
 
+    if n in {"hola", "holi", "holaa", "buenas", "buenos dias", "buenas tardes", "buenas noches"}:
+        return mensaje_bienvenida()
+
     if any(x in n for x in ["ejecutivo", "humano", "persona", "atencion al cliente"]):
         return f"Claro. Puedes hablar con un ejecutivo de La Ortiga al {EJECUTIVO_WHATSAPP}."
 
@@ -924,6 +942,30 @@ def procesar_texto(telefono, texto):
         return "Tu pago está pendiente. Si quieres revisar productos mientras tanto, escribe *MENÚ*."
 
     # ---------- SELECCION DE RESULTADOS ----------
+    # Si acabamos de mostrar la ficha de un producto, un número solo significa cantidad.
+    if estado.get("paso") == "cantidad_producto" and re.fullmatch(r"\d{1,2}", n):
+        qty = int(n)
+        p = estado.get("producto_seleccionado")
+        if not p:
+            estado["paso"] = "inicio"
+            return "Dime qué producto quieres buscar."
+        ok, error = agregar_al_carrito(estado, p, qty)
+        if not ok:
+            return error
+        estado["paso"] = "inicio"
+        estado["producto_seleccionado"] = None
+        return f"✅ Agregué {qty} x {p.get('name')} al carrito.\n\n{texto_carrito(estado['carrito'])}"
+
+    # Un número solo después de una búsqueda abre la ficha del resultado correspondiente.
+    if re.fullmatch(r"\d{1,2}", n) and estado.get("ultimos_productos"):
+        idx = int(n) - 1
+        if 0 <= idx < len(estado["ultimos_productos"]):
+            p = estado["ultimos_productos"][idx]
+            estado["producto_seleccionado"] = p
+            estado["paso"] = "cantidad_producto"
+            return detalle_producto(p)
+        return "Ese número no corresponde a los productos que te mostré."
+
     m = re.match(r"^(?:comprar|agregar|quiero|llevo)\s+(\d{1,2})(?:\s+x?(\d{1,2}))?$", n)
     if m and estado.get("ultimos_productos"):
         idx = int(m.group(1)) - 1
@@ -933,6 +975,8 @@ def procesar_texto(telefono, texto):
             ok, error = agregar_al_carrito(estado, p, qty)
             if not ok:
                 return error
+            estado["paso"] = "inicio"
+            estado["producto_seleccionado"] = None
             return f"✅ Agregué {qty} x {p.get('name')} al carrito.\n\n{texto_carrito(estado['carrito'])}"
         return "Ese número no corresponde a los productos que te mostré."
 
