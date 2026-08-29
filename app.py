@@ -1,5 +1,6 @@
 import os
 import re
+import html
 import json
 import hmac
 import hashlib
@@ -20,7 +21,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-29-V32-LAORTIGA-TWILIO-CARRITO-CONTEXTO"
+APP_VERSION = "2026-08-29-V33-LAORTIGA-TWILIO-CARRITO-ESTADO-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -641,7 +642,7 @@ def listar_resultados(productos):
     for i, p in enumerate(productos, 1):
         lineas.append(texto_producto(p, i))
     lineas.append("")
-    lineas.append("Escribe el *número* para ver el detalle o *comprar 1* para agregarlo al carrito.")
+    lineas.append("Escribe el *número* para ver el detalle. Si ya viste la ficha de un producto, escribe por ejemplo *comprar 2* para llevar 2 unidades.")
     return "\n".join(lineas)
 
 
@@ -651,12 +652,13 @@ def detalle_producto(p):
     precio = precio_producto(p)
     stock = stock_producto(p)
     descripcion = re.sub(r"<[^>]+>", " ", str(p.get("description", "") or ""))
+    descripcion = html.unescape(descripcion)
     descripcion = re.sub(r"\s+", " ", descripcion).strip()
     stock_txt = "Stock no informado" if stock is None else (f"Stock: {stock} unidades" if stock > 0 else "Sin stock")
     partes = [f"🌱 *{nombre}*", f"Precio: *{clp(precio)}*", stock_txt]
     if descripcion:
         partes += ["", descripcion[:1200]]
-    partes += ["", "¿Cuántos quieres agregar al carrito? Puedes responder con una cantidad, o escribir *comprar 1*."]
+    partes += ["", "¿Cuántos quieres agregar al carrito? Responde con la cantidad, por ejemplo *2*, o escribe *comprar 2*."]
     return "\n".join(partes)
 
 def total_carrito(carrito):
@@ -942,19 +944,41 @@ def procesar_texto(telefono, texto):
         return "Tu pago está pendiente. Si quieres revisar productos mientras tanto, escribe *MENÚ*."
 
     # ---------- SELECCION DE RESULTADOS ----------
-    # Si acabamos de mostrar la ficha de un producto, un número solo significa cantidad.
-    if estado.get("paso") == "cantidad_producto" and re.fullmatch(r"\d{1,2}", n):
-        qty = int(n)
+    # Cuando el cliente está viendo la ficha de un producto, los números representan
+    # CANTIDAD del producto seleccionado, no el índice de la búsqueda anterior.
+    if estado.get("paso") == "cantidad_producto":
         p = estado.get("producto_seleccionado")
-        if not p:
+
+        if re.fullmatch(r"\d{1,2}", n):
+            qty = int(n)
+            if not p:
+                estado["paso"] = "inicio"
+                return "Dime qué producto quieres buscar."
+            ok, error = agregar_al_carrito(estado, p, qty)
+            if not ok:
+                return error
             estado["paso"] = "inicio"
-            return "Dime qué producto quieres buscar."
-        ok, error = agregar_al_carrito(estado, p, qty)
-        if not ok:
-            return error
-        estado["paso"] = "inicio"
-        estado["producto_seleccionado"] = None
-        return f"✅ Agregué {qty} x {p.get('name')} al carrito.\n\n{texto_carrito(estado['carrito'])}"
+            estado["producto_seleccionado"] = None
+            return f"✅ Agregué {qty} x {p.get('name')} al carrito.\n\n{texto_carrito(estado['carrito'])}"
+
+        m_qty = re.fullmatch(r"(?:comprar|agregar|llevo|quiero)\s+(\d{1,2})", n)
+        if m_qty:
+            qty = int(m_qty.group(1))
+            if not p:
+                estado["paso"] = "inicio"
+                return "Dime qué producto quieres buscar."
+            ok, error = agregar_al_carrito(estado, p, qty)
+            if not ok:
+                return error
+            estado["paso"] = "inicio"
+            estado["producto_seleccionado"] = None
+            return f"✅ Agregué {qty} x {p.get('name')} al carrito.\n\n{texto_carrito(estado['carrito'])}"
+
+        # Si escribe el nombre de otro producto mientras estaba en la ficha, entendemos
+        # que inició una búsqueda nueva y soltamos la selección anterior.
+        if len(n) >= 2 and n not in {"si", "sí", "no", "cancelar", "volver"}:
+            estado["paso"] = "inicio"
+            estado["producto_seleccionado"] = None
 
     # Un número solo después de una búsqueda abre la ficha del resultado correspondiente.
     if re.fullmatch(r"\d{1,2}", n) and estado.get("ultimos_productos"):
@@ -984,6 +1008,8 @@ def procesar_texto(telefono, texto):
         try:
             productos = [p for p in listar_productos() if producto_activo(p)][:8]
             estado["ultimos_productos"] = productos
+            estado["producto_seleccionado"] = None
+            estado["paso"] = "inicio"
             return listar_resultados(productos)
         except Exception as e:
             print("JUMPSELLER LIST ERROR:", repr(e))
@@ -1005,6 +1031,8 @@ def procesar_texto(telefono, texto):
 
         if productos:
             estado["ultimos_productos"] = productos
+            estado["producto_seleccionado"] = None
+            estado["paso"] = "inicio"
             # Si la pregunta busca detalle/beneficios, usa IA con datos reales.
             if any(k in n for k in ["caracteristica", "sirve", "uso", "beneficio", "detalle", "como funciona", "para que"]):
                 ai = respuesta_ia(txt, productos)
