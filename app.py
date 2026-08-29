@@ -21,7 +21,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-29-V34-LAORTIGA-TWILIO-CLIENTE-EXISTENTE-FIX"
+APP_VERSION = "2026-08-29-V35-LAORTIGA-TWILIO-STOCK-INTENCION-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -325,25 +325,42 @@ def precio_producto(p):
 
 
 def stock_producto(p):
-    # Jumpseller puede representar stock a nivel producto o variante.
+    """Devuelve stock vendible de Jumpseller.
+
+    Importante: cuando un producto tiene variantes, Jumpseller puede dejar el stock
+    del producto padre en 0 y mantener el inventario real en cada variante. Por eso
+    las variantes tienen prioridad sobre el stock del producto padre.
+
+    None significa stock ilimitado/no controlado.
+    """
+    variantes = p.get("variants") or []
+    if variantes:
+        stocks = []
+        hubo_stock_informado = False
+        for raw in variantes:
+            v = raw.get("variant", raw) if isinstance(raw, dict) else {}
+            if v.get("stock_unlimited") is True:
+                return None
+            for key in ("stock", "stock_quantity", "quantity"):
+                if v.get(key) is not None:
+                    hubo_stock_informado = True
+                    try:
+                        stocks.append(max(0, int(float(v.get(key)))))
+                    except Exception:
+                        pass
+                    break
+        if hubo_stock_informado:
+            return sum(stocks)
+
+    if p.get("stock_unlimited") is True:
+        return None
     for key in ("stock", "stock_quantity", "quantity"):
         if p.get(key) is not None:
             try:
-                return int(p.get(key))
+                return max(0, int(float(p.get(key))))
             except Exception:
                 pass
-    variantes = p.get("variants") or []
-    stocks = []
-    for raw in variantes:
-        v = raw.get("variant", raw) if isinstance(raw, dict) else {}
-        for key in ("stock", "stock_quantity", "quantity"):
-            if v.get(key) is not None:
-                try:
-                    stocks.append(int(v.get(key)))
-                    break
-                except Exception:
-                    pass
-    return sum(stocks) if stocks else None
+    return None
 
 
 def url_producto(p):
@@ -699,11 +716,16 @@ def detalle_producto(p):
     descripcion = re.sub(r"<[^>]+>", " ", str(p.get("description", "") or ""))
     descripcion = html.unescape(descripcion)
     descripcion = re.sub(r"\s+", " ", descripcion).strip()
-    stock_txt = "Stock no informado" if stock is None else (f"Stock: {stock} unidades" if stock > 0 else "Sin stock")
+    if len(descripcion) > 900:
+        descripcion = descripcion[:900].rsplit(" ", 1)[0] + "…"
+    stock_txt = "Disponible" if stock is None else (f"Stock: {stock} unidades" if stock > 0 else "Sin stock")
     partes = [f"🌱 *{nombre}*", f"Precio: *{clp(precio)}*", stock_txt]
     if descripcion:
-        partes += ["", descripcion[:1200]]
-    partes += ["", "¿Cuántos quieres agregar al carrito? Responde con la cantidad, por ejemplo *2*, o escribe *comprar 2*."]
+        partes += ["", descripcion]
+    if stock == 0:
+        partes += ["", "Este producto está sin stock por ahora. Si quieres, dime qué alternativa buscas y te muestro productos disponibles."]
+    else:
+        partes += ["", "¿Cuántos quieres agregar al carrito? Responde con la cantidad, por ejemplo *2*, o escribe *comprar 2*."]
     return "\n".join(partes)
 
 def total_carrito(carrito):
@@ -913,6 +935,11 @@ def procesar_texto(telefono, texto):
 
     if n in {"hola", "holi", "holaa", "buenas", "buenos dias", "buenas tardes", "buenas noches"}:
         return mensaje_bienvenida()
+
+    if n in {"quiero comprar", "quiero hacer una compra", "quiero comprar algo", "comprar", "hacer una compra"}:
+        estado["producto_seleccionado"] = None
+        estado["paso"] = "inicio"
+        return "¡Perfecto! 🌿 Dime qué producto estás buscando y revisaré el catálogo, precio y stock de La Ortiga."
 
     if any(x in n for x in ["ejecutivo", "humano", "persona", "atencion al cliente"]):
         return f"Claro. Puedes hablar con un ejecutivo de La Ortiga al {EJECUTIVO_WHATSAPP}."
@@ -1296,7 +1323,7 @@ def health():
         "ok": True,
         "app": "La Ortiga WhatsApp Commerce Bot",
         "version": APP_VERSION,
-        "whatsapp": "Meta Cloud API",
+        "whatsapp": "Twilio WhatsApp",
         "catalog": "Jumpseller REST API",
         "payments": "Mercado Pago Checkout Pro",
         "calendar": "disabled",
