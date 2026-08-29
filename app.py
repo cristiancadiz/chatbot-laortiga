@@ -21,7 +21,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-29-V36-LAORTIGA-TWILIO-VARIANT-ID-FIX"
+APP_VERSION = "2026-08-29-V37-LAORTIGA-TWILIO-TARIFAS-JUMPSELLER"
 load_dotenv()
 
 app = Flask(__name__)
@@ -517,7 +517,215 @@ def buscar_o_crear_cliente(email, nombre, telefono, direccion="", comuna=""):
         raise
 
 
-def crear_pedido_jumpseller(customer_id, carrito, tipo_entrega, direccion, comuna):
+
+def _unwrap_shipping_method(item):
+    return item.get("shipping_method", item) if isinstance(item, dict) else {}
+
+
+def _unwrap_geo_item(item, root_key):
+    if not isinstance(item, dict):
+        return {}
+    return item.get(root_key, item) if isinstance(item.get(root_key, item), dict) else item
+
+
+def _lista_desde_respuesta(data, key):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        val = data.get(key)
+        if isinstance(val, list):
+            return val
+    return []
+
+
+def resolver_region_comuna_jumpseller(comuna):
+    """Busca en la geografía oficial de Jumpseller la región/código de una comuna chilena.
+
+    Esto permite aplicar correctamente tablas que estén configuradas por región,
+    aunque el bot solo le pida la comuna al comprador.
+    """
+    objetivo = normalizar_texto(comuna)
+    if not objetivo:
+        return {"region_code": "", "region_name": "", "municipality_code": "", "municipality_name": comuna or ""}
+
+    try:
+        data = js_request("GET", "/countries/CL/regions.json")
+        regiones = _lista_desde_respuesta(data, "regions")
+    except Exception as e:
+        print("JUMPSELLER REGIONES ERROR:", repr(e))
+        return {"region_code": "", "region_name": "", "municipality_code": "", "municipality_name": comuna}
+
+    for raw_region in regiones:
+        r = _unwrap_geo_item(raw_region, "region")
+        region_code = str(r.get("code") or r.get("id") or r.get("region_code") or "")
+        region_name = str(r.get("name") or r.get("region") or "")
+        if not region_code:
+            continue
+        try:
+            mdata = js_request("GET", f"/countries/CL/regions/{region_code}/municipalities.json")
+            municipios = _lista_desde_respuesta(mdata, "municipalities")
+        except Exception as e:
+            print("JUMPSELLER MUNICIPIOS ERROR", region_code, repr(e))
+            continue
+
+        for raw_m in municipios:
+            m = _unwrap_geo_item(raw_m, "municipality")
+            m_name = str(m.get("name") or m.get("municipality") or m.get("label") or "")
+            m_code = str(m.get("code") or m.get("id") or m.get("municipality_code") or "")
+            if normalizar_texto(m_name) == objetivo or (m_code and normalizar_texto(m_code) == objetivo):
+                return {
+                    "region_code": region_code,
+                    "region_name": region_name,
+                    "municipality_code": m_code,
+                    "municipality_name": m_name or comuna,
+                }
+
+    return {"region_code": "", "region_name": "", "municipality_code": "", "municipality_name": comuna}
+
+
+def peso_carrito_jumpseller(carrito):
+    total = 0.0
+    for item in carrito:
+        p = obtener_producto_por_id(item["product_id"])
+        if not p:
+            continue
+        peso = p.get("weight")
+        # Algunas respuestas pueden exponer el peso en la variante.
+        if item.get("variant_id"):
+            for v in variantes_producto(p):
+                if str(v.get("id")) == str(item.get("variant_id")) and v.get("weight") not in (None, ""):
+                    peso = v.get("weight")
+                    break
+        try:
+            total += float(peso or 0) * int(item["qty"])
+        except Exception:
+            pass
+    return total
+
+
+def _valor_base_tabla(basedon, carrito):
+    b = normalizar_texto(basedon)
+    if b == "price":
+        return float(total_carrito(carrito))
+    if b in {"quantity", "qty", "items"}:
+        return float(sum(int(x.get("qty", 0)) for x in carrito))
+    if b == "weight":
+        return float(peso_carrito_jumpseller(carrito))
+    return None
+
+
+def _precio_regla_tabla(values, base):
+    """Obtiene el precio del rango configurado en la Tabla de Tarifas.
+
+    Jumpseller documenta amount como límite superior del rango. Ordenamos los
+    límites y usamos el primero que contenga el valor; si supera todos los rangos,
+    usamos la última regla disponible (rango abierto final).
+    """
+    reglas = []
+    for raw in values or []:
+        v = raw.get("value", raw) if isinstance(raw, dict) else {}
+        if not isinstance(v, dict):
+            continue
+        try:
+            amount = float(v.get("amount"))
+            price = float(v.get("price"))
+            reglas.append((amount, price))
+        except Exception:
+            continue
+    if not reglas:
+        return None
+    reglas.sort(key=lambda x: x[0])
+    for amount, price in reglas:
+        if base <= amount:
+            return max(0.0, price)
+    return max(0.0, reglas[-1][1])
+
+
+def _puntaje_ubicacion_tabla(locations, comuna, geo):
+    """Retorna -1 si la tabla no aplica; mayor puntaje = ubicación más específica."""
+    if not locations:
+        return 1
+
+    comuna_norm = normalizar_texto(comuna)
+    muni_code_norm = normalizar_texto(geo.get("municipality_code"))
+    region_code_norm = normalizar_texto(geo.get("region_code"))
+    region_name_norm = normalizar_texto(geo.get("region_name"))
+    mejor = -1
+
+    for raw in locations:
+        loc = raw.get("location", raw) if isinstance(raw, dict) else {}
+        if not isinstance(loc, dict):
+            continue
+        country = normalizar_texto(loc.get("country"))
+        region = normalizar_texto(loc.get("region"))
+        municipality = normalizar_texto(loc.get("municipality"))
+
+        if country and country not in {"cl", "chile"}:
+            continue
+        if region and region not in {region_code_norm, region_name_norm}:
+            continue
+        if municipality and municipality not in {comuna_norm, muni_code_norm}:
+            continue
+
+        score = 10 if country else 0
+        score += 20 if region else 0
+        score += 30 if municipality else 0
+        mejor = max(mejor, score or 1)
+    return mejor
+
+
+def cotizar_despacho_jumpseller(carrito, comuna):
+    """Calcula el despacho usando las Tablas de Tarifas configuradas en Jumpseller."""
+    data = js_request("GET", "/shipping_methods.json", params={"enabled": True})
+    items = data if isinstance(data, list) else data.get("shipping_methods", [])
+    metodos = [_unwrap_shipping_method(x) for x in items]
+    metodos = [m for m in metodos if m and m.get("enabled") is not False and normalizar_texto(m.get("type")) == "tables"]
+    if not metodos:
+        raise RuntimeError("No hay una Tabla de Tarifas activa en Jumpseller.")
+
+    geo = resolver_region_comuna_jumpseller(comuna)
+    candidatos = []
+
+    for metodo in metodos:
+        for raw_table in (metodo.get("tables") or []):
+            table = raw_table.get("table", raw_table) if isinstance(raw_table, dict) else {}
+            if not isinstance(table, dict):
+                continue
+            base = _valor_base_tabla(table.get("basedon"), carrito)
+            if base is None:
+                # Las tablas por distancia requieren geocodificación y no se pueden
+                # reproducir fielmente solo con texto de dirección/comuna.
+                continue
+            score = _puntaje_ubicacion_tabla(table.get("locations") or [], comuna, geo)
+            if score < 0:
+                continue
+            price = _precio_regla_tabla(table.get("values") or [], base)
+            if price is None:
+                continue
+            candidatos.append({
+                "shipping_method_id": metodo.get("id"),
+                "shipping_method_name": metodo.get("name") or "Despacho",
+                "shipping_price": float(price),
+                "score": score,
+                "basedon": table.get("basedon"),
+                "base": base,
+                "region_code": geo.get("region_code", ""),
+                "region_name": geo.get("region_name", ""),
+                "municipality_code": geo.get("municipality_code", ""),
+            })
+
+    if not candidatos:
+        raise RuntimeError(f"No encontré una tarifa de despacho aplicable para la comuna {comuna}.")
+
+    # Primero la tabla geográfica más específica; si hay varias, la más económica.
+    max_score = max(x["score"] for x in candidatos)
+    especificos = [x for x in candidatos if x["score"] == max_score]
+    elegido = min(especificos, key=lambda x: x["shipping_price"])
+    print("JUMPSELLER TARIFA ELEGIDA:", elegido)
+    return elegido
+
+
+def crear_pedido_jumpseller(customer_id, carrito, tipo_entrega, direccion, comuna, tarifa_envio=None):
     products = []
     for item in carrito:
         linea = {
@@ -529,12 +737,20 @@ def crear_pedido_jumpseller(customer_id, carrito, tipo_entrega, direccion, comun
             linea["variant_id"] = int(item["variant_id"])
         products.append(linea)
 
-    envio = DEFAULT_SHIPPING_PRICE if tipo_entrega == "despacho" else 0
+    if tipo_entrega == "despacho":
+        if not tarifa_envio:
+            tarifa_envio = cotizar_despacho_jumpseller(carrito, comuna)
+        envio = float(tarifa_envio["shipping_price"])
+        metodo_nombre = tarifa_envio.get("shipping_method_name") or JUMPSELLER_SHIPPING_METHOD_NAME
+    else:
+        envio = 0.0
+        metodo_nombre = "Retiro coordinado"
+
     order = {
         "status": "Pending Payment",
-        "shipping_method_name": (
-            JUMPSELLER_SHIPPING_METHOD_NAME if tipo_entrega == "despacho" else "Retiro coordinado"
-        ),
+        # Enviamos el nombre + precio calculado desde la tabla. Según la API de
+        # Jumpseller, shipping_price aplica cuando se entrega shipping_method_name.
+        "shipping_method_name": metodo_nombre,
         "shipping_price": envio,
         "shipping_required": tipo_entrega == "despacho",
         "customer": {"id": int(customer_id)},
@@ -935,8 +1151,20 @@ def preparar_pago(estado):
     estado["carrito"] = carrito
 
     c = estado["checkout"]
-    envio = DEFAULT_SHIPPING_PRICE if c.get("tipo_entrega") == "despacho" else 0
     subtotal = total_carrito(carrito)
+    tarifa_envio = None
+    if c.get("tipo_entrega") == "despacho":
+        # Recalculamos justo antes de cobrar por si el administrador cambió la
+        # Tabla de Tarifas desde que el cliente confirmó sus datos.
+        tarifa_envio = cotizar_despacho_jumpseller(carrito, c.get("comuna", ""))
+        envio = float(tarifa_envio["shipping_price"])
+        c["shipping_price"] = envio
+        c["shipping_method_id"] = tarifa_envio.get("shipping_method_id")
+        c["shipping_method_name"] = tarifa_envio.get("shipping_method_name")
+        c["region_code"] = tarifa_envio.get("region_code", "")
+        c["region_name"] = tarifa_envio.get("region_name", "")
+    else:
+        envio = 0.0
     total = subtotal + envio
     ref = "LO_" + uuid.uuid4().hex[:24]
 
@@ -944,7 +1172,7 @@ def preparar_pago(estado):
         c["email"], c["nombre"], telefono_sin_prefijo_twilio(estado["telefono"]), c.get("direccion", ""), c.get("comuna", "")
     )
     order = crear_pedido_jumpseller(
-        customer["id"], carrito, c["tipo_entrega"], c.get("direccion", ""), c.get("comuna", "")
+        customer["id"], carrito, c["tipo_entrega"], c.get("direccion", ""), c.get("comuna", ""), tarifa_envio=tarifa_envio
     )
 
     checkout = {
@@ -956,6 +1184,10 @@ def preparar_pago(estado):
         "comuna": c.get("comuna", ""),
         "tipo_entrega": c["tipo_entrega"],
         "shipping_price": envio,
+        "shipping_method_id": c.get("shipping_method_id"),
+        "shipping_method_name": c.get("shipping_method_name", ""),
+        "region_code": c.get("region_code", ""),
+        "region_name": c.get("region_name", ""),
         "subtotal": subtotal,
         "total": total,
         "carrito": carrito,
@@ -1068,7 +1300,28 @@ def procesar_texto(telefono, texto):
         return "¿En qué comuna es el despacho?"
 
     if paso == "checkout_comuna":
+        if "reti" in n:
+            estado["checkout"]["tipo_entrega"] = "retiro"
+            estado["checkout"]["direccion"] = ""
+            estado["checkout"]["comuna"] = ""
+            estado["checkout"]["shipping_price"] = 0.0
+            estado["paso"] = "checkout_confirmar"
+            return resumen_confirmacion(estado)
         estado["checkout"]["comuna"] = txt[:100]
+        try:
+            tarifa = cotizar_despacho_jumpseller(estado["carrito"], estado["checkout"]["comuna"])
+            estado["checkout"]["shipping_price"] = float(tarifa["shipping_price"])
+            estado["checkout"]["shipping_method_id"] = tarifa.get("shipping_method_id")
+            estado["checkout"]["shipping_method_name"] = tarifa.get("shipping_method_name")
+            estado["checkout"]["region_code"] = tarifa.get("region_code", "")
+            estado["checkout"]["region_name"] = tarifa.get("region_name", "")
+        except Exception as e:
+            print("JUMPSELLER COTIZACION DESPACHO ERROR:", repr(e))
+            estado["paso"] = "checkout_comuna"
+            return (
+                "No pude obtener una tarifa de despacho de Jumpseller para esa comuna. "
+                "Revisa el nombre de la comuna e inténtalo nuevamente, o escribe *RETIRO*."
+            )
         estado["paso"] = "checkout_confirmar"
         return resumen_confirmacion(estado)
 
@@ -1197,7 +1450,7 @@ def procesar_texto(telefono, texto):
 
 def resumen_confirmacion(estado):
     c = estado["checkout"]
-    envio = DEFAULT_SHIPPING_PRICE if c.get("tipo_entrega") == "despacho" else 0
+    envio = float(c.get("shipping_price", 0) or 0) if c.get("tipo_entrega") == "despacho" else 0
     subtotal = total_carrito(estado["carrito"])
     lineas = [
         "🧾 *Confirma tu compra*", "",
@@ -1210,6 +1463,7 @@ def resumen_confirmacion(estado):
     if c.get("tipo_entrega") == "despacho":
         lineas += [
             f"Dirección: {c.get('direccion')}", f"Comuna: {c.get('comuna')}",
+            f"Método de despacho: {c.get('shipping_method_name') or 'Tabla de Tarifas Jumpseller'}",
             f"Despacho: {clp(envio)}",
         ]
     lineas += ["", f"*Total a pagar: {clp(subtotal + envio)}*", "", "Si todo está correcto escribe *CONFIRMAR*."]
