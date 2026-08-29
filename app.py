@@ -21,7 +21,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-29-V33-LAORTIGA-TWILIO-CARRITO-ESTADO-FIX"
+APP_VERSION = "2026-08-29-V34-LAORTIGA-TWILIO-CLIENTE-EXISTENTE-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -381,13 +381,46 @@ def obtener_producto_por_id(product_id, force=True):
         return None
 
 
-def buscar_o_crear_cliente(email, nombre, telefono, direccion="", comuna=""):
-    data = js_request("GET", "/customers.json", params={"email": email, "limit": 10})
+def _extraer_clientes(data):
     items = data if isinstance(data, list) else data.get("customers", [])
+    clientes = []
     for raw in items:
         c = raw.get("customer", raw) if isinstance(raw, dict) else {}
-        if normalizar_texto(c.get("email")) == normalizar_texto(email):
-            return c
+        if isinstance(c, dict) and c:
+            clientes.append(c)
+    return clientes
+
+
+def buscar_cliente_por_email(email):
+    objetivo = normalizar_texto(email)
+
+    # Intento rápido usando el filtro de Jumpseller.
+    try:
+        data = js_request("GET", "/customers.json", params={"email": email, "limit": 100})
+        for c in _extraer_clientes(data):
+            if normalizar_texto(c.get("email")) == objetivo:
+                return c
+    except Exception as e:
+        print("JUMPSELLER BUSQUEDA CLIENTE POR EMAIL FALLÓ:", repr(e))
+
+    # Fallback robusto: recorre clientes hasta encontrar el correo.
+    # Esto evita intentar crear un correo que Jumpseller ya tiene registrado.
+    for pagina in range(1, 101):
+        data = js_request("GET", "/customers.json", params={"page": pagina, "limit": 100})
+        clientes = _extraer_clientes(data)
+        for c in clientes:
+            if normalizar_texto(c.get("email")) == objetivo:
+                return c
+        if len(clientes) < 100:
+            break
+    return None
+
+
+def buscar_o_crear_cliente(email, nombre, telefono, direccion="", comuna=""):
+    existente = buscar_cliente_por_email(email)
+    if existente:
+        print("JUMPSELLER CLIENTE EXISTENTE:", existente.get("id"), email)
+        return existente
 
     customer = {
         "email": email,
@@ -405,8 +438,20 @@ def buscar_o_crear_cliente(email, nombre, telefono, direccion="", comuna=""):
             "municipality": comuna or "Santiago",
             "country": "CL",
         }
-    data = js_request("POST", "/customers.json", json={"customer": customer})
-    return data.get("customer", data)
+
+    try:
+        data = js_request("POST", "/customers.json", json={"customer": customer})
+        return data.get("customer", data)
+    except RuntimeError as e:
+        # Protección contra carrera/inconsistencia del filtro de Jumpseller:
+        # si el correo ya existía, lo recuperamos y continuamos la compra.
+        msg = str(e).lower()
+        if "correo electrónico ya está registrado" in msg or "email" in msg and "registr" in msg:
+            existente = buscar_cliente_por_email(email)
+            if existente:
+                print("JUMPSELLER CLIENTE RECUPERADO TRAS DUPLICADO:", existente.get("id"), email)
+                return existente
+        raise
 
 
 def crear_pedido_jumpseller(customer_id, carrito, tipo_entrega, direccion, comuna):
