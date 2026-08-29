@@ -21,7 +21,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-29-V35-LAORTIGA-TWILIO-STOCK-INTENCION-FIX"
+APP_VERSION = "2026-08-29-V36-LAORTIGA-TWILIO-VARIANT-ID-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -323,6 +323,52 @@ def precio_producto(p):
             pass
     return 0.0
 
+
+
+def variantes_producto(p):
+    """Normaliza la lista de variantes devuelta por Jumpseller."""
+    out = []
+    for raw in (p.get("variants") or []):
+        if not isinstance(raw, dict):
+            continue
+        v = raw.get("variant", raw)
+        if isinstance(v, dict) and v.get("id") is not None:
+            out.append(v)
+    return out
+
+
+def stock_variante(v):
+    if v.get("stock_unlimited") is True:
+        return None
+    for key in ("stock", "stock_quantity", "quantity"):
+        if v.get(key) is not None:
+            try:
+                return max(0, int(float(v.get(key))))
+            except Exception:
+                pass
+    return None
+
+
+def variante_para_compra(p, qty=1):
+    """Devuelve una variante real de Jumpseller apta para comprar.
+
+    En Jumpseller incluso productos sin opciones visibles pueden tener una variante
+    interna obligatoria. Para evitar el error 'Variante del producto no fue encontrada',
+    siempre enviamos variant_id cuando la API entrega variantes.
+    """
+    variantes = variantes_producto(p)
+    if not variantes:
+        return None
+
+    # Primero una variante con stock suficiente o stock ilimitado.
+    for v in variantes:
+        st = stock_variante(v)
+        if st is None or st >= int(qty):
+            return v
+
+    # Si ninguna tiene stock suficiente, devolvemos la primera para que el caller
+    # pueda informar correctamente la falta de stock, pero no crear una orden inválida.
+    return variantes[0]
 
 def stock_producto(p):
     """Devuelve stock vendible de Jumpseller.
@@ -748,23 +794,36 @@ def agregar_al_carrito(estado, p, qty=1):
     stock = stock_producto(p)
     if stock is not None and stock < qty:
         return False, f"Solo quedan {stock} unidades disponibles."
+
     pid = str(p.get("id"))
+    variante = variante_para_compra(p, qty)
+    variant_id = int(variante["id"]) if variante and variante.get("id") is not None else None
+    stock_v = stock_variante(variante) if variante else stock
+    if stock_v is not None and stock_v < qty:
+        return False, f"Solo quedan {stock_v} unidades disponibles."
+
     precio = precio_producto(p)
+    if variante and variante.get("price") not in (None, ""):
+        try:
+            precio = float(variante.get("price"))
+        except Exception:
+            pass
     if precio <= 0:
         return False, "No pude obtener un precio válido para este producto."
 
     for item in estado["carrito"]:
-        if str(item["product_id"]) == pid and not item.get("variant_id"):
+        if str(item["product_id"]) == pid and item.get("variant_id") == variant_id:
             nueva = item["qty"] + qty
-            if stock is not None and nueva > stock:
-                return False, f"Solo quedan {stock} unidades disponibles."
+            if stock_v is not None and nueva > stock_v:
+                return False, f"Solo quedan {stock_v} unidades disponibles."
             item["qty"] = nueva
             item["unit_price"] = precio
+            item["variant_id"] = variant_id
             return True, None
 
     estado["carrito"].append({
         "product_id": int(p["id"]),
-        "variant_id": None,
+        "variant_id": variant_id,
         "name": p.get("name", "Producto"),
         "qty": qty,
         "unit_price": precio,
@@ -780,14 +839,31 @@ def verificar_carrito_actual(carrito):
         if not p:
             errores.append(f"{item['name']}: ya no está disponible")
             continue
-        precio = precio_producto(p)
-        stock = stock_producto(p)
+        variante = None
+        if item.get("variant_id"):
+            for v in variantes_producto(p):
+                if str(v.get("id")) == str(item.get("variant_id")):
+                    variante = v
+                    break
+        if variante is None:
+            variante = variante_para_compra(p, item["qty"])
+
+        stock = stock_variante(variante) if variante else stock_producto(p)
         if stock is not None and stock < item["qty"]:
             errores.append(f"{item['name']}: quedan {stock} unidades")
             continue
+
+        precio = precio_producto(p)
+        if variante and variante.get("price") not in (None, ""):
+            try:
+                precio = float(variante.get("price"))
+            except Exception:
+                pass
+
         nuevo = dict(item)
         nuevo["name"] = p.get("name", item["name"])
         nuevo["unit_price"] = precio
+        nuevo["variant_id"] = int(variante["id"]) if variante and variante.get("id") is not None else None
         actualizado.append(nuevo)
     return actualizado, errores
 
