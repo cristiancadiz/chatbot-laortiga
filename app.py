@@ -21,7 +21,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-29-V38-LAORTIGA-TWILIO-TARIFAS-JUMPSELLER-FIX"
+APP_VERSION = "2026-08-29-V39-LAORTIGA-TWILIO-FOTOS-PRODUCTOS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -901,6 +901,7 @@ def estado_inicial(telefono):
         "carrito": [],
         "ultimos_productos": [],
         "producto_seleccionado": None,
+        "media_respuesta": None,
         "checkout": {},
         "historial": [],
     }
@@ -969,6 +970,43 @@ def listar_resultados(productos):
     lineas.append("Escribe el *número* para ver el detalle. Si ya viste la ficha de un producto, escribe por ejemplo *comprar 2* para llevar 2 unidades.")
     return "\n".join(lineas)
 
+
+
+def imagen_producto(p):
+    """Obtiene la primera imagen pública del producto desde Jumpseller."""
+    if not isinstance(p, dict):
+        return None
+
+    candidatos = []
+
+    # Formato habitual de Jumpseller: images -> [{"image": {"url": ...}}, ...]
+    for raw in (p.get("images") or []):
+        if not isinstance(raw, dict):
+            continue
+        img = raw.get("image", raw)
+        if isinstance(img, dict):
+            for key in ("url", "image_url", "full_url", "src", "original_url"):
+                if img.get(key):
+                    candidatos.append(str(img.get(key)).strip())
+        elif isinstance(img, str):
+            candidatos.append(img.strip())
+
+    # Fallbacks por si el producto viene con una imagen principal directa.
+    for key in ("image_url", "image", "main_image", "featured_image"):
+        val = p.get(key)
+        if isinstance(val, str):
+            candidatos.append(val.strip())
+        elif isinstance(val, dict):
+            for subkey in ("url", "image_url", "full_url", "src", "original_url"):
+                if val.get(subkey):
+                    candidatos.append(str(val.get(subkey)).strip())
+
+    for url in candidatos:
+        if url.startswith("//"):
+            url = "https:" + url
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+    return None
 
 
 def detalle_producto(p):
@@ -1387,6 +1425,7 @@ def procesar_texto(telefono, texto):
         if 0 <= idx < len(estado["ultimos_productos"]):
             p = estado["ultimos_productos"][idx]
             estado["producto_seleccionado"] = p
+            estado["media_respuesta"] = imagen_producto(p)
             estado["paso"] = "cantidad_producto"
             return detalle_producto(p)
         return "Ese número no corresponde a los productos que te mostré."
@@ -1505,7 +1544,19 @@ def whatsapp_webhook():
             respuesta = procesar_texto(telefono, texto)
 
         guardar_mensaje(telefono, "assistant", respuesta)
-        twiml.message(respuesta)
+
+        # Si la respuesta corresponde al detalle de un producto y Jumpseller trae
+        # una imagen pública, Twilio la envía como foto con el texto como caption.
+        estado_actual = get_estado(telefono)
+        media_url = estado_actual.pop("media_respuesta", None)
+        mensaje_twilio = twiml.message(respuesta)
+        if media_url:
+            try:
+                mensaje_twilio.media(media_url)
+                print("TWILIO MEDIA PRODUCTO:", media_url)
+            except Exception as e:
+                print("TWILIO MEDIA ERROR:", repr(e))
+
         return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
     except Exception as e:
