@@ -24,7 +24,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-31-V49-LAORTIGA-JUMPSELLER-WILDCARDS-MUNICIPALITY-ID-FIX"
+APP_VERSION = "2026-08-31-V50-LAORTIGA-JUMPSELLER-MUNICIPALITY-DIRECT-TIMEOUT-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -767,9 +767,9 @@ def resolver_region_comuna_jumpseller(comuna, max_seconds=12.0, permitir_fuzzy=T
             if len(_GEO_CACHE) > GEO_CACHE_MAX:
                 oldest = min(_GEO_CACHE, key=lambda k: _GEO_CACHE[k].get("ts", 0))
                 _GEO_CACHE.pop(oldest, None)
-            print("JUMPSELLER GEO CORREGIDO V49:", comuna, "->", mejor.get("municipality_name"), "/", mejor.get("region_name"), "score=", round(score, 3))
+            print("JUMPSELLER GEO CORREGIDO V50:", comuna, "->", mejor.get("municipality_name"), "/", mejor.get("region_name"), "score=", round(score, 3))
             return mejor
-        print("JUMPSELLER GEO NO RECONOCIDO V49:", comuna, "mejor=", mejor.get("municipality_name"), "score=", round(score, 3))
+        print("JUMPSELLER GEO NO RECONOCIDO V50:", comuna, "mejor=", mejor.get("municipality_name"), "score=", round(score, 3))
 
     return vacio
 
@@ -1134,16 +1134,21 @@ def _values_tabla(table):
 
 
 def cotizar_despacho_jumpseller(carrito, comuna):
-    """Cotiza despacho desde las Tablas de Tarifas activas de Jumpseller.
+    """Cotiza despacho usando una sola resolución geográfica y matching directo.
 
-    V49 interpreta comodines (*) de Jumpseller y prioriza el ID interno de comuna
-    por sobre códigos de región incompatibles entre endpoints.
+    V50:
+    - Resuelve la comuna una sola vez y reutiliza su municipality_code.
+    - Compara primero el ID interno de municipality de Jumpseller.
+    - Acepta comodines ``*`` como fallback.
+    - Evita recalcular subtotal/cantidad/peso para cada tabla.
+    - Reduce esperas y deja logs claros para diagnosticar sin bloquear el flujo.
     """
     inicio = time.monotonic()
+
+    # 1) Cargar métodos de despacho una sola vez.
     data = js_request("GET", "/shipping_methods.json", timeout=(3, 7))
     items = data if isinstance(data, list) else data.get("shipping_methods", [])
     metodos = [_unwrap_shipping_method(x) for x in items]
-
     tipos_tabla = {"tables", "table", "table rates", "table_rates", "tablerates"}
     metodos = [
         m for m in metodos
@@ -1153,88 +1158,151 @@ def cotizar_despacho_jumpseller(carrito, comuna):
     if not metodos:
         raise RuntimeError("No hay una Tabla de Tarifas activa en Jumpseller.")
 
-    def construir_candidatos(geo):
-        candidatos = []
-        for metodo in metodos:
-            for raw_table in _tablas_metodo(metodo):
-                table = raw_table.get("table", raw_table) if isinstance(raw_table, dict) else {}
-                if not isinstance(table, dict):
-                    continue
+    # 2) Resolver la comuna UNA sola vez. Máximo 8 s para no dejar pegado WhatsApp.
+    geo = resolver_region_comuna_jumpseller(comuna, max_seconds=8.0, permitir_fuzzy=True)
+    muni_code = normalizar_texto(geo.get("municipality_code"))
+    muni_name = normalizar_texto(geo.get("municipality_name") or comuna)
+    region_name = normalizar_texto(geo.get("region_name"))
+    region_code = normalizar_texto(geo.get("region_code"))
 
-                basedon = table.get("basedon")
-                if basedon in (None, ""):
-                    basedon = table.get("based_on") or table.get("basis") or table.get("type")
-                base = _valor_base_tabla(basedon, carrito)
-                if base is None:
-                    continue
+    print(
+        "JUMPSELLER GEO V50:", comuna,
+        "municipality=", geo.get("municipality_name"),
+        "municipality_id=", geo.get("municipality_code"),
+        "region=", geo.get("region_name"),
+        "region_code=", geo.get("region_code"),
+    )
 
-                score = _puntaje_ubicacion_tabla(_locations_tabla(table), comuna, geo)
-                if score < 0:
-                    continue
+    if not muni_code and not muni_name:
+        raise RuntimeError(f"No pude reconocer la comuna {comuna} en Jumpseller.")
 
-                price = _precio_regla_tabla(_values_tabla(table), base)
-                if price is None:
-                    continue
+    # Bases cacheadas: evita volver a consultar productos por cada tabla.
+    subtotal_cache = float(total_carrito(carrito))
+    cantidad_cache = float(sum(int(x.get("qty", 0)) for x in carrito))
+    peso_cache = None
 
-                candidatos.append({
-                    "shipping_method_id": metodo.get("id"),
-                    "shipping_method_name": metodo.get("name") or "Despacho",
-                    "shipping_price": float(price),
-                    "score": score,
+    def base_tabla(basedon):
+        nonlocal peso_cache
+        b = re.sub(r"[^a-z0-9]+", "", normalizar_texto(_valor_texto_geo(basedon)))
+        if b in {"price", "orderprice", "subtotal", "total", "amount"}:
+            return subtotal_cache
+        if b in {"quantity", "qty", "items", "item", "numberofitems", "products", "productquantity"}:
+            return cantidad_cache
+        if b in {"weight", "peso"}:
+            if peso_cache is None:
+                peso_cache = float(peso_carrito_jumpseller(carrito))
+            return peso_cache
+        return None
+
+    # Matching deliberadamente simple: municipality exacta > región > wildcard.
+    def score_locations(locations):
+        if not locations:
+            return 1
+
+        mejor = -1
+        for raw in locations:
+            loc = raw.get("location", raw) if isinstance(raw, dict) else raw
+            if not isinstance(loc, dict):
+                txt = normalizar_texto(_valor_texto_geo(loc))
+                if txt in {"", "*", "all", "any"}:
+                    mejor = max(mejor, 1)
+                continue
+
+            country = normalizar_texto(_valor_texto_geo(loc.get("country") or loc.get("country_code")))
+            reg = normalizar_texto(_valor_texto_geo(loc.get("region") or loc.get("region_code") or loc.get("state")))
+            mun = normalizar_texto(_valor_texto_geo(
+                loc.get("municipality") or loc.get("municipality_code") or
+                loc.get("city") or loc.get("commune") or loc.get("comuna")
+            ))
+
+            country_wild = country in {"", "*", "all", "any"}
+            region_wild = reg in {"", "*", "all", "any"}
+            muni_wild = mun in {"", "*", "all", "any"}
+
+            if not country_wild and country not in {"cl", "chile"}:
+                continue
+
+            # Prioridad absoluta al ID interno devuelto por Jumpseller.
+            if not muni_wild:
+                if muni_code and mun == muni_code:
+                    mejor = max(mejor, 100)
+                    continue
+                if muni_name and mun == muni_name:
+                    mejor = max(mejor, 95)
+                    continue
+                # Si la tabla exige una comuna concreta distinta, no aplica.
+                continue
+
+            # Si municipality es wildcard, una región compatible puede aplicar.
+            if not region_wild:
+                aliases_obj = _region_aliases_chile(geo.get("region_name"), geo.get("region_code"))
+                aliases_loc = _variantes_region_chile(reg) | {reg}
+                if region_name and (region_name == reg or aliases_obj & aliases_loc):
+                    mejor = max(mejor, 50)
+                    continue
+                if region_code and region_code == reg:
+                    mejor = max(mejor, 50)
+                    continue
+                # Los logs mostraron namespaces regionales distintos; no forzamos
+                # una coincidencia falsa cuando no existe municipality específica.
+                continue
+
+            # country/region/municipality wildcard: tarifa general.
+            mejor = max(mejor, 5 if country_wild else 10)
+
+        return mejor
+
+    candidatos = []
+    debug_tablas = []
+
+    # 3) Una sola pasada por las tablas.
+    for metodo in metodos:
+        for raw_table in _tablas_metodo(metodo):
+            table = raw_table.get("table", raw_table) if isinstance(raw_table, dict) else {}
+            if not isinstance(table, dict):
+                continue
+
+            basedon = table.get("basedon")
+            if basedon in (None, ""):
+                basedon = table.get("based_on") or table.get("basis") or table.get("type")
+
+            base = base_tabla(basedon)
+            if base is None:
+                continue
+
+            locations = _locations_tabla(table)
+            score = score_locations(locations)
+            price = _precio_regla_tabla(_values_tabla(table), base)
+
+            if len(debug_tablas) < 12:
+                debug_tablas.append({
+                    "metodo": metodo.get("name"),
                     "basedon": basedon,
-                    "base": base,
-                    "region_code": (geo or {}).get("region_code", ""),
-                    "region_name": (geo or {}).get("region_name", ""),
-                    "municipality_code": (geo or {}).get("municipality_code", ""),
+                    "score": score,
+                    "price": price,
+                    "locations_sample": locations[:2],
                 })
-        return candidatos
 
-    candidatos = construir_candidatos({})
-    mejor_directo = max((x["score"] for x in candidatos), default=-1)
+            if score < 0 or price is None:
+                continue
 
-    # Para tablas regionales resolvemos la comuna contra la geografía oficial de Jumpseller.
-    if mejor_directo < 30:
-        hay_tablas_regionales = False
-        for metodo in metodos:
-            for raw_table in _tablas_metodo(metodo):
-                table = raw_table.get("table", raw_table) if isinstance(raw_table, dict) else {}
-                if not isinstance(table, dict):
-                    continue
-                for raw_loc in _locations_tabla(table):
-                    loc = raw_loc.get("location", raw_loc) if isinstance(raw_loc, dict) else {}
-                    if isinstance(loc, dict) and any(loc.get(k) not in (None, "") for k in ("region", "region_code", "state")):
-                        hay_tablas_regionales = True
-                        break
-                if hay_tablas_regionales:
-                    break
-            if hay_tablas_regionales:
-                break
+            candidatos.append({
+                "shipping_method_id": metodo.get("id"),
+                "shipping_method_name": metodo.get("name") or "Despacho",
+                "shipping_price": float(price),
+                "score": score,
+                "basedon": basedon,
+                "base": base,
+                "region_code": geo.get("region_code", ""),
+                "region_name": geo.get("region_name", ""),
+                "municipality_code": geo.get("municipality_code", ""),
+            })
 
-        if hay_tablas_regionales:
-            geo = resolver_region_comuna_jumpseller(comuna, max_seconds=12)
-            if geo.get("region_code") or geo.get("region_name"):
-                candidatos_geo = construir_candidatos(geo)
-                if candidatos_geo:
-                    candidatos = candidatos_geo
+    print("JUMPSELLER MATCH DEBUG V50:", debug_tablas)
 
     if not candidatos:
-        # Log pequeño pero útil: permite ver la forma REAL que devuelve la tienda
-        # sin imprimir toda la respuesta ni credenciales.
-        resumen = []
-        for metodo in metodos[:5]:
-            tablas = _tablas_metodo(metodo)
-            resumen.append({
-                "metodo": metodo.get("name"),
-                "type": metodo.get("type"),
-                "tablas": len(tablas),
-                "table_keys": list((tablas[0].get("table", tablas[0]) if tablas and isinstance(tablas[0], dict) else {}).keys())[:12] if tablas else [],
-                "locations_sample": (_locations_tabla(tablas[0].get("table", tablas[0]))[:3] if tablas and isinstance(tablas[0], dict) else []),
-            })
-        print("JUMPSELLER TARIFAS DEBUG V49:", resumen)
-
-        # Solo usa fallback si el administrador configuró explícitamente un precio > 0.
         if DEFAULT_SHIPPING_PRICE > 0:
-            print("JUMPSELLER TARIFA FALLBACK CONFIGURADA:", DEFAULT_SHIPPING_PRICE)
+            print("JUMPSELLER TARIFA FALLBACK V50:", DEFAULT_SHIPPING_PRICE)
             return {
                 "shipping_method_id": None,
                 "shipping_method_name": JUMPSELLER_SHIPPING_METHOD_NAME,
@@ -1242,22 +1310,23 @@ def cotizar_despacho_jumpseller(carrito, comuna):
                 "score": 0,
                 "basedon": "fallback",
                 "base": 0,
-                "region_code": "",
-                "region_name": "",
-                "municipality_code": "",
+                "region_code": geo.get("region_code", ""),
+                "region_name": geo.get("region_name", ""),
+                "municipality_code": geo.get("municipality_code", ""),
             }
         raise RuntimeError(f"No encontré una tarifa de despacho aplicable para la comuna {comuna}.")
 
-    print("JUMPSELLER TARIFAS CANDIDATAS:", [
-        {"metodo": x.get("shipping_method_name"), "precio": x.get("shipping_price"),
-         "score": x.get("score"), "region": x.get("region_name") or x.get("region_code")}
-        for x in candidatos
-    ])
-
+    # 4) Más específico gana; a igual especificidad, menor precio.
     max_score = max(x["score"] for x in candidatos)
     especificos = [x for x in candidatos if x["score"] == max_score]
     elegido = min(especificos, key=lambda x: x["shipping_price"])
-    print("JUMPSELLER TARIFA ELEGIDA:", elegido, "tiempo=", round(time.monotonic() - inicio, 2), "s")
+
+    print("JUMPSELLER TARIFAS CANDIDATAS V50:", [
+        {"metodo": x.get("shipping_method_name"), "precio": x.get("shipping_price"),
+         "score": x.get("score"), "municipality_id": x.get("municipality_code")}
+        for x in candidatos
+    ])
+    print("JUMPSELLER TARIFA ELEGIDA V50:", elegido, "tiempo=", round(time.monotonic() - inicio, 2), "s")
 
     del data, items, metodos, candidatos, especificos
     gc.collect()
@@ -1971,7 +2040,7 @@ def procesar_texto(telefono, texto):
         comuna_corregida = geo.get("municipality_name") or comuna_original
         estado["checkout"]["comuna"] = comuna_corregida
         if normalizar_texto(comuna_corregida) != normalizar_texto(comuna_original):
-            print("COMUNA CORREGIDA V49:", comuna_original, "->", comuna_corregida, "score=", geo.get("match_score"))
+            print("COMUNA CORREGIDA V50:", comuna_original, "->", comuna_corregida, "score=", geo.get("match_score"))
 
         try:
             tarifa = cotizar_despacho_jumpseller(estado["carrito"], comuna_corregida)
@@ -1981,7 +2050,7 @@ def procesar_texto(telefono, texto):
             estado["checkout"]["region_code"] = tarifa.get("region_code") or geo.get("region_code", "")
             estado["checkout"]["region_name"] = tarifa.get("region_name") or geo.get("region_name", "")
         except Exception as e:
-            print("JUMPSELLER COTIZACION DESPACHO ERROR V49:", repr(e))
+            print("JUMPSELLER COTIZACION DESPACHO ERROR V50:", repr(e))
             estado["paso"] = "checkout_comuna"
             return (
                 f"Reconocí la comuna como *{comuna_corregida}*, pero no encontré una tarifa de despacho configurada para ella. "
