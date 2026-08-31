@@ -25,7 +25,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-31-V52-LAORTIGA-JUMPSELLER-CHECKOUT-NACIONAL"
+APP_VERSION = "2026-08-31-V55-LAORTIGA-RETIRO-EDUARDO-OSORIO-881"
 load_dotenv()
 
 app = Flask(__name__)
@@ -50,6 +50,10 @@ DEFAULT_SHIPPING_PRICE = int(os.getenv("DEFAULT_SHIPPING_PRICE", "0"))
 JUMPSELLER_SHIPPING_METHOD_NAME = os.getenv(
     "JUMPSELLER_SHIPPING_METHOD_NAME", "Despacho coordinado por WhatsApp"
 )
+
+# Punto de retiro informado por La Ortiga
+PUNTO_RETIRO = os.getenv("PUNTO_RETIRO", "Eduardo Osorio Pardo 881, San Bernardo")
+HORARIO_RETIRO = os.getenv("HORARIO_RETIRO", "lunes a viernes de 09:00 a 18:00 horas")
 
 
 def zona_local():
@@ -1455,7 +1459,7 @@ def crear_pedido_abierto_jumpseller(customer_id, carrito, tipo_entrega):
         # Algunas tiendas exigen nombre/precio aun en pedidos abiertos. Dejamos un
         # fallback de $0 para que el cliente pueda continuar y revisar el checkout.
         if tipo_entrega == "despacho":
-            print("JUMPSELLER OPEN ORDER FALLBACK V52:", repr(e))
+            print("JUMPSELLER OPEN ORDER FALLBACK V53:", repr(e))
             order["shipping_method_name"] = "Despacho a seleccionar en checkout"
             order["shipping_price"] = 0
             data = js_request("POST", "/orders.json", json={"order": order})
@@ -1468,7 +1472,7 @@ def crear_pedido_abierto_jumpseller(customer_id, carrito, tipo_entrega):
         raise RuntimeError(f"Jumpseller creó el pedido {pedido.get('id')} pero no devolvió checkout_url/review_url")
 
     print(
-        "JUMPSELLER OPEN ORDER V52:",
+        "JUMPSELLER OPEN ORDER V53:",
         {
             "id": pedido.get("id"),
             "status": pedido.get("status") or pedido.get("status_enum"),
@@ -1611,6 +1615,12 @@ ESTADOS = {}
 ESTADOS_LOCK = Lock()
 PROCESADOS = {}
 PROCESADOS_LOCK = Lock()
+# Evita crear dos checkouts si el cliente pulsa CONFIRMAR dos veces muy seguido.
+CHECKOUT_CREATION_LOCK = Lock()
+# Idempotencia para webhooks de Jumpseller (pueden reintentarse).
+JUMPSELLER_WEBHOOK_PROCESADOS = {}
+JUMPSELLER_WEBHOOK_LOCK = Lock()
+JUMPSELLER_WEBHOOK_TTL_SECONDS = int(os.getenv("JUMPSELLER_WEBHOOK_TTL_SECONDS", "86400"))
 STATE_TTL_SECONDS = int(os.getenv("STATE_TTL_SECONDS", "7200"))
 MAX_ESTADOS = int(os.getenv("MAX_ESTADOS", "250"))
 PROCESADOS_TTL_SECONDS = int(os.getenv("PROCESADOS_TTL_SECONDS", "7200"))
@@ -1937,80 +1947,97 @@ def iniciar_checkout(estado):
 
 
 def preparar_pago(estado):
-    """V52: crea un checkout real en Jumpseller.
+    """V53: crea/reutiliza un checkout real en Jumpseller.
 
-    Jumpseller calcula el despacho nacional (incluidos métodos dinámicos) y procesa
-    el pago con los medios configurados en la tienda.
+    Jumpseller calcula despacho y pago. La creación se protege con lock para
+    evitar pedidos duplicados si llegan dos confirmaciones casi simultáneas.
     """
-    carrito, errores = verificar_carrito_actual(estado["carrito"])
-    if errores:
+    with CHECKOUT_CREATION_LOCK:
+        # Si ya existe un checkout para este estado, nunca creamos otro pedido.
+        existente = estado.get("checkout", {}) or {}
+        url_existente = existente.get("checkout_url")
+        order_existente = existente.get("jumpseller_order_id")
+        if url_existente and order_existente:
+            estado["paso"] = "esperando_pago_jumpseller"
+            print("JUMPSELLER CHECKOUT REUTILIZADO V53:", order_existente)
+            return True, (
+                "🛒 *Tu checkout ya está creado*\n\n"
+                f"Pedido: #{order_existente}\n"
+                "Continúa tu compra aquí 👇\n"
+                f"{url_existente}\n\n"
+                "Jumpseller calculará el despacho y mostrará los medios de pago disponibles ✅"
+            )
+
+        carrito, errores = verificar_carrito_actual(estado["carrito"])
+        if errores:
+            estado["carrito"] = carrito
+            estado["paso"] = "inicio"
+            return False, "Antes de finalizar encontré estos cambios:\n- " + "\n- ".join(errores) + "\n\nRevisa tu carrito nuevamente."
         estado["carrito"] = carrito
-        estado["paso"] = "inicio"
-        return False, "Antes de finalizar encontré estos cambios:\n- " + "\n- ".join(errores) + "\n\nRevisa tu carrito nuevamente."
-    estado["carrito"] = carrito
 
-    c = estado["checkout"]
-    subtotal = total_carrito(carrito)
-    telefono = telefono_sin_prefijo_twilio(estado["telefono"])
+        c = estado["checkout"]
+        subtotal = total_carrito(carrito)
+        telefono = telefono_sin_prefijo_twilio(estado["telefono"])
 
-    customer = buscar_o_crear_cliente(
-        c["email"],
-        c["nombre"],
-        telefono,
-        c.get("direccion", ""),
-        c.get("comuna", ""),
-        c.get("region_code", ""),
-    )
+        customer = buscar_o_crear_cliente(
+            c["email"],
+            c["nombre"],
+            telefono,
+            c.get("direccion", ""),
+            c.get("comuna", ""),
+            c.get("region_code", ""),
+        )
 
-    pedido = crear_pedido_abierto_jumpseller(
-        customer["id"], carrito, c["tipo_entrega"]
-    )
-    order_id = pedido.get("id")
-    checkout_url = pedido.get("checkout_url") or pedido.get("review_url")
-    ref = "JS_" + str(order_id or uuid.uuid4().hex[:16])
+        pedido = crear_pedido_abierto_jumpseller(
+            customer["id"], carrito, c["tipo_entrega"]
+        )
+        order_id = pedido.get("id")
+        checkout_url = pedido.get("checkout_url") or pedido.get("review_url")
+        ref = "JS_" + str(order_id or uuid.uuid4().hex[:16])
 
-    checkout = {
-        "ref": ref,
-        "telefono": estado["telefono"],
-        "nombre": c["nombre"],
-        "email": c["email"],
-        "direccion": c.get("direccion", ""),
-        "comuna": c.get("comuna", ""),
-        "tipo_entrega": c["tipo_entrega"],
-        "region_code": c.get("region_code", ""),
-        "region_name": c.get("region_name", ""),
-        "municipality_code": c.get("municipality_code", ""),
-        "subtotal": subtotal,
-        "carrito": carrito,
-        "jumpseller_order_id": order_id,
-        "checkout_url": checkout_url,
-    }
+        checkout = {
+            "ref": ref,
+            "telefono": estado["telefono"],
+            "nombre": c["nombre"],
+            "email": c["email"],
+            "direccion": c.get("direccion", ""),
+            "comuna": c.get("comuna", ""),
+            "tipo_entrega": c["tipo_entrega"],
+            "region_code": c.get("region_code", ""),
+            "region_name": c.get("region_name", ""),
+            "municipality_code": c.get("municipality_code", ""),
+            "subtotal": subtotal,
+            "carrito": carrito,
+            "jumpseller_order_id": order_id,
+            "checkout_url": checkout_url,
+        }
 
-    guardar_venta_evento(
-        ref, estado["telefono"], "CHECKOUT_JUMPSELLER", subtotal,
-        jumpseller_order_id=str(order_id or ""),
-        detalle=json.dumps(checkout, ensure_ascii=False)[:45000],
-    )
+        guardar_venta_evento(
+            ref, estado["telefono"], "CHECKOUT_JUMPSELLER", subtotal,
+            jumpseller_order_id=str(order_id or ""),
+            detalle=json.dumps(checkout, ensure_ascii=False)[:45000],
+        )
 
-    estado["paso"] = "esperando_pago_jumpseller"
-    estado["checkout"]["ref"] = ref
-    estado["checkout"]["jumpseller_order_id"] = order_id
-    estado["checkout"]["checkout_url"] = checkout_url
+        estado["paso"] = "esperando_pago_jumpseller"
+        estado["checkout"]["ref"] = ref
+        estado["checkout"]["jumpseller_order_id"] = order_id
+        estado["checkout"]["checkout_url"] = checkout_url
 
-    entrega_txt = (
-        "En el checkout podrás elegir la opción de despacho disponible para tu dirección y ver su valor en tiempo real."
-        if c.get("tipo_entrega") == "despacho"
-        else "El pedido quedó configurado para retiro; revisa los datos antes de pagar."
-    )
+        entrega_txt = (
+            "En el checkout podrás elegir la opción de despacho disponible para tu dirección y ver su valor en tiempo real."
+            if c.get("tipo_entrega") == "despacho"
+            else f"El pedido quedó configurado para retiro en {PUNTO_RETIRO}, {HORARIO_RETIRO}; revisa los datos antes de pagar."
+        )
 
-    return True, (
-        "🛒 *Tu compra está lista para finalizar*\n\n"
-        f"Subtotal productos: *{clp(subtotal)}*\n"
-        f"{entrega_txt}\n\n"
-        "👇 *CONTINUAR EN JUMPSELLER*\n"
-        f"{checkout_url}\n\n"
-        "Ahí podrás confirmar el despacho y pagar con los medios disponibles en la tienda ✅"
-    )
+        return True, (
+            "🛒 *Tu compra está lista para finalizar*\n\n"
+            f"Pedido: *#{order_id}*\n"
+            f"Subtotal productos: *{clp(subtotal)}*\n"
+            f"{entrega_txt}\n\n"
+            "👇 *CONTINUAR EN JUMPSELLER*\n"
+            f"{checkout_url}\n\n"
+            "Ahí podrás confirmar el despacho y pagar con los medios disponibles en la tienda ✅"
+        )
 
 
 # ============================================================
@@ -2093,7 +2120,7 @@ def procesar_texto(telefono, texto):
             return "Ese correo no parece válido. Escríbelo nuevamente, por favor."
         estado["checkout"]["email"] = txt.lower()
         estado["paso"] = "checkout_entrega"
-        return "¿Prefieres *DESPACHO* o *RETIRO*?"
+        return f"¿Prefieres *DESPACHO* o *RETIRO*?\n\n📍 Retiro: {PUNTO_RETIRO}\n🕘 Horario: {HORARIO_RETIRO}."
 
     if paso == "checkout_entrega":
         if "desp" in n or "envio" in n:
@@ -2106,7 +2133,7 @@ def procesar_texto(telefono, texto):
             estado["checkout"]["comuna"] = ""
             estado["paso"] = "checkout_confirmar"
             return resumen_confirmacion(estado)
-        return "Indícame *DESPACHO* o *RETIRO*, por favor."
+        return f"Indícame *DESPACHO* o *RETIRO*, por favor.\n\n📍 Retiro: {PUNTO_RETIRO}\n🕘 {HORARIO_RETIRO}."
 
     if paso == "checkout_direccion":
         if len(txt) < 5:
@@ -2151,7 +2178,7 @@ def procesar_texto(telefono, texto):
         estado["checkout"]["municipality_code"] = geo.get("municipality_code", "")
 
         print(
-            "JUMPSELLER GEO CHECKOUT V52:",
+            "JUMPSELLER GEO CHECKOUT V53:",
             comuna_original, "->", comuna_corregida,
             "municipality_id=", geo.get("municipality_code"),
             "region=", geo.get("region_name"),
@@ -2309,6 +2336,11 @@ def resumen_confirmacion(estado):
             f"Dirección: {c.get('direccion')}",
             f"Comuna: {c.get('comuna')}",
             "Despacho: *se calculará en tiempo real en Jumpseller*",
+        ]
+    else:
+        lineas += [
+            f"📍 Punto de retiro: *{PUNTO_RETIRO}*",
+            f"🕘 Horario de retiro: *{HORARIO_RETIRO}*",
         ]
     lineas += [
         "",
@@ -2527,9 +2559,24 @@ def pago_fallido():
     return "<h2>Pago no completado</h2><p>Vuelve a WhatsApp e intenta nuevamente.</p>", 200
 
 
+def _marcar_webhook_jumpseller_procesado(clave):
+    """Devuelve False si el mismo evento ya fue procesado recientemente."""
+    if not clave:
+        return True
+    ahora = time.time()
+    with JUMPSELLER_WEBHOOK_LOCK:
+        viejos = [k for k, ts in JUMPSELLER_WEBHOOK_PROCESADOS.items() if ahora - ts > JUMPSELLER_WEBHOOK_TTL_SECONDS]
+        for k in viejos:
+            JUMPSELLER_WEBHOOK_PROCESADOS.pop(k, None)
+        if clave in JUMPSELLER_WEBHOOK_PROCESADOS:
+            return False
+        JUMPSELLER_WEBHOOK_PROCESADOS[clave] = ahora
+        return True
+
+
 def _validar_webhook_jumpseller(raw_body, hmac_header):
     if not JUMPSELLER_HOOKS_TOKEN:
-        print("JUMPSELLER WEBHOOK WARNING V52: JUMPSELLER_HOOKS_TOKEN no configurado")
+        print("JUMPSELLER WEBHOOK WARNING V53: JUMPSELLER_HOOKS_TOKEN no configurado")
         return False
     esperado = base64.b64encode(
         hmac.new(
@@ -2547,10 +2594,8 @@ def jumpseller_webhook():
     hmac_header = request.headers.get("Jumpseller-Hmac-Sha256", "")
     evento = request.headers.get("Jumpseller-Event", "")
 
-    # Si se configura el token, exigimos firma válida. En pruebas sin token solo
-    # registramos el webhook y devolvemos 200 para no bloquear Jumpseller.
     if JUMPSELLER_HOOKS_TOKEN and not _validar_webhook_jumpseller(raw, hmac_header):
-        print("JUMPSELLER WEBHOOK FIRMA INVALIDA V52", evento)
+        print("JUMPSELLER WEBHOOK FIRMA INVALIDA V53", evento)
         return "Invalid signature", 401
 
     try:
@@ -2560,34 +2605,92 @@ def jumpseller_webhook():
             return "OK", 200
 
         order_id = order.get("id")
-        status = normalizar_texto(order.get("status") or order.get("status_enum"))
+        status_raw = order.get("status") or order.get("status_enum") or ""
+        status = normalizar_texto(status_raw)
+        clave_evento = f"{evento}|{order_id}|{status}"
+        if not _marcar_webhook_jumpseller_procesado(clave_evento):
+            print("JUMPSELLER WEBHOOK DUPLICADO V53:", clave_evento)
+            return "OK", 200
+
+        # Algunos eventos traen un pedido resumido. Si falta cliente/teléfono,
+        # recuperamos el pedido completo antes de notificar.
         customer = order.get("customer") or {}
         telefono = customer.get("phone") or ""
-        total = order.get("total") or 0
+        if order_id and not telefono:
+            try:
+                full = js_request("GET", f"/orders/{int(order_id)}.json")
+                full_order = full.get("order", full) if isinstance(full, dict) else {}
+                if isinstance(full_order, dict):
+                    order = {**order, **full_order}
+                    customer = order.get("customer") or {}
+                    telefono = customer.get("phone") or ""
+                    status_raw = order.get("status") or order.get("status_enum") or status_raw
+                    status = normalizar_texto(status_raw)
+            except Exception as fetch_err:
+                print("JUMPSELLER WEBHOOK FETCH ORDER ERROR V53:", repr(fetch_err))
+
+        total = order.get("total") or order.get("total_price") or 0
         shipping = order.get("shipping") or order.get("shipping_price") or 0
-        metodo = order.get("shipping_method_name") or ""
+        metodo = order.get("shipping_method_name") or order.get("shipping_method") or ""
+        telefono_twilio = telefono
+        if telefono_twilio and not str(telefono_twilio).startswith("whatsapp:"):
+            telefono_twilio = "whatsapp:" + str(telefono_twilio).strip()
 
-        print("JUMPSELLER WEBHOOK V52:", {"event": evento, "order_id": order_id, "status": status, "total": total, "shipping": shipping, "method": metodo})
+        print("JUMPSELLER WEBHOOK V53:", {
+            "event": evento, "order_id": order_id, "status": status,
+            "total": total, "shipping": shipping, "method": metodo,
+            "telefono": telefono,
+        })
 
-        if status in {"paid", "pagado"} or "paid" in normalizar_texto(evento):
+        evento_norm = normalizar_texto(evento)
+        es_pagado = status in {"paid", "pagado"} or "paid" in evento_norm
+        es_cancelado = status in {"canceled", "cancelled", "cancelado", "abandoned"} or "cancel" in evento_norm
+        es_pendiente = status in {"pending", "pending payment", "pending_payment", "created", "open"}
+
+        if es_pagado:
             guardar_venta_evento(
                 f"JS_{order_id}", telefono, "PAGADO_JUMPSELLER", total,
                 jumpseller_order_id=str(order_id or ""),
                 detalle=f"evento={evento}; despacho={shipping}; metodo={metodo}",
             )
-            if telefono:
-                enviar_mensaje_twilio(
-                    telefono,
-                    "✅ *¡Pago confirmado!*\n\n"
-                    f"Pedido La Ortiga: #{order_id}\n"
-                    f"Total: {clp(total)}\n"
-                    + (f"Despacho: {clp(shipping)} — {metodo}\n" if shipping else "")
-                    + "\nTu compra quedó confirmada 🌿",
-                )
+            if telefono_twilio:
+                partes = [
+                    "✅ *¡Pago confirmado!*",
+                    "",
+                    f"Pedido La Ortiga: *#{order_id}*",
+                    f"Total: *{clp(total)}*",
+                ]
+                if shipping not in (None, "", 0, 0.0, "0", "0.0"):
+                    linea = f"Despacho: *{clp(shipping)}*"
+                    if metodo:
+                        linea += f" — {metodo}"
+                    partes.append(linea)
+                partes += ["", "Tu compra quedó confirmada 🌿", "Te contactaremos por este mismo WhatsApp con la información de entrega."]
+                enviar_mensaje_twilio(telefono_twilio, "\n".join(partes))
+
+            # Si el estado todavía existe en esta instancia, lo dejamos limpio.
+            if telefono_twilio and telefono_twilio in ESTADOS:
+                reset_estado(telefono_twilio)
+
+        elif es_cancelado:
+            guardar_venta_evento(
+                f"JS_{order_id}", telefono, "CANCELADO_JUMPSELLER", total,
+                jumpseller_order_id=str(order_id or ""),
+                detalle=f"evento={evento}; status={status_raw}",
+            )
+
+        elif es_pendiente:
+            guardar_venta_evento(
+                f"JS_{order_id}", telefono, "PENDIENTE_JUMPSELLER", total,
+                jumpseller_order_id=str(order_id or ""),
+                detalle=f"evento={evento}; status={status_raw}",
+            )
+
         return "OK", 200
     except Exception as e:
-        print("JUMPSELLER WEBHOOK ERROR V52:", repr(e))
-        return "OK", 200
+        print("JUMPSELLER WEBHOOK ERROR V53:", repr(e))
+        # Devolvemos 500 para que Jumpseller pueda reintentar un fallo transitorio.
+        return "Error", 500
 
 
 @app.route("/")
