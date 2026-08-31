@@ -24,7 +24,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-31-V47-LAORTIGA-COMUNAS-FUZZY-STATE-FIX"
+APP_VERSION = "2026-08-31-V48-LAORTIGA-REGIONES-CHILE-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -934,8 +934,69 @@ def _coincide_geo(valor, aliases):
     return False
 
 
+def _variantes_region_chile(valor):
+    """Genera variantes equivalentes para comparar regiones chilenas de forma robusta."""
+    n = normalizar_texto(valor)
+    if not n:
+        return set()
+    out = {n}
+    # Limpieza de prefijos/sufijos comunes
+    limpio = re.sub(r"\b(region|region de|reg de|region del|region de la)\b", " " , n)
+    limpio = re.sub(r"\s+", " ", limpio).strip()
+    if limpio:
+        out.add(limpio)
+
+    aliases = {
+        "arica y parinacota": {"15", "xv", "region xv", "region 15"},
+        "tarapaca": {"01", "1", "i", "region i", "region 1"},
+        "antofagasta": {"02", "2", "ii", "region ii", "region 2"},
+        "atacama": {"03", "3", "iii", "region iii", "region 3"},
+        "coquimbo": {"04", "4", "iv", "region iv", "region 4"},
+        "valparaiso": {"05", "5", "v", "region v", "region 5"},
+        "metropolitana de santiago": {"13", "rm", "region metropolitana", "santiago", "region 13"},
+        "metropolitana": {"13", "rm", "region metropolitana", "santiago", "region 13"},
+        "libertador general bernardo ohiggins": {"06", "6", "vi", "ohiggins", "region vi", "region 6"},
+        "ohiggins": {"06", "6", "vi", "libertador general bernardo ohiggins", "region vi", "region 6"},
+        "maule": {"07", "7", "vii", "region vii", "region 7"},
+        "nuble": {"16", "xvi", "region xvi", "region 16"},
+        "biobio": {"08", "8", "viii", "bio bio", "region viii", "region 8"},
+        "la araucania": {"09", "9", "ix", "araucania", "region ix", "region 9"},
+        "araucania": {"09", "9", "ix", "la araucania", "region ix", "region 9"},
+        "los rios": {"14", "xiv", "region xiv", "region 14"},
+        "los lagos": {"10", "x", "region x", "region 10"},
+        "aysen del general carlos ibanez del campo": {"11", "xi", "aysen", "region xi", "region 11"},
+        "aysen": {"11", "xi", "aysen del general carlos ibanez del campo", "region xi", "region 11"},
+        "magallanes y de la antartica chilena": {"12", "xii", "magallanes", "region xii", "region 12"},
+        "magallanes": {"12", "xii", "magallanes y de la antartica chilena", "region xii", "region 12"},
+    }
+    for canon, vals in aliases.items():
+        canon_n = normalizar_texto(canon)
+        vals_n = {normalizar_texto(x) for x in vals}
+        if n == canon_n or n in vals_n or limpio == canon_n or limpio in vals_n:
+            out.add(canon_n)
+            out.update(vals_n)
+    return out
+
+
+def _texto_geo_recursivo(valor):
+    """Aplana estructuras geográficas de Jumpseller para matching tolerante."""
+    partes = []
+    if valor is None:
+        return ""
+    if isinstance(valor, dict):
+        for k, v in valor.items():
+            if k in {"location", "country", "country_code", "region", "region_code", "state", "municipality", "municipality_code", "city", "commune", "comuna", "name", "label", "code", "id"}:
+                partes.append(_texto_geo_recursivo(v))
+    elif isinstance(valor, (list, tuple, set)):
+        for v in valor:
+            partes.append(_texto_geo_recursivo(v))
+    else:
+        partes.append(str(valor))
+    return " ".join(x for x in partes if x).strip()
+
+
 def _puntaje_ubicacion_tabla(locations, comuna, geo=None):
-    """Puntúa país/región/comuna tolerando códigos, nombres, diccionarios y alias."""
+    """Puntúa país/región/comuna con tolerancia a formatos distintos de Jumpseller."""
     if not locations:
         return 1
 
@@ -946,44 +1007,67 @@ def _puntaje_ubicacion_tabla(locations, comuna, geo=None):
         normalizar_texto(geo.get("municipality_code")),
     }
     comuna_aliases.discard("")
-    region_aliases = _region_aliases_chile(geo.get("region_name"), geo.get("region_code"))
+
+    region_aliases = set()
+    region_aliases.update(_region_aliases_chile(geo.get("region_name"), geo.get("region_code")))
+    region_aliases.update(_variantes_region_chile(geo.get("region_name")))
+    region_aliases.update(_variantes_region_chile(geo.get("region_code")))
+    region_aliases.discard("")
+
     mejor = -1
-
     for raw in locations:
-        loc = raw.get("location", raw) if isinstance(raw, dict) else {}
-        if not isinstance(loc, dict):
-            continue
+        # Algunas tiendas devuelven location como string/código, no dict.
+        loc = raw.get("location", raw) if isinstance(raw, dict) else raw
 
-        country = _valor_texto_geo(loc.get("country") or loc.get("country_code"))
-        region = loc.get("region") or loc.get("region_code") or loc.get("state")
-        municipality = (
-            loc.get("municipality") or loc.get("municipality_code") or
-            loc.get("city") or loc.get("commune") or loc.get("comuna")
-        )
+        if isinstance(loc, dict):
+            country = _valor_texto_geo(loc.get("country") or loc.get("country_code"))
+            region = loc.get("region") or loc.get("region_code") or loc.get("state")
+            municipality = (
+                loc.get("municipality") or loc.get("municipality_code") or
+                loc.get("city") or loc.get("commune") or loc.get("comuna")
+            )
 
-        country_norm = normalizar_texto(country)
-        if country_norm and country_norm not in {"cl", "chile"}:
-            continue
-
-        municipio_ok = False
-        if municipality not in (None, ""):
-            municipio_ok = _coincide_geo(municipality, comuna_aliases)
-            if not municipio_ok:
+            country_norm = normalizar_texto(country)
+            if country_norm and country_norm not in {"cl", "chile"}:
                 continue
 
-        if region not in (None, ""):
-            if region_aliases:
-                if not _coincide_geo(region, region_aliases):
+            municipio_ok = False
+            if municipality not in (None, ""):
+                municipio_ok = _coincide_geo(municipality, comuna_aliases)
+                if not municipio_ok:
                     continue
-            elif not municipio_ok:
-                continue
 
-        score = 10 if country_norm else 0
-        score += 20 if region not in (None, "") else 0
-        score += 30 if municipality not in (None, "") else 0
-        mejor = max(mejor, score or 1)
+            region_ok = False
+            if region not in (None, ""):
+                region_txt = normalizar_texto(_valor_texto_geo(region))
+                loc_region_aliases = _variantes_region_chile(region_txt) | {region_txt}
+                region_ok = bool(region_aliases & loc_region_aliases) or _coincide_geo(region, region_aliases)
+                if region_aliases and not region_ok:
+                    continue
+                if not region_aliases and not municipio_ok:
+                    continue
+
+            score = 10 if country_norm else 0
+            score += 20 if region not in (None, "") else 0
+            score += 30 if municipality not in (None, "") else 0
+            mejor = max(mejor, score or 1)
+            continue
+
+        # Fallback para strings/códigos simples dentro de locations.
+        txt = normalizar_texto(_texto_geo_recursivo(loc))
+        if not txt:
+            continue
+        if _coincide_geo(txt, comuna_aliases):
+            mejor = max(mejor, 30)
+            continue
+        loc_aliases = _variantes_region_chile(txt) | {txt}
+        if region_aliases and (region_aliases & loc_aliases or _coincide_geo(txt, region_aliases)):
+            mejor = max(mejor, 20)
+            continue
+        if txt in {"cl", "chile"}:
+            mejor = max(mejor, 10)
+
     return mejor
-
 
 def _tablas_metodo(metodo):
     tablas = metodo.get("tables") or metodo.get("shipping_tables") or metodo.get("rates") or []
@@ -1009,8 +1093,8 @@ def _values_tabla(table):
 def cotizar_despacho_jumpseller(carrito, comuna):
     """Cotiza despacho desde las Tablas de Tarifas activas de Jumpseller.
 
-    V46 endurece la lectura de tablas y el matching de regiones/comunas para Chile,
-    especialmente nombres como Viña del Mar -> Valparaíso.
+    V48 refuerza el matching regional de Chile y acepta códigos, nombres, romanos
+    y estructuras variables de locations devueltas por Jumpseller.
     """
     inicio = time.monotonic()
     data = js_request("GET", "/shipping_methods.json", timeout=(3, 7))
@@ -1101,8 +1185,9 @@ def cotizar_despacho_jumpseller(carrito, comuna):
                 "type": metodo.get("type"),
                 "tablas": len(tablas),
                 "table_keys": list((tablas[0].get("table", tablas[0]) if tablas and isinstance(tablas[0], dict) else {}).keys())[:12] if tablas else [],
+                "locations_sample": (_locations_tabla(tablas[0].get("table", tablas[0]))[:3] if tablas and isinstance(tablas[0], dict) else []),
             })
-        print("JUMPSELLER TARIFAS DEBUG V46:", resumen)
+        print("JUMPSELLER TARIFAS DEBUG V48:", resumen)
 
         # Solo usa fallback si el administrador configuró explícitamente un precio > 0.
         if DEFAULT_SHIPPING_PRICE > 0:
