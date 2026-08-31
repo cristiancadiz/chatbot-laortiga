@@ -4,6 +4,7 @@ import html
 import json
 import hmac
 import hashlib
+import base64
 import gc
 import uuid
 import time
@@ -24,7 +25,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-31-V51-LAORTIGA-EXTERNAL-SHIPPING-AWARE"
+APP_VERSION = "2026-08-31-V52-LAORTIGA-JUMPSELLER-CHECKOUT-NACIONAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -269,6 +270,7 @@ def guardar_venta_evento(ref, telefono, estado, total, jumpseller_order_id="", p
 
 JUMPSELLER_LOGIN = os.getenv("JUMPSELLER_LOGIN")
 JUMPSELLER_AUTH_TOKEN = os.getenv("JUMPSELLER_AUTH_TOKEN")
+JUMPSELLER_HOOKS_TOKEN = os.getenv("JUMPSELLER_HOOKS_TOKEN", "")
 JUMPSELLER_BASE = "https://api.jumpseller.com/v1"
 PRODUCT_CACHE_SECONDS = int(os.getenv("PRODUCT_CACHE_SECONDS", "90"))
 JS_CONNECT_TIMEOUT = float(os.getenv("JS_CONNECT_TIMEOUT", "4"))
@@ -584,10 +586,53 @@ def buscar_cliente_por_email(email):
     return None
 
 
-def buscar_o_crear_cliente(email, nombre, telefono, direccion="", comuna=""):
+def _direccion_cliente_payload(nombre, telefono, direccion, comuna, region_code=""):
+    partes = (nombre or "").strip().split(" ", 1)
+    shipping_address = {
+        "name": partes[0] if partes else nombre,
+        "surname": partes[1] if len(partes) > 1 else "",
+        "address": direccion,
+        "city": comuna or "Santiago",
+        "municipality": comuna or "Santiago",
+        "country": "CL",
+    }
+    if region_code:
+        shipping_address["region"] = str(region_code)
+    return shipping_address
+
+
+def actualizar_direccion_cliente_jumpseller(customer_id, nombre, telefono, direccion, comuna, region_code=""):
+    if not customer_id or not direccion:
+        return None
+    payload = {
+        "customer": {
+            "fullname": nombre,
+            "phone": telefono,
+            "shipping_address": _direccion_cliente_payload(
+                nombre, telefono, direccion, comuna, region_code
+            ),
+        }
+    }
+    try:
+        data = js_request("PUT", f"/customers/{int(customer_id)}.json", json=payload)
+        return data.get("customer", data)
+    except Exception as e:
+        # No detenemos la compra por un fallo de actualización: si el cliente ya
+        # tenía una dirección válida, Jumpseller igualmente puede abrir el checkout.
+        print("JUMPSELLER CUSTOMER ADDRESS UPDATE V52:", repr(e))
+        return None
+
+
+def buscar_o_crear_cliente(email, nombre, telefono, direccion="", comuna="", region_code=""):
     existente = buscar_cliente_por_email(email)
     if existente:
         print("JUMPSELLER CLIENTE EXISTENTE:", existente.get("id"), email)
+        if direccion:
+            actualizado = actualizar_direccion_cliente_jumpseller(
+                existente.get("id"), nombre, telefono, direccion, comuna, region_code
+            )
+            if actualizado:
+                existente = actualizado
         return existente
 
     customer = {
@@ -597,27 +642,25 @@ def buscar_o_crear_cliente(email, nombre, telefono, direccion="", comuna=""):
         "status": "approved",
     }
     if direccion:
-        partes = nombre.strip().split(" ", 1)
-        customer["shipping_address"] = {
-            "name": partes[0] if partes else nombre,
-            "surname": partes[1] if len(partes) > 1 else "",
-            "address": direccion,
-            "city": comuna or "Santiago",
-            "municipality": comuna or "Santiago",
-            "country": "CL",
-        }
+        customer["shipping_address"] = _direccion_cliente_payload(
+            nombre, telefono, direccion, comuna, region_code
+        )
 
     try:
         data = js_request("POST", "/customers.json", json={"customer": customer})
         return data.get("customer", data)
     except RuntimeError as e:
-        # Protección contra carrera/inconsistencia del filtro de Jumpseller:
-        # si el correo ya existía, lo recuperamos y continuamos la compra.
         msg = str(e).lower()
         if "correo electrónico ya está registrado" in msg or "email" in msg and "registr" in msg:
             existente = buscar_cliente_por_email(email)
             if existente:
                 print("JUMPSELLER CLIENTE RECUPERADO TRAS DUPLICADO:", existente.get("id"), email)
+                if direccion:
+                    actualizado = actualizar_direccion_cliente_jumpseller(
+                        existente.get("id"), nombre, telefono, direccion, comuna, region_code
+                    )
+                    if actualizado:
+                        existente = actualizado
                 return existente
         raise
 
@@ -1373,7 +1416,7 @@ def cotizar_despacho_jumpseller(carrito, comuna):
     return elegido
 
 
-def crear_pedido_jumpseller(customer_id, carrito, tipo_entrega, direccion, comuna, tarifa_envio=None):
+def _productos_order_jumpseller(carrito):
     products = []
     for item in carrito:
         linea = {
@@ -1384,28 +1427,56 @@ def crear_pedido_jumpseller(customer_id, carrito, tipo_entrega, direccion, comun
         if item.get("variant_id"):
             linea["variant_id"] = int(item["variant_id"])
         products.append(linea)
+    return products
+
+
+def crear_pedido_abierto_jumpseller(customer_id, carrito, tipo_entrega):
+    """Crea un pedido Created/Open y devuelve su checkout_url.
+
+    V52 delega a Jumpseller el cálculo nacional de despacho y el pago.
+    La clave es NO enviar status: Jumpseller crea un carrito vivo (Created/Open).
+    """
+    order = {
+        "customer": {"id": int(customer_id)},
+        "products": _productos_order_jumpseller(carrito),
+    }
 
     if tipo_entrega == "despacho":
-        if not tarifa_envio:
-            tarifa_envio = cotizar_despacho_jumpseller(carrito, comuna)
-        envio = float(tarifa_envio["shipping_price"])
-        metodo_nombre = tarifa_envio.get("shipping_method_name") or JUMPSELLER_SHIPPING_METHOD_NAME
+        # No fijamos tarifa ni método: el checkout debe calcular Correos Chile,
+        # Blue Express, tablas u otros métodos aplicables a la dirección del cliente.
+        order["shipping_required"] = True
     else:
-        envio = 0.0
-        metodo_nombre = "Retiro coordinado"
+        # Para retiro no necesitamos tarificador.
+        order["shipping_required"] = False
 
-    order = {
-        "status": "Pending Payment",
-        # Enviamos el nombre + precio calculado desde la tabla. Según la API de
-        # Jumpseller, shipping_price aplica cuando se entrega shipping_method_name.
-        "shipping_method_name": metodo_nombre,
-        "shipping_price": envio,
-        "shipping_required": tipo_entrega == "despacho",
-        "customer": {"id": int(customer_id)},
-        "products": products,
-    }
-    data = js_request("POST", "/orders.json", json={"order": order})
-    return data.get("order", data)
+    try:
+        data = js_request("POST", "/orders.json", json={"order": order})
+    except RuntimeError as e:
+        # Algunas tiendas exigen nombre/precio aun en pedidos abiertos. Dejamos un
+        # fallback de $0 para que el cliente pueda continuar y revisar el checkout.
+        if tipo_entrega == "despacho":
+            print("JUMPSELLER OPEN ORDER FALLBACK V52:", repr(e))
+            order["shipping_method_name"] = "Despacho a seleccionar en checkout"
+            order["shipping_price"] = 0
+            data = js_request("POST", "/orders.json", json={"order": order})
+        else:
+            raise
+
+    pedido = data.get("order", data)
+    checkout_url = pedido.get("checkout_url") or pedido.get("review_url")
+    if not checkout_url:
+        raise RuntimeError(f"Jumpseller creó el pedido {pedido.get('id')} pero no devolvió checkout_url/review_url")
+
+    print(
+        "JUMPSELLER OPEN ORDER V52:",
+        {
+            "id": pedido.get("id"),
+            "status": pedido.get("status") or pedido.get("status_enum"),
+            "checkout_url": checkout_url,
+            "shipping_required": pedido.get("shipping_required"),
+        },
+    )
+    return pedido
 
 
 def actualizar_estado_pedido(order_id, status):
@@ -1866,37 +1937,37 @@ def iniciar_checkout(estado):
 
 
 def preparar_pago(estado):
+    """V52: crea un checkout real en Jumpseller.
+
+    Jumpseller calcula el despacho nacional (incluidos métodos dinámicos) y procesa
+    el pago con los medios configurados en la tienda.
+    """
     carrito, errores = verificar_carrito_actual(estado["carrito"])
     if errores:
         estado["carrito"] = carrito
         estado["paso"] = "inicio"
-        return False, "Antes de cobrar encontré estos cambios:\n- " + "\n- ".join(errores) + "\n\nRevisa tu carrito nuevamente."
+        return False, "Antes de finalizar encontré estos cambios:\n- " + "\n- ".join(errores) + "\n\nRevisa tu carrito nuevamente."
     estado["carrito"] = carrito
 
     c = estado["checkout"]
     subtotal = total_carrito(carrito)
-    tarifa_envio = None
-    if c.get("tipo_entrega") == "despacho":
-        # Recalculamos justo antes de cobrar por si el administrador cambió la
-        # Tabla de Tarifas desde que el cliente confirmó sus datos.
-        tarifa_envio = cotizar_despacho_jumpseller(carrito, c.get("comuna", ""))
-        envio = float(tarifa_envio["shipping_price"])
-        c["shipping_price"] = envio
-        c["shipping_method_id"] = tarifa_envio.get("shipping_method_id")
-        c["shipping_method_name"] = tarifa_envio.get("shipping_method_name")
-        c["region_code"] = tarifa_envio.get("region_code", "")
-        c["region_name"] = tarifa_envio.get("region_name", "")
-    else:
-        envio = 0.0
-    total = subtotal + envio
-    ref = "LO_" + uuid.uuid4().hex[:24]
+    telefono = telefono_sin_prefijo_twilio(estado["telefono"])
 
     customer = buscar_o_crear_cliente(
-        c["email"], c["nombre"], telefono_sin_prefijo_twilio(estado["telefono"]), c.get("direccion", ""), c.get("comuna", "")
+        c["email"],
+        c["nombre"],
+        telefono,
+        c.get("direccion", ""),
+        c.get("comuna", ""),
+        c.get("region_code", ""),
     )
-    order = crear_pedido_jumpseller(
-        customer["id"], carrito, c["tipo_entrega"], c.get("direccion", ""), c.get("comuna", ""), tarifa_envio=tarifa_envio
+
+    pedido = crear_pedido_abierto_jumpseller(
+        customer["id"], carrito, c["tipo_entrega"]
     )
+    order_id = pedido.get("id")
+    checkout_url = pedido.get("checkout_url") or pedido.get("review_url")
+    ref = "JS_" + str(order_id or uuid.uuid4().hex[:16])
 
     checkout = {
         "ref": ref,
@@ -1906,44 +1977,39 @@ def preparar_pago(estado):
         "direccion": c.get("direccion", ""),
         "comuna": c.get("comuna", ""),
         "tipo_entrega": c["tipo_entrega"],
-        "shipping_price": envio,
-        "shipping_method_id": c.get("shipping_method_id"),
-        "shipping_method_name": c.get("shipping_method_name", ""),
         "region_code": c.get("region_code", ""),
         "region_name": c.get("region_name", ""),
+        "municipality_code": c.get("municipality_code", ""),
         "subtotal": subtotal,
-        "total": total,
         "carrito": carrito,
-        "jumpseller_order_id": order["id"],
+        "jumpseller_order_id": order_id,
+        "checkout_url": checkout_url,
     }
 
-    try:
-        pref = crear_preferencia_mp(checkout)
-    except Exception:
-        try:
-            actualizar_estado_pedido(order["id"], "Canceled")
-        except Exception as e2:
-            print("NO SE PUDO CANCELAR ORDER TRAS ERROR MP:", repr(e2))
-        raise
-
     guardar_venta_evento(
-        ref, estado["telefono"], "PENDIENTE_PAGO", total,
-        jumpseller_order_id=str(order["id"]),
+        ref, estado["telefono"], "CHECKOUT_JUMPSELLER", subtotal,
+        jumpseller_order_id=str(order_id or ""),
         detalle=json.dumps(checkout, ensure_ascii=False)[:45000],
     )
 
-    estado["paso"] = "esperando_pago"
+    estado["paso"] = "esperando_pago_jumpseller"
     estado["checkout"]["ref"] = ref
-    estado["checkout"]["jumpseller_order_id"] = order["id"]
+    estado["checkout"]["jumpseller_order_id"] = order_id
+    estado["checkout"]["checkout_url"] = checkout_url
+
+    entrega_txt = (
+        "En el checkout podrás elegir la opción de despacho disponible para tu dirección y ver su valor en tiempo real."
+        if c.get("tipo_entrega") == "despacho"
+        else "El pedido quedó configurado para retiro; revisa los datos antes de pagar."
+    )
 
     return True, (
-        "💳 *Tu compra está lista para pagar*\n\n"
-        f"Subtotal: {clp(subtotal)}\n"
-        + (f"Despacho: {clp(envio)}\n" if envio else "")
-        + f"*Total: {clp(total)}*\n\n"
-        "👇 *PAGAR AHORA*\n"
-        f"{pref.get('init_point')}\n\n"
-        "Cuando Mercado Pago confirme el pago, te avisaré por este mismo WhatsApp ✅"
+        "🛒 *Tu compra está lista para finalizar*\n\n"
+        f"Subtotal productos: *{clp(subtotal)}*\n"
+        f"{entrega_txt}\n\n"
+        "👇 *CONTINUAR EN JUMPSELLER*\n"
+        f"{checkout_url}\n\n"
+        "Ahí podrás confirmar el despacho y pagar con los medios disponibles en la tienda ✅"
     )
 
 
@@ -2061,15 +2127,16 @@ def procesar_texto(telefono, texto):
             estado["checkout"]["tipo_entrega"] = "retiro"
             estado["checkout"]["direccion"] = ""
             estado["checkout"]["comuna"] = ""
-            estado["checkout"]["shipping_price"] = 0.0
             estado["paso"] = "checkout_confirmar"
             return resumen_confirmacion(estado)
         if "desp" in n or n == "envio":
             return "Ya elegiste *DESPACHO* 👍 Ahora necesito la *comuna* de entrega. Por ejemplo: *Viña del Mar*."
 
-        # Antes de cotizar validamos y corregimos la comuna contra Jumpseller.
+        # V52 solo valida la comuna. NO intenta cotizar aquí: Jumpseller hará la
+        # cotización nacional en su checkout usando Correos Chile, Blue Express,
+        # tablas de tarifas u otros métodos activos.
         geo = resolver_region_comuna_jumpseller(txt[:100], max_seconds=12, permitir_fuzzy=True)
-        if not geo.get("municipality_name") or not geo.get("region_code"):
+        if not geo.get("municipality_name"):
             estado["paso"] = "checkout_comuna"
             return (
                 "No logré reconocer esa comuna 🤔. Escríbela nuevamente, por ejemplo *Viña del Mar*. "
@@ -2079,38 +2146,23 @@ def procesar_texto(telefono, texto):
         comuna_original = txt[:100]
         comuna_corregida = geo.get("municipality_name") or comuna_original
         estado["checkout"]["comuna"] = comuna_corregida
-        if normalizar_texto(comuna_corregida) != normalizar_texto(comuna_original):
-            print("COMUNA CORREGIDA V51:", comuna_original, "->", comuna_corregida, "score=", geo.get("match_score"))
+        estado["checkout"]["region_code"] = geo.get("region_code", "")
+        estado["checkout"]["region_name"] = geo.get("region_name", "")
+        estado["checkout"]["municipality_code"] = geo.get("municipality_code", "")
 
-        try:
-            tarifa = cotizar_despacho_jumpseller(estado["carrito"], comuna_corregida)
-            estado["checkout"]["shipping_price"] = float(tarifa["shipping_price"])
-            estado["checkout"]["shipping_method_id"] = tarifa.get("shipping_method_id")
-            estado["checkout"]["shipping_method_name"] = tarifa.get("shipping_method_name")
-            estado["checkout"]["region_code"] = tarifa.get("region_code") or geo.get("region_code", "")
-            estado["checkout"]["region_name"] = tarifa.get("region_name") or geo.get("region_name", "")
-        except ExternalShippingRateRequired as e:
-            print("JUMPSELLER COTIZACION EXTERNA V51:", repr(e))
-            estado["paso"] = "checkout_comuna"
-            metodos_txt = ", ".join(e.metodos[:3]) if e.metodos else "un cotizador automático"
-            return (
-                f"Reconocí la comuna como *{comuna_corregida}* ✅\n\n"
-                f"Para esa zona tu tienda usa una tarifa dinámica de despacho ({metodos_txt}). "
-                "Ese valor se calcula en tiempo real dentro del checkout de Jumpseller y no viene calculado en la API de métodos de envío que usa este bot.\n\n"
-                "Por ahora puedes escribir *RETIRO* o *CANCELAR*. No te cobraré un despacho inventado."
-            )
-        except Exception as e:
-            print("JUMPSELLER COTIZACION DESPACHO ERROR V51:", repr(e))
-            estado["paso"] = "checkout_comuna"
-            return (
-                f"Reconocí la comuna como *{comuna_corregida}*, pero no encontré una tarifa de despacho configurada para ella. "
-                "Puedes intentar otra comuna, escribir *RETIRO* o *CANCELAR*."
-            )
+        print(
+            "JUMPSELLER GEO CHECKOUT V52:",
+            comuna_original, "->", comuna_corregida,
+            "municipality_id=", geo.get("municipality_code"),
+            "region=", geo.get("region_name"),
+            "region_code=", geo.get("region_code"),
+        )
 
         estado["paso"] = "checkout_confirmar"
+        prefijo = ""
         if normalizar_texto(comuna_corregida) != normalizar_texto(comuna_original):
-            return f"Entendí *{comuna_corregida}* 👍\n\n" + resumen_confirmacion(estado)
-        return resumen_confirmacion(estado)
+            prefijo = f"Entendí *{comuna_corregida}* 👍\n\n"
+        return prefijo + resumen_confirmacion(estado)
 
     if paso == "checkout_confirmar":
         if n in {"confirmar", "confirmo", "si", "sí", "ok", "pagar"}:
@@ -2126,10 +2178,13 @@ def procesar_texto(telefono, texto):
             return "No hay problema. Tu carrito sigue guardado."
         return "Si los datos están correctos escribe *CONFIRMAR*. Si no, escribe *CANCELAR*."
 
-    if paso == "esperando_pago":
+    if paso in {"esperando_pago", "esperando_pago_jumpseller"}:
         if n in {"estado pago", "pague", "pagué", "ya pague", "ya pagué"}:
-            return "Estoy esperando la confirmación automática de Mercado Pago. Apenas se apruebe, te aviso por aquí ✅"
-        return "Tu pago está pendiente. Si quieres revisar productos mientras tanto, escribe *MENÚ*."
+            return "Estoy esperando la confirmación de Jumpseller. Si el pago ya fue aprobado, la tienda actualizará el pedido automáticamente ✅"
+        url = estado.get("checkout", {}).get("checkout_url")
+        if url:
+            return f"Tu checkout sigue disponible aquí:\n{url}\n\nCuando termines el pago, Jumpseller actualizará el pedido."
+        return "Tu checkout está pendiente. Si quieres volver al menú escribe *MENÚ*."
 
     # ---------- SELECCION DE RESULTADOS ----------
     # Cuando el cliente está viendo la ficha de un producto, los números representan
@@ -2240,7 +2295,6 @@ def procesar_texto(telefono, texto):
 
 def resumen_confirmacion(estado):
     c = estado["checkout"]
-    envio = float(c.get("shipping_price", 0) or 0) if c.get("tipo_entrega") == "despacho" else 0
     subtotal = total_carrito(estado["carrito"])
     lineas = [
         "🧾 *Confirma tu compra*", "",
@@ -2252,11 +2306,16 @@ def resumen_confirmacion(estado):
     ]
     if c.get("tipo_entrega") == "despacho":
         lineas += [
-            f"Dirección: {c.get('direccion')}", f"Comuna: {c.get('comuna')}",
-            f"Método de despacho: {c.get('shipping_method_name') or 'Tabla de Tarifas Jumpseller'}",
-            f"Despacho: {clp(envio)}",
+            f"Dirección: {c.get('direccion')}",
+            f"Comuna: {c.get('comuna')}",
+            "Despacho: *se calculará en tiempo real en Jumpseller*",
         ]
-    lineas += ["", f"*Total a pagar: {clp(subtotal + envio)}*", "", "Si todo está correcto escribe *CONFIRMAR*."]
+    lineas += [
+        "",
+        f"*Subtotal productos: {clp(subtotal)}*",
+        "",
+        "Si todo está correcto escribe *CONFIRMAR*. Luego te enviaré el checkout de Jumpseller para elegir despacho y pagar.",
+    ]
     return "\n".join(lineas)
 
 
@@ -2468,6 +2527,69 @@ def pago_fallido():
     return "<h2>Pago no completado</h2><p>Vuelve a WhatsApp e intenta nuevamente.</p>", 200
 
 
+def _validar_webhook_jumpseller(raw_body, hmac_header):
+    if not JUMPSELLER_HOOKS_TOKEN:
+        print("JUMPSELLER WEBHOOK WARNING V52: JUMPSELLER_HOOKS_TOKEN no configurado")
+        return False
+    esperado = base64.b64encode(
+        hmac.new(
+            JUMPSELLER_HOOKS_TOKEN.encode("utf-8"),
+            raw_body,
+            hashlib.sha256,
+        ).digest()
+    ).decode("ascii")
+    return hmac.compare_digest(esperado, hmac_header or "")
+
+
+@app.route("/jumpseller/webhook", methods=["POST"])
+def jumpseller_webhook():
+    raw = request.get_data(cache=True)
+    hmac_header = request.headers.get("Jumpseller-Hmac-Sha256", "")
+    evento = request.headers.get("Jumpseller-Event", "")
+
+    # Si se configura el token, exigimos firma válida. En pruebas sin token solo
+    # registramos el webhook y devolvemos 200 para no bloquear Jumpseller.
+    if JUMPSELLER_HOOKS_TOKEN and not _validar_webhook_jumpseller(raw, hmac_header):
+        print("JUMPSELLER WEBHOOK FIRMA INVALIDA V52", evento)
+        return "Invalid signature", 401
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        order = payload.get("order", payload) if isinstance(payload, dict) else {}
+        if not isinstance(order, dict):
+            return "OK", 200
+
+        order_id = order.get("id")
+        status = normalizar_texto(order.get("status") or order.get("status_enum"))
+        customer = order.get("customer") or {}
+        telefono = customer.get("phone") or ""
+        total = order.get("total") or 0
+        shipping = order.get("shipping") or order.get("shipping_price") or 0
+        metodo = order.get("shipping_method_name") or ""
+
+        print("JUMPSELLER WEBHOOK V52:", {"event": evento, "order_id": order_id, "status": status, "total": total, "shipping": shipping, "method": metodo})
+
+        if status in {"paid", "pagado"} or "paid" in normalizar_texto(evento):
+            guardar_venta_evento(
+                f"JS_{order_id}", telefono, "PAGADO_JUMPSELLER", total,
+                jumpseller_order_id=str(order_id or ""),
+                detalle=f"evento={evento}; despacho={shipping}; metodo={metodo}",
+            )
+            if telefono:
+                enviar_mensaje_twilio(
+                    telefono,
+                    "✅ *¡Pago confirmado!*\n\n"
+                    f"Pedido La Ortiga: #{order_id}\n"
+                    f"Total: {clp(total)}\n"
+                    + (f"Despacho: {clp(shipping)} — {metodo}\n" if shipping else "")
+                    + "\nTu compra quedó confirmada 🌿",
+                )
+        return "OK", 200
+    except Exception as e:
+        print("JUMPSELLER WEBHOOK ERROR V52:", repr(e))
+        return "OK", 200
+
+
 @app.route("/")
 def health():
     return {
@@ -2476,7 +2598,7 @@ def health():
         "version": APP_VERSION,
         "whatsapp": "Twilio WhatsApp",
         "catalog": "Jumpseller REST API",
-        "payments": "Mercado Pago Checkout Pro",
+        "payments": "Jumpseller Checkout",
         "calendar": "disabled",
     }, 200
 
