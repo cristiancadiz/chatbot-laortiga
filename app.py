@@ -24,7 +24,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-31-V48-LAORTIGA-REGIONES-CHILE-FIX"
+APP_VERSION = "2026-08-31-V49-LAORTIGA-JUMPSELLER-WILDCARDS-MUNICIPALITY-ID-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -767,9 +767,9 @@ def resolver_region_comuna_jumpseller(comuna, max_seconds=12.0, permitir_fuzzy=T
             if len(_GEO_CACHE) > GEO_CACHE_MAX:
                 oldest = min(_GEO_CACHE, key=lambda k: _GEO_CACHE[k].get("ts", 0))
                 _GEO_CACHE.pop(oldest, None)
-            print("JUMPSELLER GEO CORREGIDO V47:", comuna, "->", mejor.get("municipality_name"), "/", mejor.get("region_name"), "score=", round(score, 3))
+            print("JUMPSELLER GEO CORREGIDO V49:", comuna, "->", mejor.get("municipality_name"), "/", mejor.get("region_name"), "score=", round(score, 3))
             return mejor
-        print("JUMPSELLER GEO NO RECONOCIDO V47:", comuna, "mejor=", mejor.get("municipality_name"), "score=", round(score, 3))
+        print("JUMPSELLER GEO NO RECONOCIDO V49:", comuna, "mejor=", mejor.get("municipality_name"), "score=", round(score, 3))
 
     return vacio
 
@@ -996,7 +996,14 @@ def _texto_geo_recursivo(valor):
 
 
 def _puntaje_ubicacion_tabla(locations, comuna, geo=None):
-    """Puntúa país/región/comuna con tolerancia a formatos distintos de Jumpseller."""
+    """Puntúa país/región/comuna usando la semántica real observada en Jumpseller.
+
+    V49 corrige dos casos detectados en producción:
+    1) Jumpseller usa ``*`` como comodín en country/region/municipality.
+    2) El código de ``region`` de shipping_methods puede pertenecer a un espacio de
+       códigos distinto al endpoint geográfico. Si el ID interno de municipality
+       coincide, esa coincidencia es suficiente y NO se descarta por región.
+    """
     if not locations:
         return 1
 
@@ -1016,7 +1023,6 @@ def _puntaje_ubicacion_tabla(locations, comuna, geo=None):
 
     mejor = -1
     for raw in locations:
-        # Algunas tiendas devuelven location como string/código, no dict.
         loc = raw.get("location", raw) if isinstance(raw, dict) else raw
 
         if isinstance(loc, dict):
@@ -1028,28 +1034,62 @@ def _puntaje_ubicacion_tabla(locations, comuna, geo=None):
             )
 
             country_norm = normalizar_texto(country)
-            if country_norm and country_norm not in {"cl", "chile"}:
+            region_norm = normalizar_texto(_valor_texto_geo(region))
+            municipality_norm = normalizar_texto(_valor_texto_geo(municipality))
+
+            country_wild = country_norm in {"", "*", "all", "any"}
+            region_wild = region_norm in {"", "*", "all", "any"}
+            municipality_wild = municipality_norm in {"", "*", "all", "any"}
+
+            # País: * significa cualquier país. Para esta integración aceptamos CL/Chile.
+            if not country_wild and country_norm not in {"cl", "chile"}:
                 continue
 
+            # Comuna/municipality es el identificador más específico. Si viene un ID
+            # específico y no coincide, esta location no aplica. Si coincide, no
+            # exigimos que el código de región también coincida, porque los logs de
+            # producción muestran namespaces de región distintos entre endpoints.
             municipio_ok = False
-            if municipality not in (None, ""):
+            if not municipality_wild:
                 municipio_ok = _coincide_geo(municipality, comuna_aliases)
                 if not municipio_ok:
                     continue
 
             region_ok = False
-            if region not in (None, ""):
-                region_txt = normalizar_texto(_valor_texto_geo(region))
-                loc_region_aliases = _variantes_region_chile(region_txt) | {region_txt}
+            if not region_wild:
+                loc_region_aliases = _variantes_region_chile(region_norm) | {region_norm}
                 region_ok = bool(region_aliases & loc_region_aliases) or _coincide_geo(region, region_aliases)
-                if region_aliases and not region_ok:
-                    continue
-                if not region_aliases and not municipio_ok:
-                    continue
 
-            score = 10 if country_norm else 0
-            score += 20 if region not in (None, "") else 0
-            score += 30 if municipality not in (None, "") else 0
+                # Solo hacemos obligatoria la región cuando NO tenemos una comuna/ID
+                # específico coincidente. Una municipality exacta es más fiable.
+                if not municipio_ok:
+                    if region_aliases and not region_ok:
+                        continue
+                    if not region_aliases:
+                        continue
+
+            # Scoring: cuanto más específica la ubicación, mayor prioridad.
+            score = 0
+            if not country_wild:
+                score += 10
+            else:
+                score += 1
+
+            if not region_wild:
+                if region_ok:
+                    score += 20
+                elif municipio_ok:
+                    # región presente pero con namespace distinto: no premia ni invalida
+                    score += 0
+            else:
+                score += 1
+
+            if not municipality_wild:
+                if municipio_ok:
+                    score += 40
+            else:
+                score += 1
+
             mejor = max(mejor, score or 1)
             continue
 
@@ -1057,8 +1097,11 @@ def _puntaje_ubicacion_tabla(locations, comuna, geo=None):
         txt = normalizar_texto(_texto_geo_recursivo(loc))
         if not txt:
             continue
+        if txt in {"*", "all", "any"}:
+            mejor = max(mejor, 1)
+            continue
         if _coincide_geo(txt, comuna_aliases):
-            mejor = max(mejor, 30)
+            mejor = max(mejor, 40)
             continue
         loc_aliases = _variantes_region_chile(txt) | {txt}
         if region_aliases and (region_aliases & loc_aliases or _coincide_geo(txt, region_aliases)):
@@ -1093,8 +1136,8 @@ def _values_tabla(table):
 def cotizar_despacho_jumpseller(carrito, comuna):
     """Cotiza despacho desde las Tablas de Tarifas activas de Jumpseller.
 
-    V48 refuerza el matching regional de Chile y acepta códigos, nombres, romanos
-    y estructuras variables de locations devueltas por Jumpseller.
+    V49 interpreta comodines (*) de Jumpseller y prioriza el ID interno de comuna
+    por sobre códigos de región incompatibles entre endpoints.
     """
     inicio = time.monotonic()
     data = js_request("GET", "/shipping_methods.json", timeout=(3, 7))
@@ -1187,7 +1230,7 @@ def cotizar_despacho_jumpseller(carrito, comuna):
                 "table_keys": list((tablas[0].get("table", tablas[0]) if tablas and isinstance(tablas[0], dict) else {}).keys())[:12] if tablas else [],
                 "locations_sample": (_locations_tabla(tablas[0].get("table", tablas[0]))[:3] if tablas and isinstance(tablas[0], dict) else []),
             })
-        print("JUMPSELLER TARIFAS DEBUG V48:", resumen)
+        print("JUMPSELLER TARIFAS DEBUG V49:", resumen)
 
         # Solo usa fallback si el administrador configuró explícitamente un precio > 0.
         if DEFAULT_SHIPPING_PRICE > 0:
@@ -1928,7 +1971,7 @@ def procesar_texto(telefono, texto):
         comuna_corregida = geo.get("municipality_name") or comuna_original
         estado["checkout"]["comuna"] = comuna_corregida
         if normalizar_texto(comuna_corregida) != normalizar_texto(comuna_original):
-            print("COMUNA CORREGIDA V47:", comuna_original, "->", comuna_corregida, "score=", geo.get("match_score"))
+            print("COMUNA CORREGIDA V49:", comuna_original, "->", comuna_corregida, "score=", geo.get("match_score"))
 
         try:
             tarifa = cotizar_despacho_jumpseller(estado["carrito"], comuna_corregida)
@@ -1938,7 +1981,7 @@ def procesar_texto(telefono, texto):
             estado["checkout"]["region_code"] = tarifa.get("region_code") or geo.get("region_code", "")
             estado["checkout"]["region_name"] = tarifa.get("region_name") or geo.get("region_name", "")
         except Exception as e:
-            print("JUMPSELLER COTIZACION DESPACHO ERROR V47:", repr(e))
+            print("JUMPSELLER COTIZACION DESPACHO ERROR V49:", repr(e))
             estado["paso"] = "checkout_comuna"
             return (
                 f"Reconocí la comuna como *{comuna_corregida}*, pero no encontré una tarifa de despacho configurada para ella. "
