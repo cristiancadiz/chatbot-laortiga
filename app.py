@@ -22,7 +22,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-31-V40-LAORTIGA-MEMORIA-COMUNA-OPTIMIZADA"
+APP_VERSION = "2026-08-31-V41-LAORTIGA-FIX-BUSQUEDA-SHEETS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -152,6 +152,8 @@ GOOGLE_SHEET_SALES_TAB = os.getenv("GOOGLE_SHEET_SALES_TAB", "VentasBot")
 SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SHEETS_LOCK = Lock()
 SHEETS_READY = set()
+SHEETS_DISABLED = False
+SHEETS_LAST_ERROR = ""
 
 
 def obtener_credentials_sheets():
@@ -209,7 +211,8 @@ def asegurar_pestana(nombre, encabezados):
 
 
 def append_sheet(nombre, encabezados, fila):
-    if not GOOGLE_SHEET_ID:
+    global SHEETS_DISABLED, SHEETS_LAST_ERROR
+    if not GOOGLE_SHEET_ID or SHEETS_DISABLED:
         return False
     try:
         asegurar_pestana(nombre, encabezados)
@@ -223,7 +226,16 @@ def append_sheet(nombre, encabezados, fila):
         ).execute()
         return True
     except Exception as e:
-        print("SHEETS APPEND ERROR:", repr(e))
+        err = repr(e)
+        # Si Google revocó/expiró el refresh token, no insistimos dos veces por
+        # cada mensaje. El bot sigue funcionando con Jumpseller/Twilio y, al
+        # actualizar GOOGLE_REFRESH_TOKEN en Render, el redeploy reactiva Sheets.
+        if "invalid_grant" in err or "expired or revoked" in err.lower():
+            SHEETS_DISABLED = True
+            SHEETS_LAST_ERROR = err
+            print("SHEETS DESACTIVADO TEMPORALMENTE: GOOGLE_REFRESH_TOKEN expirado o revocado")
+        else:
+            print("SHEETS APPEND ERROR:", err)
         return False
 
 
@@ -332,10 +344,12 @@ def listar_productos(force=False):
         data = js_request("GET", "/products.json", params={"page": pagina, "limit": 100})
         items = data if isinstance(data, list) else data.get("products", [])
         lote = [_unwrap_product(x) for x in items]
+        cantidad_lote = len(lote)
         productos.extend([_producto_cache_liviano(p) for p in lote if p])
-        # Libera la respuesta JSON completa de esta página antes de pedir la siguiente.
+        # Guardamos el tamaño ANTES de liberar lote. En V40 se eliminaba lote y
+        # después se intentaba hacer len(lote), provocando UnboundLocalError.
         del data, items, lote
-        if len(lote) < 100:
+        if cantidad_lote < 100:
             break
 
     _PRODUCT_CACHE["ts"] = ahora
