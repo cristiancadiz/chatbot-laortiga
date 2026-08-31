@@ -9,6 +9,7 @@ import uuid
 import time
 from datetime import datetime
 from threading import Lock
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
 import requests
 import pytz
@@ -22,7 +23,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-31-V44-LAORTIGA-FILTRO-PRECIO-STOCK-ESTRICTO"
+APP_VERSION = "2026-08-31-V45-LAORTIGA-TARIFAS-REGIONES-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -646,11 +647,13 @@ GEO_CACHE_MAX = int(os.getenv("GEO_CACHE_MAX", "120"))
 _GEO_CACHE = {}
 
 
-def resolver_region_comuna_jumpseller(comuna, max_seconds=8.0):
-    """Resuelve región/comuna con límite de tiempo para no bloquear Render.
+def resolver_region_comuna_jumpseller(comuna, max_seconds=12.0):
+    """Resuelve cualquier comuna de Chile contra la geografía de Jumpseller.
 
-    Se usa solo como fallback. La cotización primero intenta empatar la comuna
-    directamente contra las ubicaciones de la Tabla de Tarifas.
+    V45: la versión anterior recorría las regiones una por una y priorizaba RM.
+    Eso podía agotar el tiempo antes de llegar a regiones fuera de Santiago.
+    Ahora consulta las municipalidades de las regiones en paralelo, con caché
+    acotada, y devuelve la región/comuna exacta encontrada.
     """
     objetivo = normalizar_texto(comuna)
     if not objetivo:
@@ -661,68 +664,69 @@ def resolver_region_comuna_jumpseller(comuna, max_seconds=8.0):
     if cache and ahora - cache.get("ts", 0) < GEO_CACHE_SECONDS:
         return dict(cache["geo"])
 
-    deadline = time.monotonic() + max(2.0, float(max_seconds))
     vacio = {"region_code": "", "region_name": "", "municipality_code": "", "municipality_name": comuna}
+    inicio = time.monotonic()
 
     try:
-        data = js_request("GET", "/countries/CL/regions.json", timeout=(3, 5))
+        data = js_request("GET", "/countries/CL/regions.json", timeout=(3, 6))
         regiones = _lista_desde_respuesta(data, "regions")
     except Exception as e:
         print("JUMPSELLER REGIONES ERROR:", repr(e))
         return vacio
 
-    # Santiago/RM primero: reduce mucho el tiempo para comunas de la RM.
-    def prioridad(raw):
-        r = _unwrap_geo_item(raw, "region")
-        nombre = normalizar_texto(r.get("name") or r.get("region") or "")
-        return 0 if ("metropolitana" in nombre or "santiago" in nombre) else 1
-
-    regiones = sorted(regiones, key=prioridad)
-
+    regiones_limpias = []
     for raw_region in regiones:
-        if time.monotonic() >= deadline:
-            print("JUMPSELLER GEO TIMEOUT: se detuvo búsqueda de comuna para proteger Render")
-            break
-
         r = _unwrap_geo_item(raw_region, "region")
         region_code = str(r.get("code") or r.get("id") or r.get("region_code") or "")
         region_name = str(r.get("name") or r.get("region") or "")
-        if not region_code:
-            continue
+        if region_code:
+            regiones_limpias.append((region_code, region_name))
+
+    def consultar_region(info):
+        region_code, region_name = info
         try:
-            mdata = js_request(
-                "GET",
-                f"/countries/CL/regions/{region_code}/municipalities.json",
-                timeout=(2.5, 4.5),
-            )
+            # Usamos una sesión independiente por hilo para evitar compartir estado
+            # mutable de requests.Session entre consultas concurrentes.
+            url = f"{JUMPSELLER_BASE}/countries/CL/regions/{region_code}/municipalities.json"
+            r = requests.get(url, auth=jumpseller_auth(), timeout=(2.5, 6))
+            if not r.ok:
+                return None
+            mdata = r.json() if r.text.strip() else {}
             municipios = _lista_desde_respuesta(mdata, "municipalities")
+            for raw_m in municipios:
+                m = _unwrap_geo_item(raw_m, "municipality")
+                m_name = str(m.get("name") or m.get("municipality") or m.get("label") or "")
+                m_code = str(m.get("code") or m.get("id") or m.get("municipality_code") or "")
+                if normalizar_texto(m_name) == objetivo or (m_code and normalizar_texto(m_code) == objetivo):
+                    return {
+                        "region_code": region_code,
+                        "region_name": region_name,
+                        "municipality_code": m_code,
+                        "municipality_name": m_name or comuna,
+                    }
         except Exception as e:
             print("JUMPSELLER MUNICIPIOS ERROR", region_code, repr(e))
-            continue
+        return None
 
-        for raw_m in municipios:
-            m = _unwrap_geo_item(raw_m, "municipality")
-            m_name = str(m.get("name") or m.get("municipality") or m.get("label") or "")
-            m_code = str(m.get("code") or m.get("id") or m.get("municipality_code") or "")
-            if normalizar_texto(m_name) == objetivo or (m_code and normalizar_texto(m_code) == objetivo):
-                geo = {
-                    "region_code": region_code,
-                    "region_name": region_name,
-                    "municipality_code": m_code,
-                    "municipality_name": m_name or comuna,
-                }
+    executor = ThreadPoolExecutor(max_workers=min(8, max(1, len(regiones_limpias))))
+    futures = [executor.submit(consultar_region, info) for info in regiones_limpias]
+    try:
+        restante = max(2.0, float(max_seconds) - (time.monotonic() - inicio))
+        for future in as_completed(futures, timeout=restante):
+            geo = future.result()
+            if geo:
                 _GEO_CACHE[objetivo] = {"ts": ahora, "geo": geo}
-                # Cache acotada para no crecer sin límite.
                 if len(_GEO_CACHE) > GEO_CACHE_MAX:
                     oldest = min(_GEO_CACHE, key=lambda k: _GEO_CACHE[k].get("ts", 0))
                     _GEO_CACHE.pop(oldest, None)
+                print("JUMPSELLER GEO RESUELTO:", comuna, "->", geo.get("region_name"), geo.get("region_code"), "tiempo=", round(time.monotonic() - inicio, 2), "s")
+                executor.shutdown(wait=False, cancel_futures=True)
                 return geo
-
-        # Elimina referencias grandes de cada respuesta geográfica.
-        try:
-            del mdata, municipios
-        except Exception:
-            pass
+    except FuturesTimeoutError:
+        print("JUMPSELLER GEO TIMEOUT: no alcanzó a resolver", comuna, "en", max_seconds, "s")
+    finally:
+        # No esperamos tareas remotas que aún sigan ejecutándose; cancelamos las no iniciadas.
+        executor.shutdown(wait=False, cancel_futures=True)
 
     return vacio
 
@@ -888,7 +892,7 @@ def cotizar_despacho_jumpseller(carrito, comuna):
                 break
 
         if hay_tablas_regionales:
-            geo = resolver_region_comuna_jumpseller(comuna, max_seconds=8)
+            geo = resolver_region_comuna_jumpseller(comuna, max_seconds=12)
             if geo.get("region_code") or geo.get("region_name"):
                 candidatos_geo = construir_candidatos(geo)
                 if candidatos_geo:
@@ -896,6 +900,8 @@ def cotizar_despacho_jumpseller(carrito, comuna):
 
     if not candidatos:
         raise RuntimeError(f"No encontré una tarifa de despacho aplicable para la comuna {comuna}.")
+
+    print("JUMPSELLER TARIFAS CANDIDATAS:", [{"metodo": x.get("shipping_method_name"), "precio": x.get("shipping_price"), "score": x.get("score"), "region": x.get("region_name") or x.get("region_code")} for x in candidatos])
 
     max_score = max(x["score"] for x in candidatos)
     especificos = [x for x in candidatos if x["score"] == max_score]
