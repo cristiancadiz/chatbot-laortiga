@@ -4,6 +4,7 @@ import html
 import json
 import hmac
 import hashlib
+import gc
 import uuid
 import time
 from datetime import datetime
@@ -21,7 +22,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-29-V39-LAORTIGA-TWILIO-FOTOS-PRODUCTOS"
+APP_VERSION = "2026-08-31-V40-LAORTIGA-MEMORIA-COMUNA-OPTIMIZADA"
 load_dotenv()
 
 app = Flask(__name__)
@@ -255,8 +256,13 @@ def guardar_venta_evento(ref, telefono, estado, total, jumpseller_order_id="", p
 JUMPSELLER_LOGIN = os.getenv("JUMPSELLER_LOGIN")
 JUMPSELLER_AUTH_TOKEN = os.getenv("JUMPSELLER_AUTH_TOKEN")
 JUMPSELLER_BASE = "https://api.jumpseller.com/v1"
-PRODUCT_CACHE_SECONDS = int(os.getenv("PRODUCT_CACHE_SECONDS", "120"))
+PRODUCT_CACHE_SECONDS = int(os.getenv("PRODUCT_CACHE_SECONDS", "90"))
+JS_CONNECT_TIMEOUT = float(os.getenv("JS_CONNECT_TIMEOUT", "4"))
+JS_READ_TIMEOUT = float(os.getenv("JS_READ_TIMEOUT", "10"))
 _PRODUCT_CACHE = {"ts": 0.0, "products": []}
+
+# Reutiliza conexiones HTTP y evita abrir sockets nuevos en cada consulta.
+JS_SESSION = requests.Session()
 
 
 def jumpseller_auth():
@@ -267,7 +273,8 @@ def jumpseller_auth():
 
 def js_request(method, path, **kwargs):
     url = f"{JUMPSELLER_BASE}{path}"
-    r = requests.request(method, url, auth=jumpseller_auth(), timeout=25, **kwargs)
+    kwargs.setdefault("timeout", (JS_CONNECT_TIMEOUT, JS_READ_TIMEOUT))
+    r = JS_SESSION.request(method, url, auth=jumpseller_auth(), **kwargs)
     if not r.ok:
         raise RuntimeError(f"Jumpseller {method} {path}: {r.status_code} {r.text[:500]}")
     if not r.text.strip():
@@ -277,6 +284,42 @@ def js_request(method, path, **kwargs):
 
 def _unwrap_product(item):
     return item.get("product", item) if isinstance(item, dict) else {}
+
+
+def _producto_cache_liviano(p):
+    """Conserva solo lo necesario para buscar/mostrar productos y reduce RAM en Render."""
+    if not isinstance(p, dict):
+        return {}
+    out = {}
+    for key in (
+        "id", "name", "brand", "sku", "price", "price_with_taxes", "sale_price",
+        "status", "available", "stock", "stock_quantity", "quantity", "stock_unlimited",
+        "url", "storefront_url", "permalink"
+    ):
+        if key in p:
+            out[key] = p.get(key)
+
+    desc = str(p.get("description", "") or "")
+    if desc:
+        out["description"] = desc[:1600]
+
+    # Solo una imagen para WhatsApp, no toda la galería.
+    imgs = p.get("images") or []
+    if imgs:
+        out["images"] = imgs[:1]
+
+    # Variantes resumidas: suficiente para stock/precio sin retener objetos grandes.
+    vs = []
+    for raw in (p.get("variants") or []):
+        v = raw.get("variant", raw) if isinstance(raw, dict) else {}
+        if not isinstance(v, dict):
+            continue
+        vv = {k: v.get(k) for k in ("id", "price", "stock", "stock_quantity", "quantity", "stock_unlimited", "weight") if k in v}
+        if vv:
+            vs.append({"variant": vv})
+    if vs:
+        out["variants"] = vs
+    return out
 
 
 def listar_productos(force=False):
@@ -289,7 +332,9 @@ def listar_productos(force=False):
         data = js_request("GET", "/products.json", params={"page": pagina, "limit": 100})
         items = data if isinstance(data, list) else data.get("products", [])
         lote = [_unwrap_product(x) for x in items]
-        productos.extend([p for p in lote if p])
+        productos.extend([_producto_cache_liviano(p) for p in lote if p])
+        # Libera la respuesta JSON completa de esta página antes de pedir la siguiente.
+        del data, items, lote
         if len(lote) < 100:
             break
 
@@ -538,31 +583,60 @@ def _lista_desde_respuesta(data, key):
     return []
 
 
-def resolver_region_comuna_jumpseller(comuna):
-    """Busca en la geografía oficial de Jumpseller la región/código de una comuna chilena.
+GEO_CACHE_SECONDS = int(os.getenv("GEO_CACHE_SECONDS", "86400"))
+GEO_CACHE_MAX = int(os.getenv("GEO_CACHE_MAX", "120"))
+_GEO_CACHE = {}
 
-    Esto permite aplicar correctamente tablas que estén configuradas por región,
-    aunque el bot solo le pida la comuna al comprador.
+
+def resolver_region_comuna_jumpseller(comuna, max_seconds=8.0):
+    """Resuelve región/comuna con límite de tiempo para no bloquear Render.
+
+    Se usa solo como fallback. La cotización primero intenta empatar la comuna
+    directamente contra las ubicaciones de la Tabla de Tarifas.
     """
     objetivo = normalizar_texto(comuna)
     if not objetivo:
         return {"region_code": "", "region_name": "", "municipality_code": "", "municipality_name": comuna or ""}
 
+    ahora = time.time()
+    cache = _GEO_CACHE.get(objetivo)
+    if cache and ahora - cache.get("ts", 0) < GEO_CACHE_SECONDS:
+        return dict(cache["geo"])
+
+    deadline = time.monotonic() + max(2.0, float(max_seconds))
+    vacio = {"region_code": "", "region_name": "", "municipality_code": "", "municipality_name": comuna}
+
     try:
-        data = js_request("GET", "/countries/CL/regions.json")
+        data = js_request("GET", "/countries/CL/regions.json", timeout=(3, 5))
         regiones = _lista_desde_respuesta(data, "regions")
     except Exception as e:
         print("JUMPSELLER REGIONES ERROR:", repr(e))
-        return {"region_code": "", "region_name": "", "municipality_code": "", "municipality_name": comuna}
+        return vacio
+
+    # Santiago/RM primero: reduce mucho el tiempo para comunas de la RM.
+    def prioridad(raw):
+        r = _unwrap_geo_item(raw, "region")
+        nombre = normalizar_texto(r.get("name") or r.get("region") or "")
+        return 0 if ("metropolitana" in nombre or "santiago" in nombre) else 1
+
+    regiones = sorted(regiones, key=prioridad)
 
     for raw_region in regiones:
+        if time.monotonic() >= deadline:
+            print("JUMPSELLER GEO TIMEOUT: se detuvo búsqueda de comuna para proteger Render")
+            break
+
         r = _unwrap_geo_item(raw_region, "region")
         region_code = str(r.get("code") or r.get("id") or r.get("region_code") or "")
         region_name = str(r.get("name") or r.get("region") or "")
         if not region_code:
             continue
         try:
-            mdata = js_request("GET", f"/countries/CL/regions/{region_code}/municipalities.json")
+            mdata = js_request(
+                "GET",
+                f"/countries/CL/regions/{region_code}/municipalities.json",
+                timeout=(2.5, 4.5),
+            )
             municipios = _lista_desde_respuesta(mdata, "municipalities")
         except Exception as e:
             print("JUMPSELLER MUNICIPIOS ERROR", region_code, repr(e))
@@ -573,15 +647,26 @@ def resolver_region_comuna_jumpseller(comuna):
             m_name = str(m.get("name") or m.get("municipality") or m.get("label") or "")
             m_code = str(m.get("code") or m.get("id") or m.get("municipality_code") or "")
             if normalizar_texto(m_name) == objetivo or (m_code and normalizar_texto(m_code) == objetivo):
-                return {
+                geo = {
                     "region_code": region_code,
                     "region_name": region_name,
                     "municipality_code": m_code,
                     "municipality_name": m_name or comuna,
                 }
+                _GEO_CACHE[objetivo] = {"ts": ahora, "geo": geo}
+                # Cache acotada para no crecer sin límite.
+                if len(_GEO_CACHE) > GEO_CACHE_MAX:
+                    oldest = min(_GEO_CACHE, key=lambda k: _GEO_CACHE[k].get("ts", 0))
+                    _GEO_CACHE.pop(oldest, None)
+                return geo
 
-    return {"region_code": "", "region_name": "", "municipality_code": "", "municipality_name": comuna}
+        # Elimina referencias grandes de cada respuesta geográfica.
+        try:
+            del mdata, municipios
+        except Exception:
+            pass
 
+    return vacio
 
 def peso_carrito_jumpseller(carrito):
     total = 0.0
@@ -641,11 +726,12 @@ def _precio_regla_tabla(values, base):
     return max(0.0, reglas[-1][1])
 
 
-def _puntaje_ubicacion_tabla(locations, comuna, geo):
-    """Retorna -1 si la tabla no aplica; mayor puntaje = ubicación más específica."""
+def _puntaje_ubicacion_tabla(locations, comuna, geo=None):
+    """Puntúa ubicación sin exigir búsqueda geográfica cuando la comuna coincide."""
     if not locations:
         return 1
 
+    geo = geo or {}
     comuna_norm = normalizar_texto(comuna)
     muni_code_norm = normalizar_texto(geo.get("municipality_code"))
     region_code_norm = normalizar_texto(geo.get("region_code"))
@@ -662,10 +748,20 @@ def _puntaje_ubicacion_tabla(locations, comuna, geo):
 
         if country and country not in {"cl", "chile"}:
             continue
-        if region and region not in {region_code_norm, region_name_norm}:
-            continue
-        if municipality and municipality not in {comuna_norm, muni_code_norm}:
-            continue
+
+        municipio_ok = False
+        if municipality:
+            municipio_ok = municipality in {comuna_norm, muni_code_norm}
+            if not municipio_ok:
+                continue
+
+        if region:
+            if region_code_norm or region_name_norm:
+                if region not in {region_code_norm, region_name_norm}:
+                    continue
+            elif not municipio_ok:
+                # Región sin resolver y sin una comuna exacta: se evalúa en segundo paso.
+                continue
 
         score = 10 if country else 0
         score += 20 if region else 0
@@ -673,57 +769,85 @@ def _puntaje_ubicacion_tabla(locations, comuna, geo):
         mejor = max(mejor, score or 1)
     return mejor
 
-
 def cotizar_despacho_jumpseller(carrito, comuna):
-    """Calcula el despacho usando las Tablas de Tarifas configuradas en Jumpseller."""
-    data = js_request("GET", "/shipping_methods.json")
+    """Cotiza rápido y evita recorrer toda la geografía salvo que sea imprescindible."""
+    inicio = time.monotonic()
+    data = js_request("GET", "/shipping_methods.json", timeout=(3, 7))
     items = data if isinstance(data, list) else data.get("shipping_methods", [])
     metodos = [_unwrap_shipping_method(x) for x in items]
     metodos = [m for m in metodos if m and m.get("enabled") is not False and normalizar_texto(m.get("type")) == "tables"]
     if not metodos:
         raise RuntimeError("No hay una Tabla de Tarifas activa en Jumpseller.")
 
-    geo = resolver_region_comuna_jumpseller(comuna)
-    candidatos = []
+    def construir_candidatos(geo):
+        candidatos = []
+        for metodo in metodos:
+            for raw_table in (metodo.get("tables") or []):
+                table = raw_table.get("table", raw_table) if isinstance(raw_table, dict) else {}
+                if not isinstance(table, dict):
+                    continue
+                base = _valor_base_tabla(table.get("basedon"), carrito)
+                if base is None:
+                    continue
+                score = _puntaje_ubicacion_tabla(table.get("locations") or [], comuna, geo)
+                if score < 0:
+                    continue
+                price = _precio_regla_tabla(table.get("values") or [], base)
+                if price is None:
+                    continue
+                candidatos.append({
+                    "shipping_method_id": metodo.get("id"),
+                    "shipping_method_name": metodo.get("name") or "Despacho",
+                    "shipping_price": float(price),
+                    "score": score,
+                    "basedon": table.get("basedon"),
+                    "base": base,
+                    "region_code": (geo or {}).get("region_code", ""),
+                    "region_name": (geo or {}).get("region_name", ""),
+                    "municipality_code": (geo or {}).get("municipality_code", ""),
+                })
+        return candidatos
 
-    for metodo in metodos:
-        for raw_table in (metodo.get("tables") or []):
-            table = raw_table.get("table", raw_table) if isinstance(raw_table, dict) else {}
-            if not isinstance(table, dict):
-                continue
-            base = _valor_base_tabla(table.get("basedon"), carrito)
-            if base is None:
-                # Las tablas por distancia requieren geocodificación y no se pueden
-                # reproducir fielmente solo con texto de dirección/comuna.
-                continue
-            score = _puntaje_ubicacion_tabla(table.get("locations") or [], comuna, geo)
-            if score < 0:
-                continue
-            price = _precio_regla_tabla(table.get("values") or [], base)
-            if price is None:
-                continue
-            candidatos.append({
-                "shipping_method_id": metodo.get("id"),
-                "shipping_method_name": metodo.get("name") or "Despacho",
-                "shipping_price": float(price),
-                "score": score,
-                "basedon": table.get("basedon"),
-                "base": base,
-                "region_code": geo.get("region_code", ""),
-                "region_name": geo.get("region_name", ""),
-                "municipality_code": geo.get("municipality_code", ""),
-            })
+    # Paso 1: normalmente basta con el nombre de la comuna presente en la tabla.
+    candidatos = construir_candidatos({})
+    mejor_directo = max((x["score"] for x in candidatos), default=-1)
+
+    # Si hay coincidencia específica por comuna (score >= 30), no consultamos las
+    # 16 regiones de Chile. Esto elimina el bloqueo que hacía caer Render.
+    if mejor_directo < 30:
+        hay_tablas_regionales = False
+        for metodo in metodos:
+            for raw_table in (metodo.get("tables") or []):
+                table = raw_table.get("table", raw_table) if isinstance(raw_table, dict) else {}
+                for raw_loc in (table.get("locations") or []) if isinstance(table, dict) else []:
+                    loc = raw_loc.get("location", raw_loc) if isinstance(raw_loc, dict) else {}
+                    if isinstance(loc, dict) and loc.get("region"):
+                        hay_tablas_regionales = True
+                        break
+                if hay_tablas_regionales:
+                    break
+            if hay_tablas_regionales:
+                break
+
+        if hay_tablas_regionales:
+            geo = resolver_region_comuna_jumpseller(comuna, max_seconds=8)
+            if geo.get("region_code") or geo.get("region_name"):
+                candidatos_geo = construir_candidatos(geo)
+                if candidatos_geo:
+                    candidatos = candidatos_geo
 
     if not candidatos:
         raise RuntimeError(f"No encontré una tarifa de despacho aplicable para la comuna {comuna}.")
 
-    # Primero la tabla geográfica más específica; si hay varias, la más económica.
     max_score = max(x["score"] for x in candidatos)
     especificos = [x for x in candidatos if x["score"] == max_score]
     elegido = min(especificos, key=lambda x: x["shipping_price"])
-    print("JUMPSELLER TARIFA ELEGIDA:", elegido)
-    return elegido
+    print("JUMPSELLER TARIFA ELEGIDA:", elegido, "tiempo=", round(time.monotonic() - inicio, 2), "s")
 
+    # La respuesta de shipping_methods puede ser grande: deja de referenciarla cuanto antes.
+    del data, items, metodos, candidatos, especificos
+    gc.collect()
+    return elegido
 
 def crear_pedido_jumpseller(customer_id, carrito, tipo_entrega, direccion, comuna, tarifa_envio=None):
     products = []
@@ -892,6 +1016,11 @@ ESTADOS = {}
 ESTADOS_LOCK = Lock()
 PROCESADOS = {}
 PROCESADOS_LOCK = Lock()
+STATE_TTL_SECONDS = int(os.getenv("STATE_TTL_SECONDS", "7200"))
+MAX_ESTADOS = int(os.getenv("MAX_ESTADOS", "250"))
+PROCESADOS_TTL_SECONDS = int(os.getenv("PROCESADOS_TTL_SECONDS", "7200"))
+MAX_PROCESADOS = int(os.getenv("MAX_PROCESADOS", "2500"))
+_LAST_STATE_CLEANUP = 0.0
 
 
 def estado_inicial(telefono):
@@ -904,13 +1033,33 @@ def estado_inicial(telefono):
         "media_respuesta": None,
         "checkout": {},
         "historial": [],
+        "_ultimo_acceso": time.time(),
     }
+
+
+def _limpiar_estados_locked(ahora):
+    global _LAST_STATE_CLEANUP
+    if ahora - _LAST_STATE_CLEANUP < 300 and len(ESTADOS) <= MAX_ESTADOS:
+        return
+    _LAST_STATE_CLEANUP = ahora
+    viejos = [k for k, e in ESTADOS.items() if ahora - float(e.get("_ultimo_acceso", ahora)) > STATE_TTL_SECONDS]
+    for k in viejos:
+        ESTADOS.pop(k, None)
+    if len(ESTADOS) > MAX_ESTADOS:
+        orden = sorted(ESTADOS.items(), key=lambda kv: float(kv[1].get("_ultimo_acceso", 0)))
+        for k, _ in orden[:len(ESTADOS) - MAX_ESTADOS]:
+            ESTADOS.pop(k, None)
+    if viejos:
+        gc.collect()
 
 
 def get_estado(telefono):
     with ESTADOS_LOCK:
+        ahora = time.time()
+        _limpiar_estados_locked(ahora)
         if telefono not in ESTADOS:
             ESTADOS[telefono] = estado_inicial(telefono)
+        ESTADOS[telefono]["_ultimo_acceso"] = ahora
         return ESTADOS[telefono]
 
 
@@ -927,10 +1076,12 @@ def marcar_procesado(message_id):
         return True
     ahora = time.time()
     with PROCESADOS_LOCK:
-        # limpieza simple cada entrada
-        viejos = [k for k, ts in PROCESADOS.items() if ahora - ts > 86400]
+        viejos = [k for k, ts in PROCESADOS.items() if ahora - ts > PROCESADOS_TTL_SECONDS]
         for k in viejos:
             PROCESADOS.pop(k, None)
+        if len(PROCESADOS) > MAX_PROCESADOS:
+            for k, _ in sorted(PROCESADOS.items(), key=lambda kv: kv[1])[:len(PROCESADOS) - MAX_PROCESADOS]:
+                PROCESADOS.pop(k, None)
         if message_id in PROCESADOS:
             return False
         PROCESADOS[message_id] = ahora
@@ -1273,7 +1424,7 @@ def procesar_texto(telefono, texto):
     n = normalizar_texto(txt)
 
     estado["historial"].append({"role": "user", "content": txt})
-    estado["historial"] = estado["historial"][-20:]
+    estado["historial"] = estado["historial"][-10:]
 
     if n in {"menu", "inicio", "reiniciar", "empezar de nuevo"}:
         estado = reset_estado(telefono)
