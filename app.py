@@ -25,7 +25,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-31-V55-LAORTIGA-RETIRO-EDUARDO-OSORIO-881"
+APP_VERSION = "2026-08-31-V56-LAORTIGA-EJECUTIVO-TELEFONO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -45,7 +45,7 @@ APP_BASE_URL = (
     or "https://chatbot-laortiga-hddw.onrender.com"
 ).rstrip("/")
 
-EJECUTIVO_WHATSAPP = os.getenv("EJECUTIVO_WHATSAPP", "+56965879758")
+EJECUTIVO_WHATSAPP = os.getenv("EJECUTIVO_WHATSAPP", "+56951769239")
 DEFAULT_SHIPPING_PRICE = int(os.getenv("DEFAULT_SHIPPING_PRICE", "0"))
 JUMPSELLER_SHIPPING_METHOD_NAME = os.getenv(
     "JUMPSELLER_SHIPPING_METHOD_NAME", "Despacho coordinado por WhatsApp"
