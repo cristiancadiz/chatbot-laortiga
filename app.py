@@ -22,7 +22,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-31-V42-LAORTIGA-5-PRODUCTOS-FOTOS-FICHA-BREVE"
+APP_VERSION = "2026-08-31-V44-LAORTIGA-FILTRO-PRECIO-STOCK-ESTRICTO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -365,22 +365,56 @@ def producto_activo(p):
     return True
 
 
-def precio_producto(p):
+def _precio_float(valor):
+    """Convierte un precio de Jumpseller a float. Devuelve 0 si no es un precio válido."""
+    if valor in (None, ""):
+        return 0.0
+    try:
+        if isinstance(valor, str):
+            valor = valor.strip().replace("$", "").replace(" ", "")
+            # Jumpseller normalmente entrega números con punto decimal. Si llega
+            # un valor chileno con separador de miles, lo normalizamos también.
+            if valor.count(",") == 1 and valor.count(".") >= 1:
+                valor = valor.replace(".", "").replace(",", ".")
+            elif valor.count(",") == 1 and "." not in valor:
+                valor = valor.replace(",", ".")
+        return float(valor)
+    except Exception:
+        return 0.0
+
+
+def _precio_padre_positivo(p):
+    """Obtiene solo un precio padre estrictamente mayor a cero."""
     for key in ("price", "price_with_taxes", "sale_price"):
-        val = p.get(key)
-        if val not in (None, ""):
-            try:
-                return float(val)
-            except Exception:
-                pass
-    variantes = p.get("variants") or []
-    if variantes:
-        v = variantes[0].get("variant", variantes[0]) if isinstance(variantes[0], dict) else {}
-        try:
-            return float(v.get("price", 0))
-        except Exception:
-            pass
+        precio = _precio_float(p.get(key))
+        if precio > 0:
+            return precio
     return 0.0
+
+
+def precio_variante(p, v):
+    """Precio efectivo de una variante; nunca devuelve un precio negativo."""
+    precio_v = _precio_float((v or {}).get("price"))
+    if precio_v > 0:
+        return precio_v
+    # Si la variante no trae precio propio, puede heredar el precio del producto.
+    # Pero un precio explícitamente 0 NO se considera vendible.
+    if (v or {}).get("price") in (None, ""):
+        return _precio_padre_positivo(p)
+    return 0.0
+
+
+def precio_producto(p):
+    """Devuelve el precio de una opción realmente comprable, siempre > 0 o 0."""
+    variantes = variantes_producto(p)
+    if variantes:
+        for v in variantes:
+            st = stock_variante(v)
+            precio = precio_variante(p, v)
+            if precio > 0 and (st is None or st > 0):
+                return precio
+        return 0.0
+    return _precio_padre_positivo(p)
 
 
 
@@ -397,6 +431,8 @@ def variantes_producto(p):
 
 
 def stock_variante(v):
+    if not isinstance(v, dict):
+        return 0
     if v.get("stock_unlimited") is True:
         return None
     for key in ("stock", "stock_quantity", "quantity"):
@@ -409,54 +445,41 @@ def stock_variante(v):
 
 
 def variante_para_compra(p, qty=1):
-    """Devuelve una variante real de Jumpseller apta para comprar.
-
-    En Jumpseller incluso productos sin opciones visibles pueden tener una variante
-    interna obligatoria. Para evitar el error 'Variante del producto no fue encontrada',
-    siempre enviamos variant_id cuando la API entrega variantes.
-    """
+    """Devuelve solo una variante con precio > 0 y stock suficiente."""
     variantes = variantes_producto(p)
     if not variantes:
         return None
 
-    # Primero una variante con stock suficiente o stock ilimitado.
+    qty = max(1, int(qty))
     for v in variantes:
         st = stock_variante(v)
-        if st is None or st >= int(qty):
+        precio = precio_variante(p, v)
+        if precio > 0 and (st is None or st >= qty):
             return v
+    return None
 
-    # Si ninguna tiene stock suficiente, devolvemos la primera para que el caller
-    # pueda informar correctamente la falta de stock, pero no crear una orden inválida.
-    return variantes[0]
 
 def stock_producto(p):
-    """Devuelve stock vendible de Jumpseller.
-
-    Importante: cuando un producto tiene variantes, Jumpseller puede dejar el stock
-    del producto padre en 0 y mantener el inventario real en cada variante. Por eso
-    las variantes tienen prioridad sobre el stock del producto padre.
-
-    None significa stock ilimitado/no controlado.
-    """
-    variantes = p.get("variants") or []
+    """Stock vendible: cuenta únicamente variantes que además tengan precio válido."""
+    variantes = variantes_producto(p)
     if variantes:
-        stocks = []
-        hubo_stock_informado = False
-        for raw in variantes:
-            v = raw.get("variant", raw) if isinstance(raw, dict) else {}
-            if v.get("stock_unlimited") is True:
+        total = 0
+        hubo_control_stock = False
+        for v in variantes:
+            precio = precio_variante(p, v)
+            if precio <= 0:
+                continue
+            st = stock_variante(v)
+            if st is None:
                 return None
-            for key in ("stock", "stock_quantity", "quantity"):
-                if v.get(key) is not None:
-                    hubo_stock_informado = True
-                    try:
-                        stocks.append(max(0, int(float(v.get(key)))))
-                    except Exception:
-                        pass
-                    break
-        if hubo_stock_informado:
-            return sum(stocks)
+            hubo_control_stock = True
+            total += max(0, st)
+        if hubo_control_stock:
+            return total
+        return 0
 
+    if _precio_padre_positivo(p) <= 0:
+        return 0
     if p.get("stock_unlimited") is True:
         return None
     for key in ("stock", "stock_quantity", "quantity"):
@@ -468,6 +491,23 @@ def stock_producto(p):
     return None
 
 
+def producto_vendible(p):
+    """Filtro estricto: activo + precio > 0 + stock real disponible."""
+    if not producto_activo(p):
+        return False
+
+    variantes = variantes_producto(p)
+    if variantes:
+        # Debe existir al menos una variante que pueda comprarse hoy.
+        return variante_para_compra(p, 1) is not None
+
+    precio = _precio_padre_positivo(p)
+    if precio <= 0:
+        return False
+    stock = stock_producto(p)
+    return stock is None or stock > 0
+
+
 def url_producto(p):
     return p.get("url") or p.get("storefront_url") or p.get("permalink") or ""
 
@@ -477,8 +517,10 @@ def buscar_productos(query, limite=5):
     tokens = [t for t in re.findall(r"[a-z0-9]+", q) if len(t) >= 2]
     productos = listar_productos()
     scored = []
+    descartados_precio_stock = 0
     for p in productos:
-        if not producto_activo(p):
+        if not producto_vendible(p):
+            descartados_precio_stock += 1
             continue
         texto = normalizar_texto(" ".join([
             str(p.get("name", "")), str(p.get("description", "")),
@@ -488,7 +530,9 @@ def buscar_productos(query, limite=5):
         if score:
             scored.append((score, p))
     scored.sort(key=lambda x: (-x[0], str(x[1].get("name", ""))))
-    return [p for _, p in scored[:limite]]
+    resultados = [p for _, p in scored[:limite]]
+    print("JUMPSELLER BUSQUEDA:", query, "resultados_vendibles=", len(resultados), "descartados=", descartados_precio_stock)
+    return resultados
 
 
 def obtener_producto_por_id(product_id, force=True):
@@ -1140,7 +1184,8 @@ def listar_resultados(productos):
 def preparar_resultados_media(estado, productos):
     """Prepara hasta 5 tarjetas de producto para enviarlas por WhatsApp con su foto."""
     tarjetas = []
-    for i, p in enumerate((productos or [])[:5], 1):
+    productos_validos = [p for p in (productos or []) if producto_vendible(p)][:5]
+    for i, p in enumerate(productos_validos, 1):
         stock = stock_producto(p)
         disponibilidad = "✅ Disponible" if stock is None or stock > 0 else "❌ Sin stock"
         texto = f"*{i}. {p.get('name', 'Producto')}*\n💰 {clp(precio_producto(p))}\n{disponibilidad}"
@@ -1237,14 +1282,9 @@ def agregar_al_carrito(estado, p, qty=1):
     if stock_v is not None and stock_v < qty:
         return False, f"Solo quedan {stock_v} unidades disponibles."
 
-    precio = precio_producto(p)
-    if variante and variante.get("price") not in (None, ""):
-        try:
-            precio = float(variante.get("price"))
-        except Exception:
-            pass
+    precio = precio_variante(p, variante) if variante else precio_producto(p)
     if precio <= 0:
-        return False, "No pude obtener un precio válido para este producto."
+        return False, "Este producto no tiene un precio válido disponible para compra."
 
     for item in estado["carrito"]:
         if str(item["product_id"]) == pid and item.get("variant_id") == variant_id:
@@ -1288,12 +1328,10 @@ def verificar_carrito_actual(carrito):
             errores.append(f"{item['name']}: quedan {stock} unidades")
             continue
 
-        precio = precio_producto(p)
-        if variante and variante.get("price") not in (None, ""):
-            try:
-                precio = float(variante.get("price"))
-            except Exception:
-                pass
+        precio = precio_variante(p, variante) if variante else precio_producto(p)
+        if precio <= 0:
+            errores.append(f"{item['name']}: ya no tiene un precio válido")
+            continue
 
         nuevo = dict(item)
         nuevo["name"] = p.get("name", item["name"])
@@ -1627,7 +1665,7 @@ def procesar_texto(telefono, texto):
 
     if n in {"productos", "catalogo", "catalogo de productos", "ver productos", "que venden", "qué venden"}:
         try:
-            productos = [p for p in listar_productos() if producto_activo(p)][:5]
+            productos = [p for p in listar_productos() if producto_vendible(p)][:5]
             estado["ultimos_productos"] = productos
             estado["producto_seleccionado"] = None
             estado["paso"] = "inicio"
