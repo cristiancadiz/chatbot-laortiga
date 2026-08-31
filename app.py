@@ -22,7 +22,7 @@ from google.oauth2.credentials import Credentials
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-08-31-V41-LAORTIGA-FIX-BUSQUEDA-SHEETS"
+APP_VERSION = "2026-08-31-V42-LAORTIGA-5-PRODUCTOS-FOTOS-FICHA-BREVE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1045,6 +1045,7 @@ def estado_inicial(telefono):
         "ultimos_productos": [],
         "producto_seleccionado": None,
         "media_respuesta": None,
+        "resultados_media": [],
         "checkout": {},
         "historial": [],
         "_ultimo_acceso": time.time(),
@@ -1126,14 +1127,28 @@ def texto_producto(p, numero=None):
 
 
 def listar_resultados(productos):
+    """Texto corto de cierre para una búsqueda. Las fichas visuales se envían aparte."""
     if not productos:
         return "No encontré productos con esa búsqueda. ¿Quieres probar con otro nombre o característica?"
-    lineas = ["Encontré estas opciones 👇", ""]
-    for i, p in enumerate(productos, 1):
-        lineas.append(texto_producto(p, i))
-    lineas.append("")
-    lineas.append("Escribe el *número* para ver el detalle. Si ya viste la ficha de un producto, escribe por ejemplo *comprar 2* para llevar 2 unidades.")
-    return "\n".join(lineas)
+    cantidad = min(len(productos), 5)
+    return (
+        f"🌿 Encontré {cantidad} opciones. Te las muestro con foto 👇\n\n"
+        "Responde solo con el *número* del producto que te interesa (1 al " + str(cantidad) + ")."
+    )
+
+
+def preparar_resultados_media(estado, productos):
+    """Prepara hasta 5 tarjetas de producto para enviarlas por WhatsApp con su foto."""
+    tarjetas = []
+    for i, p in enumerate((productos or [])[:5], 1):
+        stock = stock_producto(p)
+        disponibilidad = "✅ Disponible" if stock is None or stock > 0 else "❌ Sin stock"
+        texto = f"*{i}. {p.get('name', 'Producto')}*\n💰 {clp(precio_producto(p))}\n{disponibilidad}"
+        tarjetas.append({
+            "texto": texto,
+            "media": imagen_producto(p),
+        })
+    estado["resultados_media"] = tarjetas
 
 
 
@@ -1181,8 +1196,9 @@ def detalle_producto(p):
     descripcion = re.sub(r"<[^>]+>", " ", str(p.get("description", "") or ""))
     descripcion = html.unescape(descripcion)
     descripcion = re.sub(r"\s+", " ", descripcion).strip()
-    if len(descripcion) > 900:
-        descripcion = descripcion[:900].rsplit(" ", 1)[0] + "…"
+    # Ficha breve para WhatsApp: solo una síntesis útil del producto.
+    if len(descripcion) > 280:
+        descripcion = descripcion[:280].rsplit(" ", 1)[0] + "…"
     stock_txt = "Disponible" if stock is None else (f"Stock: {stock} unidades" if stock > 0 else "Sin stock")
     partes = [f"🌱 *{nombre}*", f"Precio: *{clp(precio)}*", stock_txt]
     if descripcion:
@@ -1190,7 +1206,7 @@ def detalle_producto(p):
     if stock == 0:
         partes += ["", "Este producto está sin stock por ahora. Si quieres, dime qué alternativa buscas y te muestro productos disponibles."]
     else:
-        partes += ["", "¿Cuántos quieres agregar al carrito? Responde con la cantidad, por ejemplo *2*, o escribe *comprar 2*."]
+        partes += ["", "¿Cuántas unidades quieres comprar? Responde solo con la cantidad, por ejemplo *1* o *2*."]
     return "\n".join(partes)
 
 def total_carrito(carrito):
@@ -1611,10 +1627,11 @@ def procesar_texto(telefono, texto):
 
     if n in {"productos", "catalogo", "catalogo de productos", "ver productos", "que venden", "qué venden"}:
         try:
-            productos = [p for p in listar_productos() if producto_activo(p)][:8]
+            productos = [p for p in listar_productos() if producto_activo(p)][:5]
             estado["ultimos_productos"] = productos
             estado["producto_seleccionado"] = None
             estado["paso"] = "inicio"
+            preparar_resultados_media(estado, productos)
             return listar_resultados(productos)
         except Exception as e:
             print("JUMPSELLER LIST ERROR:", repr(e))
@@ -1635,15 +1652,16 @@ def procesar_texto(telefono, texto):
             productos = []
 
         if productos:
-            estado["ultimos_productos"] = productos
+            estado["ultimos_productos"] = productos[:5]
             estado["producto_seleccionado"] = None
             estado["paso"] = "inicio"
+            preparar_resultados_media(estado, productos[:5])
             # Si la pregunta busca detalle/beneficios, usa IA con datos reales.
             if any(k in n for k in ["caracteristica", "sirve", "uso", "beneficio", "detalle", "como funciona", "para que"]):
                 ai = respuesta_ia(txt, productos)
                 if ai:
                     return ai + "\n\nSi quieres comprarlo, escribe *comprar 1*."
-            return listar_resultados(productos)
+            return listar_resultados(estado["ultimos_productos"])
 
     # Pregunta general de tienda: IA, sin inventar catálogo.
     ai = respuesta_ia(txt, [])
@@ -1708,19 +1726,38 @@ def whatsapp_webhook():
             guardar_mensaje(telefono, "user", texto)
             respuesta = procesar_texto(telefono, texto)
 
-        guardar_mensaje(telefono, "assistant", respuesta)
-
-        # Si la respuesta corresponde al detalle de un producto y Jumpseller trae
-        # una imagen pública, Twilio la envía como foto con el texto como caption.
         estado_actual = get_estado(telefono)
+        tarjetas = estado_actual.pop("resultados_media", []) or []
         media_url = estado_actual.pop("media_respuesta", None)
-        mensaje_twilio = twiml.message(respuesta)
-        if media_url:
-            try:
-                mensaje_twilio.media(media_url)
-                print("TWILIO MEDIA PRODUCTO:", media_url)
-            except Exception as e:
-                print("TWILIO MEDIA ERROR:", repr(e))
+
+        # Guardamos en Sheets también un resumen de las tarjetas sugeridas.
+        if tarjetas:
+            resumen_tarjetas = "\n".join(t.get("texto", "") for t in tarjetas if t.get("texto"))
+            guardar_mensaje(telefono, "assistant", respuesta + ("\n\n" + resumen_tarjetas if resumen_tarjetas else ""))
+        else:
+            guardar_mensaje(telefono, "assistant", respuesta)
+
+        # Resultado de búsqueda: enviamos hasta 5 productos como mensajes separados,
+        # cada uno con foto, nombre, precio y disponibilidad. Después pedimos elegir.
+        if tarjetas:
+            for tarjeta in tarjetas[:5]:
+                m = twiml.message(tarjeta.get("texto", "Producto"))
+                foto = tarjeta.get("media")
+                if foto:
+                    try:
+                        m.media(foto)
+                        print("TWILIO MEDIA SUGERENCIA:", foto)
+                    except Exception as e:
+                        print("TWILIO MEDIA SUGERENCIA ERROR:", repr(e))
+            twiml.message(respuesta)
+        else:
+            mensaje_twilio = twiml.message(respuesta)
+            if media_url:
+                try:
+                    mensaje_twilio.media(media_url)
+                    print("TWILIO MEDIA PRODUCTO:", media_url)
+                except Exception as e:
+                    print("TWILIO MEDIA ERROR:", repr(e))
 
         return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
