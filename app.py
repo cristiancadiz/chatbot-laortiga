@@ -4186,7 +4186,7 @@ def procesar_agenda(
             return (
                 "Parece que el correo no está correcto .\n\n"
                 "Escríbelo nuevamente, por ejemplo:\n"
-                "nombre@gmail.com"
+                "[nombre@gmail.com](mailto:nombre@gmail.com)"
             )
 
         datos["correo"] = correo
@@ -6370,7 +6370,4 @@ if __name__ == "__main__":
             == "development"
         )
     )
-
---
-Cristian Cádiz 
 
