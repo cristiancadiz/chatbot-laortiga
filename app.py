@@ -14,7 +14,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-04-V31-DIEGO-AGENDA-SIMPLE-SIN-PAGO"
+APP_VERSION = "2026-09-04-V33-DIEGO-AGENDA-DIRECCION-CONTACTO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -30,10 +30,11 @@ ESTILISTA_NOMBRE = os.getenv("ESTILISTA_NOMBRE", "Diego")
 NEGOCIO_NOMBRE = os.getenv("NEGOCIO_NOMBRE", "Estilista Diego")
 TIMEZONE = os.getenv("TIMEZONE", "America/Santiago")
 CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
-DIRECCION_ATENCION = os.getenv("DIRECCION_ATENCION", "2 Norte 280")
+DIRECCION_ATENCION = os.getenv("DIRECCION_ATENCION", "3 Poniente 382, Viña del Mar")
+TELEFONO_EJECUTIVO = os.getenv("TELEFONO_EJECUTIVO", "+56966461436")
 
 HORA_APERTURA = int(os.getenv("HORA_APERTURA", "10"))
-HORA_CIERRE = int(os.getenv("HORA_CIERRE", "18"))
+HORA_CIERRE = int(os.getenv("HORA_CIERRE", "19"))
 DURACION_RESERVA = int(os.getenv("DURACION_RESERVA", "60"))
 
 # 0=lunes ... 5=sábado. Domingo cerrado.
@@ -560,6 +561,7 @@ def respuesta_general(texto):
 Eres el asistente virtual de {ESTILISTA_NOMBRE}, estilista en Chile.
 Tu única función es ayudar a clientes con servicios, precios, horarios y reservas.
 Dirección de atención: {DIRECCION_ATENCION}.
+Si el cliente quiere hablar con Diego, con un ejecutivo o con una persona, indícale este teléfono: {TELEFONO_EJECUTIVO}.
 Horario: lunes a sábado, de {HORA_APERTURA}:00 a {HORA_CIERRE}:00.
 Servicios: {contexto_servicios}.
 No inventes información. No hables de sistemas internos, APIs ni código.
@@ -638,6 +640,25 @@ def intencion_agendar(texto):
 def pregunta_servicios(texto):
     t = normalizar_texto(texto)
     return any(x in t for x in ("servicio", "servicios", "precio", "precios", "cuanto", "valor", "valores", "que haces"))
+
+
+def quiere_hablar_con_persona(texto):
+    t = normalizar_texto(texto)
+    frases = (
+        "hablar con diego", "hablar con una persona", "hablar con persona",
+        "hablar con ejecutivo", "hablar con un ejecutivo", "hablar con alguien",
+        "quiero hablar con diego", "quiero hablar con una persona",
+        "quiero hablar con un ejecutivo", "contactar a diego", "contacto diego",
+        "ejecutivo", "persona real", "humano", "asesor",
+    )
+    return any(x in t for x in frases)
+
+
+def mensaje_contacto_persona():
+    return (
+        f"Claro 😊 Si quieres hablar directamente con {ESTILISTA_NOMBRE} o con una persona, "
+        f"puedes comunicarte al *{TELEFONO_EJECUTIVO}*."
+    )
 
 
 def es_menu(texto):
@@ -851,7 +872,9 @@ def whatsapp_webhook():
             guardar_mensaje(telefono, "user", texto)
             estado = get_estado(telefono)
 
-            if es_menu(texto):
+            if quiere_hablar_con_persona(texto):
+                respuesta = mensaje_contacto_persona()
+            elif es_menu(texto):
                 reset_estado(telefono)
                 respuesta = mensaje_bienvenida()
             elif estado.get("paso") != "inicio":
