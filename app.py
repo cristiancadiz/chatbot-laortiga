@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from threading import Lock
 
 import pytz
+import requests
 from dotenv import load_dotenv
 from flask import Flask, request
 from google.oauth2.credentials import Credentials
@@ -15,7 +16,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-06-V35-DIEGO-TWILIO-GUPSHUP-PARALLEL"
+APP_VERSION = "2026-09-06-V36-DIEGO-TWILIO-GUPSHUP-LIVE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -37,6 +38,13 @@ TELEFONO_EJECUTIVO = os.getenv("TELEFONO_EJECUTIVO", "+56966461436")
 HORA_APERTURA = int(os.getenv("HORA_APERTURA", "10"))
 HORA_CIERRE = int(os.getenv("HORA_CIERRE", "19"))
 DURACION_RESERVA = int(os.getenv("DURACION_RESERVA", "60"))
+
+# Gupshup: canal paralelo al Twilio actual.
+# La API key debe guardarse en Render > Environment, nunca dentro del código.
+GUPSHUP_API_KEY = os.getenv("GUPSHUP_API_KEY")
+GUPSHUP_SOURCE = os.getenv("GUPSHUP_SOURCE", "56978316272")
+GUPSHUP_APP_NAME = os.getenv("GUPSHUP_APP_NAME", "NexiaTech")
+GUPSHUP_API_URL = os.getenv("GUPSHUP_API_URL", "https://api.gupshup.io/wa/api/v1/msg")
 
 # 0=lunes ... 5=sábado. Domingo cerrado.
 DIAS_ATENCION = {0, 1, 2, 3, 4, 5}
@@ -836,110 +844,6 @@ def procesar_agenda(estado, texto):
     return mensaje_bienvenida()
 
 
-
-# ============================================================
-# GUPSHUP WHATSAPP WEBHOOK - PRUEBA EN PARALELO
-# ============================================================
-
-def extraer_mensaje_gupshup(data):
-    """
-    Extrae teléfono, texto y message_id desde un webhook de Gupshup.
-    Está preparado para Gupshup format (v2) y tolera variaciones comunes
-    del payload para facilitar las primeras pruebas.
-    """
-    data = data or {}
-    payload = data.get("payload") or {}
-    source = (
-        data.get("source")
-        or payload.get("source")
-        or payload.get("sender", {}).get("phone")
-        or payload.get("sender", {}).get("phone_number")
-        or payload.get("sender", {}).get("id")
-        or ""
-    )
-
-    message_id = (
-        data.get("messageId")
-        or data.get("message_id")
-        or payload.get("id")
-        or payload.get("messageId")
-        or payload.get("message_id")
-        or ""
-    )
-
-    texto = ""
-    ptype = (payload.get("type") or data.get("type") or "").lower()
-
-    if ptype == "text":
-        texto = (
-            (payload.get("payload") or {}).get("text")
-            if isinstance(payload.get("payload"), dict)
-            else ""
-        ) or payload.get("text") or ""
-    else:
-        inner = payload.get("payload")
-        if isinstance(inner, dict):
-            texto = inner.get("text") or inner.get("body") or ""
-        if not texto:
-            texto = payload.get("text") or payload.get("body") or data.get("text") or ""
-
-    telefono = str(source).strip()
-    texto = str(texto or "").strip()
-    message_id = str(message_id or "").strip()
-    return telefono, texto, message_id
-
-
-@app.route("/gupshup/webhook", methods=["POST"])
-def gupshup_webhook():
-    try:
-        data = request.get_json(silent=True) or {}
-
-        print("=" * 60)
-        print("GUPSHUP WEBHOOK")
-        print(json.dumps(data, ensure_ascii=False))
-        print("=" * 60)
-
-        telefono, texto, message_id = extraer_mensaje_gupshup(data)
-
-        # Evita procesar eventos de estado u otros callbacks como si fueran mensajes.
-        if not telefono or not texto:
-            return {"ok": True, "ignored": True}, 200
-
-        # Evita duplicados ante reintentos de Gupshup.
-        if message_id:
-            key = f"gupshup:{message_id}"
-            with PROCESADOS_LOCK:
-                ahora_ts = datetime.now().timestamp()
-                viejos = [k for k, ts in PROCESADOS.items() if ahora_ts - ts > 300]
-                for k in viejos:
-                    PROCESADOS.pop(k, None)
-                if key in PROCESADOS:
-                    return {"ok": True, "duplicate": True}, 200
-                PROCESADOS[key] = ahora_ts
-
-        # Por seguridad, en esta primera etapa SOLO registramos el mensaje.
-        # No respondemos todavía por Gupshup hasta configurar la API Key
-        # y validar el payload real de producción.
-        guardar_mensaje(telefono, "user", texto)
-
-        print("GUPSHUP FROM:", telefono)
-        print("GUPSHUP BODY:", texto)
-        print("GUPSHUP MESSAGE ID:", message_id)
-
-        return {
-            "ok": True,
-            "channel": "Gupshup WhatsApp",
-            "received": True,
-            "reply_enabled": False,
-        }, 200
-
-    except Exception as e:
-        print("GUPSHUP ERROR:", repr(e))
-        import traceback
-        print(traceback.format_exc())
-        return {"ok": False, "error": "internal_error"}, 200
-
-
 # ============================================================
 # TWILIO WHATSAPP WEBHOOK
 # ============================================================
@@ -1011,6 +915,152 @@ def whatsapp_webhook():
 
 
 # ============================================================
+# GUPSHUP WHATSAPP - ENVÍO + WEBHOOK EN PARALELO
+# ============================================================
+
+def enviar_gupshup_texto(destino, texto):
+    """Envía un mensaje de sesión de texto usando la API oficial de Gupshup."""
+    if not GUPSHUP_API_KEY:
+        raise RuntimeError("Falta GUPSHUP_API_KEY en Render")
+    if not GUPSHUP_SOURCE:
+        raise RuntimeError("Falta GUPSHUP_SOURCE en Render")
+    if not GUPSHUP_APP_NAME:
+        raise RuntimeError("Falta GUPSHUP_APP_NAME en Render")
+
+    destino = re.sub(r"\D", "", (destino or ""))
+    source = re.sub(r"\D", "", (GUPSHUP_SOURCE or ""))
+    if not destino:
+        raise ValueError("Destino Gupshup vacío")
+
+    payload = {
+        "channel": "whatsapp",
+        "source": source,
+        "destination": destino,
+        "src.name": GUPSHUP_APP_NAME,
+        "message": json.dumps(
+            {
+                "type": "text",
+                "text": texto,
+                "previewUrl": False,
+            },
+            ensure_ascii=False,
+        ),
+    }
+    headers = {
+        "apikey": GUPSHUP_API_KEY,
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
+    r = requests.post(
+        GUPSHUP_API_URL,
+        headers=headers,
+        data=payload,
+        timeout=20,
+    )
+
+    print("GUPSHUP SEND STATUS:", r.status_code)
+    print("GUPSHUP SEND RESPONSE:", r.text[:2000])
+
+    # Gupshup puede devolver JSON de error incluso con cuerpo legible.
+    if not r.ok:
+        raise RuntimeError(f"Gupshup HTTP {r.status_code}: {r.text[:1000]}")
+
+    try:
+        data = r.json()
+    except Exception:
+        data = {}
+
+    if isinstance(data, dict) and data.get("status") == "error":
+        raise RuntimeError(f"Gupshup error: {data}")
+
+    return data
+
+
+@app.route("/gupshup/webhook", methods=["POST"])
+def gupshup_webhook():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        print("=" * 60)
+        print("GUPSHUP WEBHOOK")
+        print(json.dumps(data, ensure_ascii=False))
+        print("=" * 60)
+
+        # Gupshup también envía user-events y otros eventos al callback.
+        # Solo procesamos mensajes entrantes de usuario.
+        if data.get("type") != "message":
+            return "OK", 200
+
+        payload = data.get("payload") or {}
+        message_id = (payload.get("id") or "").strip()
+        telefono = str(payload.get("source") or (payload.get("sender") or {}).get("phone") or "").strip()
+        tipo = (payload.get("type") or "").strip().lower()
+        contenido = payload.get("payload") or {}
+
+        if tipo == "text":
+            texto = (contenido.get("text") or "").strip()
+        else:
+            texto = ""
+
+        print("GUPSHUP FROM:", telefono)
+        print("GUPSHUP TYPE:", tipo)
+        print("GUPSHUP BODY:", texto)
+        print("GUPSHUP MESSAGE ID:", message_id)
+
+        # Evita respuestas duplicadas ante reintentos del webhook.
+        if message_id:
+            with PROCESADOS_LOCK:
+                ahora_ts = datetime.now().timestamp()
+                viejos = [k for k, ts in PROCESADOS.items() if ahora_ts - ts > 300]
+                for k in viejos:
+                    PROCESADOS.pop(k, None)
+                if message_id in PROCESADOS:
+                    return "OK", 200
+                PROCESADOS[message_id] = ahora_ts
+
+        if not telefono:
+            return "OK", 200
+
+        # Por ahora el bot conversa por texto. Si llega imagen/audio/documento,
+        # respondemos indicando que escriba el mensaje para mantener el flujo estable.
+        if tipo != "text":
+            respuesta = "Por ahora puedo ayudarte por texto 😊. Escríbeme tu consulta, servicio o la fecha en que quieres agendar."
+        elif not texto:
+            respuesta = mensaje_bienvenida()
+        else:
+            guardar_mensaje(telefono, "user", texto)
+            estado = get_estado(telefono)
+
+            if quiere_hablar_con_persona(texto):
+                respuesta = mensaje_contacto_persona()
+            elif es_menu(texto):
+                reset_estado(telefono)
+                respuesta = mensaje_bienvenida()
+            elif estado.get("paso") != "inicio":
+                respuesta = procesar_agenda(estado, texto)
+            elif pregunta_servicios(texto):
+                respuesta = mostrar_servicios()
+            elif detectar_servicio(texto) or corte_ambiguo(texto) or intencion_agendar(texto) or texto_menciona_fecha(texto):
+                estado["paso"] = "inicio"
+                respuesta = procesar_agenda(estado, texto)
+            else:
+                respuesta = respuesta_general(texto)
+
+        guardar_mensaje(telefono, "assistant", respuesta)
+        enviar_gupshup_texto(telefono, respuesta)
+        return "OK", 200
+
+    except Exception as e:
+        print("GUPSHUP ERROR:", repr(e))
+        import traceback
+        print(traceback.format_exc())
+
+        # Devolvemos 200 para evitar una tormenta de reintentos del webhook.
+        # El detalle del fallo queda registrado en Render.
+        return "OK", 200
+
+
+# ============================================================
 # HEALTHCHECK
 # ============================================================
 
@@ -1020,7 +1070,7 @@ def health():
         "ok": True,
         "app": "Asistente Virtual Estilista Diego",
         "version": APP_VERSION,
-        "channel": "Twilio WhatsApp + Gupshup test webhook",
+        "channel": "Twilio WhatsApp + Gupshup WhatsApp",
         "calendar": "Google Calendar",
         "payments": "disabled",
     }, 200
