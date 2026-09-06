@@ -1,6 +1,7 @@
 import os
 import re
 import html
+import json
 from datetime import datetime, timedelta
 from threading import Lock
 
@@ -14,7 +15,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-04-V34-DIEGO-GOOGLE-SCOPES-UNIFICADOS"
+APP_VERSION = "2026-09-06-V35-DIEGO-TWILIO-GUPSHUP-PARALLEL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -835,6 +836,110 @@ def procesar_agenda(estado, texto):
     return mensaje_bienvenida()
 
 
+
+# ============================================================
+# GUPSHUP WHATSAPP WEBHOOK - PRUEBA EN PARALELO
+# ============================================================
+
+def extraer_mensaje_gupshup(data):
+    """
+    Extrae teléfono, texto y message_id desde un webhook de Gupshup.
+    Está preparado para Gupshup format (v2) y tolera variaciones comunes
+    del payload para facilitar las primeras pruebas.
+    """
+    data = data or {}
+    payload = data.get("payload") or {}
+    source = (
+        data.get("source")
+        or payload.get("source")
+        or payload.get("sender", {}).get("phone")
+        or payload.get("sender", {}).get("phone_number")
+        or payload.get("sender", {}).get("id")
+        or ""
+    )
+
+    message_id = (
+        data.get("messageId")
+        or data.get("message_id")
+        or payload.get("id")
+        or payload.get("messageId")
+        or payload.get("message_id")
+        or ""
+    )
+
+    texto = ""
+    ptype = (payload.get("type") or data.get("type") or "").lower()
+
+    if ptype == "text":
+        texto = (
+            (payload.get("payload") or {}).get("text")
+            if isinstance(payload.get("payload"), dict)
+            else ""
+        ) or payload.get("text") or ""
+    else:
+        inner = payload.get("payload")
+        if isinstance(inner, dict):
+            texto = inner.get("text") or inner.get("body") or ""
+        if not texto:
+            texto = payload.get("text") or payload.get("body") or data.get("text") or ""
+
+    telefono = str(source).strip()
+    texto = str(texto or "").strip()
+    message_id = str(message_id or "").strip()
+    return telefono, texto, message_id
+
+
+@app.route("/gupshup/webhook", methods=["POST"])
+def gupshup_webhook():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        print("=" * 60)
+        print("GUPSHUP WEBHOOK")
+        print(json.dumps(data, ensure_ascii=False))
+        print("=" * 60)
+
+        telefono, texto, message_id = extraer_mensaje_gupshup(data)
+
+        # Evita procesar eventos de estado u otros callbacks como si fueran mensajes.
+        if not telefono or not texto:
+            return {"ok": True, "ignored": True}, 200
+
+        # Evita duplicados ante reintentos de Gupshup.
+        if message_id:
+            key = f"gupshup:{message_id}"
+            with PROCESADOS_LOCK:
+                ahora_ts = datetime.now().timestamp()
+                viejos = [k for k, ts in PROCESADOS.items() if ahora_ts - ts > 300]
+                for k in viejos:
+                    PROCESADOS.pop(k, None)
+                if key in PROCESADOS:
+                    return {"ok": True, "duplicate": True}, 200
+                PROCESADOS[key] = ahora_ts
+
+        # Por seguridad, en esta primera etapa SOLO registramos el mensaje.
+        # No respondemos todavía por Gupshup hasta configurar la API Key
+        # y validar el payload real de producción.
+        guardar_mensaje(telefono, "user", texto)
+
+        print("GUPSHUP FROM:", telefono)
+        print("GUPSHUP BODY:", texto)
+        print("GUPSHUP MESSAGE ID:", message_id)
+
+        return {
+            "ok": True,
+            "channel": "Gupshup WhatsApp",
+            "received": True,
+            "reply_enabled": False,
+        }, 200
+
+    except Exception as e:
+        print("GUPSHUP ERROR:", repr(e))
+        import traceback
+        print(traceback.format_exc())
+        return {"ok": False, "error": "internal_error"}, 200
+
+
 # ============================================================
 # TWILIO WHATSAPP WEBHOOK
 # ============================================================
@@ -915,7 +1020,7 @@ def health():
         "ok": True,
         "app": "Asistente Virtual Estilista Diego",
         "version": APP_VERSION,
-        "channel": "Twilio WhatsApp",
+        "channel": "Twilio WhatsApp + Gupshup test webhook",
         "calendar": "Google Calendar",
         "payments": "disabled",
     }, 200
