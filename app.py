@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-07-V52-NEXIA-CORE-ADMIN-AUTH-FIX"
+APP_VERSION = "2026-09-08-V53-NEXIA-CORE-DESCRIPCION-EMPRESA"
 load_dotenv()
 
 app = Flask(__name__)
@@ -99,7 +99,7 @@ TENANT_CACHE_LOCK = Lock()
 TENANT_CACHE_TTL = int(os.getenv("TENANT_CACHE_TTL", "60"))
 
 def tenant_default():
-    return {"empresa_id": DEFAULT_EMPRESA_ID,"empresa_nombre": DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":"reservas","asistente_nombre":DEFAULT_ASISTENTE_NOMBRE,"direccion":DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":DEFAULT_TELEFONO_EJECUTIVO,"timezone":TIMEZONE,"calendar_id":DEFAULT_CALENDAR_ID,"hora_apertura":DEFAULT_HORA_APERTURA,"hora_cierre":DEFAULT_HORA_CIERRE,"duracion_reserva":DEFAULT_DURACION_RESERVA,"dias_atencion":[0,1,2,3,4,5],"prompt_extra":"","modulos":{"ia":True,"reservas":True,"handoff_humano":True,"whatsapp":True,"instagram":True},"servicios":None,"canal":None,"provider":None,"canal_config":{}}
+    return {"empresa_id": DEFAULT_EMPRESA_ID,"empresa_nombre": DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":"reservas","descripcion_empresa":"","asistente_nombre":DEFAULT_ASISTENTE_NOMBRE,"direccion":DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":DEFAULT_TELEFONO_EJECUTIVO,"timezone":TIMEZONE,"calendar_id":DEFAULT_CALENDAR_ID,"hora_apertura":DEFAULT_HORA_APERTURA,"hora_cierre":DEFAULT_HORA_CIERRE,"duracion_reserva":DEFAULT_DURACION_RESERVA,"dias_atencion":[0,1,2,3,4,5],"prompt_extra":"","modulos":{"ia":True,"reservas":True,"handoff_humano":True,"whatsapp":True,"instagram":True},"servicios":None,"canal":None,"provider":None,"canal_config":{}}
 
 def tenant_actual(): return TENANT_CTX.get() or tenant_default()
 def set_tenant(data): TENANT_CTX.set(data or tenant_default())
@@ -149,7 +149,7 @@ def cargar_empresa_config(empresa_id,canal=None,provider=None,canal_config=None)
         for row in rows:
             codigo=str(row.get("codigo") or "").strip()
             if codigo:servicios[codigo]={"numero":row.get("numero"),"nombre":row.get("nombre") or codigo,"precio":int(row.get("precio") or 0),"precio_texto":row.get("precio_texto") or "","detalle":row.get("detalle") or "","categoria":row.get("categoria") or "Servicios","aliases":row.get("aliases") or [],"duracion_minutos":row.get("duracion_minutos")}
-        base=tenant_default();base.update({"empresa_id":empresa_id,"empresa_nombre":empresas[0].get("nombre") or DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":conf.get("tipo_negocio") or "reservas","asistente_nombre":conf.get("asistente_nombre") or DEFAULT_ASISTENTE_NOMBRE,"direccion":conf.get("direccion") or DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":conf.get("telefono_ejecutivo") or DEFAULT_TELEFONO_EJECUTIVO,"timezone":conf.get("timezone") or TIMEZONE,"calendar_id":conf.get("calendar_id") or DEFAULT_CALENDAR_ID,"hora_apertura":conf.get("hora_apertura") if conf.get("hora_apertura") is not None else DEFAULT_HORA_APERTURA,"hora_cierre":conf.get("hora_cierre") if conf.get("hora_cierre") is not None else DEFAULT_HORA_CIERRE,"duracion_reserva":conf.get("duracion_reserva") if conf.get("duracion_reserva") is not None else DEFAULT_DURACION_RESERVA,"dias_atencion":conf.get("dias_atencion") or [0,1,2,3,4,5],"prompt_extra":conf.get("prompt_extra") or "","modulos":conf.get("modulos") or tenant_default()["modulos"],"servicios":servicios or None});_cache_set(key,base)
+        base=tenant_default();base.update({"empresa_id":empresa_id,"empresa_nombre":empresas[0].get("nombre") or DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":conf.get("tipo_negocio") or "reservas","descripcion_empresa":conf.get("descripcion_empresa") or "","asistente_nombre":conf.get("asistente_nombre") or DEFAULT_ASISTENTE_NOMBRE,"direccion":conf.get("direccion") or DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":conf.get("telefono_ejecutivo") or DEFAULT_TELEFONO_EJECUTIVO,"timezone":conf.get("timezone") or TIMEZONE,"calendar_id":conf.get("calendar_id") or DEFAULT_CALENDAR_ID,"hora_apertura":conf.get("hora_apertura") if conf.get("hora_apertura") is not None else DEFAULT_HORA_APERTURA,"hora_cierre":conf.get("hora_cierre") if conf.get("hora_cierre") is not None else DEFAULT_HORA_CIERRE,"duracion_reserva":conf.get("duracion_reserva") if conf.get("duracion_reserva") is not None else DEFAULT_DURACION_RESERVA,"dias_atencion":conf.get("dias_atencion") or [0,1,2,3,4,5],"prompt_extra":conf.get("prompt_extra") or "","modulos":conf.get("modulos") or tenant_default()["modulos"],"servicios":servicios or None});_cache_set(key,base)
     if base is None:base=tenant_default();base["empresa_id"]=empresa_id
     out=dict(base);out["canal"]=canal;out["provider"]=provider;out["canal_config"]=dict(canal_config or {});return out
 
@@ -939,14 +939,16 @@ def respuesta_general(texto):
         f"{s['nombre']}: {s['precio_texto']}" for s in servicios_actuales().values()
     )
     system = f"""
-Eres el asistente virtual de {cfg('empresa_nombre', DEFAULT_NEGOCIO_NOMBRE)}. Tipo de negocio: {cfg('tipo_negocio','reservas')}.
-Tu única función es ayudar a clientes con servicios, precios, horarios y reservas.
+Eres el asistente virtual de {cfg('empresa_nombre', DEFAULT_NEGOCIO_NOMBRE)}.
+Tipo de negocio: {cfg('tipo_negocio','reservas')}.
+Descripción de la empresa: {cfg('descripcion_empresa','') or 'Sin descripción adicional configurada.'}
+Tu función es ayudar a clientes basándote únicamente en la información real configurada para esta empresa: su descripción, servicios, precios, horarios, dirección y reservas.
 Dirección de atención: {cfg('direccion', DEFAULT_DIRECCION_ATENCION)}.
-Si el cliente quiere hablar con Diego, con un ejecutivo o con una persona, indícale este teléfono: {cfg('telefono_ejecutivo', DEFAULT_TELEFONO_EJECUTIVO)}.
+Si el cliente quiere hablar con una persona o con un ejecutivo, indícale este teléfono: {cfg('telefono_ejecutivo', DEFAULT_TELEFONO_EJECUTIVO)}.
 Horario: lunes a sábado, de {cfg_int('hora_apertura', DEFAULT_HORA_APERTURA)}:00 a {cfg_int('hora_cierre', DEFAULT_HORA_CIERRE)}:00.
 Servicios: {contexto_servicios}.
 No inventes información. No hables de sistemas internos, APIs ni código.
-Si el usuario escribe algo fuera de este ámbito, responde amablemente que eres el asistente de Diego y que puedes ayudar con servicios, precios, disponibilidad o agendar.
+Si el usuario escribe algo fuera de este ámbito, responde amablemente que eres el asistente virtual de {cfg('empresa_nombre', DEFAULT_NEGOCIO_NOMBRE)} y que puedes ayudar con información del negocio, servicios, precios, disponibilidad o reservas.
 Mantén la respuesta breve y en español de Chile.
 """
     try:
@@ -2223,6 +2225,7 @@ def portal_admin_empresas():
             json={
                 "empresa_id": empresa["id"],
                 "tipo_negocio": "reservas",
+                "descripcion_empresa": "",
                 "asistente_nombre": nombre,
                 "timezone": "America/Santiago",
                 "calendar_id": "primary",
@@ -2340,7 +2343,7 @@ def portal_admin_configuracion(empresa_id):
     try:
         data = request.get_json(silent=True) or {}
         allowed = {
-            "tipo_negocio", "asistente_nombre", "direccion", "telefono_ejecutivo",
+            "tipo_negocio", "descripcion_empresa", "asistente_nombre", "direccion", "telefono_ejecutivo",
             "timezone", "calendar_id", "hora_apertura", "hora_cierre",
             "duracion_reserva", "dias_atencion", "modulos", "prompt_extra"
         }
