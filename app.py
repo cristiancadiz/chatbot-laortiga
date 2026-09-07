@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-08-V53-NEXIA-CORE-DESCRIPCION-EMPRESA"
+APP_VERSION = "2026-09-08-V54-NEXIA-CORE-SALUDO-MULTICLIENTE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -998,14 +998,50 @@ def reset_estado(telefono):
 
 
 def mensaje_bienvenida():
-    return (
-        f"¡Hola! 👋 Soy el asistente virtual de {cfg('asistente_nombre', DEFAULT_ASISTENTE_NOMBRE)}.\n\n"
-        "Estoy aquí para ayudarte con sus servicios, precios, horarios disponibles y para agendar tu hora 📅.\n\n"
-        "Puedes escribirme de forma natural, por ejemplo:\n"
-        "• Quiero agendar un corte de hombre mañana\n"
-        "• ¿Qué servicios tienes?\n"
-        "• ¿Tienes hora el viernes?"
-    )
+    empresa = str(cfg("empresa_nombre", DEFAULT_NEGOCIO_NOMBRE) or "").strip()
+    asistente = str(cfg("asistente_nombre", "") or "").strip()
+    tipo_negocio = str(cfg("tipo_negocio", "reservas") or "").strip().lower()
+
+    if asistente and asistente.lower() != empresa.lower():
+        presentacion = f"¡Hola! 👋 Soy {asistente}, el asistente virtual de {empresa}."
+    else:
+        presentacion = f"¡Hola! 👋 Soy el asistente virtual de {empresa}."
+
+    if tipo_negocio in {"reservas", "agenda", "agendamiento", "servicios", "peluqueria", "barberia", "salon"}:
+        ayuda = (
+            "Estoy aquí para ayudarte con información del negocio, servicios, "
+            "precios, horarios disponibles y reservas."
+        )
+        ejemplos = (
+            "\n\nPuedes escribirme de forma natural, por ejemplo:\n"
+            "• ¿Qué servicios tienen?\n"
+            "• ¿Cuáles son sus horarios?\n"
+            "• Quiero hacer una reserva"
+        )
+    elif tipo_negocio in {"ventas", "ecommerce", "tienda", "comercio", "retail"}:
+        ayuda = (
+            "Estoy aquí para ayudarte con información del negocio, productos, "
+            "precios y consultas de atención."
+        )
+        ejemplos = (
+            "\n\nPuedes escribirme de forma natural, por ejemplo:\n"
+            "• ¿Qué productos tienen?\n"
+            "• ¿Cuáles son sus horarios?\n"
+            "• Necesito ayuda con una compra"
+        )
+    else:
+        ayuda = (
+            "Estoy aquí para ayudarte con información sobre la empresa, "
+            "sus servicios y canales de atención."
+        )
+        ejemplos = (
+            "\n\nPuedes escribirme de forma natural, por ejemplo:\n"
+            "• ¿Qué servicios ofrecen?\n"
+            "• ¿Cuáles son sus horarios?\n"
+            "• Necesito más información"
+        )
+
+    return f"{presentacion}\n\n{ayuda}{ejemplos}"
 
 
 def pedir_servicio():
@@ -1038,8 +1074,9 @@ def quiere_hablar_con_persona(texto):
 
 
 def mensaje_contacto_persona():
+    empresa = str(cfg("empresa_nombre", DEFAULT_NEGOCIO_NOMBRE) or "").strip()
     return (
-        f"Claro 😊 Si quieres hablar directamente con {cfg('asistente_nombre', DEFAULT_ASISTENTE_NOMBRE)} o con una persona, "
+        f"Claro 😊 Si quieres hablar directamente con una persona de {empresa}, "
         f"puedes comunicarte al *{cfg('telefono_ejecutivo', DEFAULT_TELEFONO_EJECUTIVO)}*."
     )
 
