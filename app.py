@@ -19,7 +19,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-07-V44-NEXIA-PORTAL-TWILIO-INSTAGRAM"
+APP_VERSION = "2026-09-07-V45-NEXIA-HANDOFF-HUMANO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -556,6 +556,77 @@ def supabase_headers():
     }
 
 
+
+def obtener_modo_atencion(identificador, canal="whatsapp"):
+    """
+    Devuelve 'bot' o 'ejecutivo' para una conversación.
+    Si la conversación aún no existe o Supabase falla, usa 'bot'.
+    """
+    headers = supabase_headers()
+    if not headers or not SUPABASE_EMPRESA_ID:
+        return "bot"
+
+    canal = (canal or "whatsapp").strip().lower()
+    identificador = str(identificador or "").strip()
+    if canal == "whatsapp":
+        identificador = re.sub(r"\D", "", normalizar_telefono(identificador))
+    else:
+        identificador = re.sub(r"\D", "", identificador)
+
+    if not identificador:
+        return "bot"
+
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/conversaciones",
+            headers=headers,
+            params={
+                "select": "modo_atencion",
+                "empresa_id": f"eq.{SUPABASE_EMPRESA_ID}",
+                "telefono": f"eq.{identificador}",
+                "canal": f"eq.{canal}",
+                "limit": "1",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        filas = r.json() if r.content else []
+        if not filas:
+            return "bot"
+        return str(filas[0].get("modo_atencion") or "bot").lower()
+    except Exception as e:
+        print("SUPABASE MODO ATENCION ERROR:", repr(e))
+        return "bot"
+
+
+def establecer_modo_atencion(conversacion_id, modo):
+    """
+    Cambia el control de la conversación.
+    modo: 'bot' o 'ejecutivo'
+    """
+    modo = str(modo or "").strip().lower()
+    if modo not in {"bot", "ejecutivo"}:
+        raise ValueError("Modo de atención inválido")
+
+    headers = supabase_headers()
+    if not headers:
+        raise RuntimeError("Supabase no está configurado")
+
+    r = requests.patch(
+        f"{SUPABASE_URL}/rest/v1/conversaciones",
+        headers={**headers, "Prefer": "return=minimal"},
+        params={
+            "id": f"eq.{conversacion_id}",
+            "empresa_id": f"eq.{SUPABASE_EMPRESA_ID}",
+        },
+        json={"modo_atencion": modo},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    print("SUPABASE MODO ATENCION OK:", conversacion_id, modo)
+    return True
+
+
 def guardar_mensaje_supabase(
     telefono,
     direccion,
@@ -612,6 +683,7 @@ def guardar_mensaje_supabase(
                 "ultimo_mensaje": mensaje,
                 "ultima_fecha": ahora_iso,
                 "canal": canal,
+                "modo_atencion": "bot",
             }
             if nombre_contacto and not filas[0].get("nombre_contacto"):
                 cambios["nombre_contacto"] = nombre_contacto
@@ -1138,6 +1210,11 @@ def whatsapp_webhook():
         else:
             guardar_mensaje(telefono, "user", texto)
             guardar_mensaje_supabase(telefono, "entrante", texto)
+
+            if obtener_modo_atencion(telefono, "whatsapp") == "ejecutivo":
+                print("WHATSAPP MODO EJECUTIVO: bot no responde")
+                return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
             estado = get_estado(telefono)
 
             if quiere_hablar_con_persona(texto):
@@ -1330,6 +1407,11 @@ def gupshup_webhook():
         else:
             guardar_mensaje(telefono, "user", texto)
             guardar_mensaje_supabase(telefono, "entrante", texto)
+
+            if obtener_modo_atencion(telefono, "whatsapp") == "ejecutivo":
+                print("GUPSHUP MODO EJECUTIVO: bot no responde")
+                return "OK", 200
+
             estado = get_estado(telefono)
 
             if quiere_hablar_con_persona(texto):
@@ -1738,7 +1820,31 @@ def instagram_webhook_eventos():
                     continue
 
                 try:
-                    respuesta = procesar_texto_instagram(sender_id, texto, username=username)
+                    if obtener_modo_atencion(sender_id, "instagram") == "ejecutivo":
+                        nombre_instagram = (
+                            f"@{username.lstrip('@')}" if username else None
+                        )
+                        guardar_mensaje(
+                            f"instagram:{sender_id}",
+                            "user",
+                            texto,
+                            canal="instagram",
+                        )
+                        guardar_mensaje_supabase(
+                            sender_id,
+                            "entrante",
+                            texto,
+                            nombre_contacto=nombre_instagram,
+                            canal="instagram",
+                        )
+                        print("INSTAGRAM MODO EJECUTIVO: bot no responde")
+                        continue
+
+                    respuesta = procesar_texto_instagram(
+                        sender_id,
+                        texto,
+                        username=username,
+                    )
                     enviar_instagram_texto(sender_id, respuesta)
                 except Exception as e:
                     print("INSTAGRAM PROCESAR/ENVIAR ERROR:", repr(e))
@@ -1854,7 +1960,7 @@ def obtener_conversacion_supabase(conversacion_id):
         f"{SUPABASE_URL}/rest/v1/conversaciones",
         headers=headers,
         params={
-            "select": "id,empresa_id,telefono,nombre_contacto,canal",
+            "select": "id,empresa_id,telefono,nombre_contacto,canal,modo_atencion",
             "id": f"eq.{conversacion_id}",
             "empresa_id": f"eq.{SUPABASE_EMPRESA_ID}",
             "limit": "1",
@@ -1864,6 +1970,36 @@ def obtener_conversacion_supabase(conversacion_id):
     r.raise_for_status()
     filas = r.json() if r.content else []
     return filas[0] if filas else None
+
+
+
+@app.route("/portal/modo-atencion", methods=["POST", "OPTIONS"])
+def portal_modo_atencion():
+    if request.method == "OPTIONS":
+        from flask import make_response
+        return portal_cors_response(make_response("", 204))
+
+    perfil_portal = portal_usuario_autorizado()
+    if not perfil_portal:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+
+    data = request.get_json(silent=True) or {}
+    conversacion_id = str(data.get("conversacion_id") or "").strip()
+    modo = str(data.get("modo") or "").strip().lower()
+
+    if not conversacion_id or modo not in {"bot", "ejecutivo"}:
+        return portal_json({"ok": False, "error": "Datos inválidos"}, 400)
+
+    try:
+        conv = obtener_conversacion_supabase(conversacion_id)
+        if not conv:
+            return portal_json({"ok": False, "error": "Conversación no encontrada"}, 404)
+
+        establecer_modo_atencion(conversacion_id, modo)
+        return portal_json({"ok": True, "modo": modo})
+    except Exception as e:
+        print("PORTAL MODO ATENCION ERROR:", repr(e))
+        return portal_json({"ok": False, "error": str(e)[:300]}, 500)
 
 
 @app.route("/portal/enviar-mensaje", methods=["POST", "OPTIONS"])
@@ -1893,6 +2029,10 @@ def portal_enviar_mensaje():
 
         canal = str(conv.get("canal") or "whatsapp").lower()
         destino = str(conv.get("telefono") or "").strip()
+
+        # En cuanto un ejecutivo responde desde el portal, el bot deja de intervenir
+        # en esta conversación hasta que se reactive manualmente.
+        establecer_modo_atencion(conversacion_id, "ejecutivo")
 
         if canal == "instagram":
             resultado = enviar_instagram_texto(destino, mensaje)
