@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-07-V50-NEXIA-CORE-MULTICLIENTE"
+APP_VERSION = "2026-09-07-V51-NEXIA-CORE-ADMIN"
 load_dotenv()
 
 app = Flask(__name__)
@@ -80,7 +80,8 @@ INSTAGRAM_API_BASE = os.getenv("INSTAGRAM_API_BASE", "https://graph.instagram.co
 # Nunca debe ponerse en portal.html ni exponerse en el navegador.
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://nappdpkjtdzwtiuvrrhk.supabase.co").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-DEFAULT_EMPRESA_ID = os.getenv("empresa_actual_id()", "97be347a-51d6-467d-be49-839a254a4ad0")
+DEFAULT_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "97be347a-51d6-467d-be49-839a254a4ad0")
+NEXIA_EMPRESA_ID = os.getenv("NEXIA_EMPRESA_ID", "0a9de921-9386-441c-b5aa-f432d3f44fe5")
 SUPABASE_TIMEOUT = int(os.getenv("SUPABASE_TIMEOUT", "15"))
 
 PORTAL_ORIGIN = os.getenv("PORTAL_ORIGIN", "https://nexia-tech.com").rstrip("/")
@@ -2096,6 +2097,330 @@ def health():
         "calendar": "Google Calendar",
         "payments": "disabled",
     }, 200
+
+
+# ============================================================
+# PORTAL ADMIN NEXIA
+# ============================================================
+
+def portal_admin_autorizado():
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return None
+
+    rol = str(perfil.get("rol") or "").strip().lower()
+    empresa_id = str(perfil.get("empresa_id") or "").strip()
+
+    if empresa_id != str(NEXIA_EMPRESA_ID):
+        return None
+
+    if rol not in {"admin", "nexia_admin", "superadmin", "administrador"}:
+        return None
+
+    return perfil
+
+
+def admin_json_error(msg, status=400):
+    return portal_json({"ok": False, "error": msg}, status)
+
+
+@app.route("/portal/admin/empresas", methods=["GET", "POST", "OPTIONS"])
+def portal_admin_empresas():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+
+    if not portal_admin_autorizado():
+        return admin_json_error("Administrador Nexia no autorizado", 403)
+
+    headers = backend_headers()
+    if not headers:
+        return admin_json_error("Supabase backend no configurado", 500)
+
+    try:
+        if request.method == "GET":
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/empresas",
+                headers=headers,
+                params={"select": "id,nombre,activo,created_at", "order": "created_at.desc"},
+                timeout=SUPABASE_TIMEOUT,
+            )
+            r.raise_for_status()
+            return portal_json({"ok": True, "empresas": r.json() if r.content else []})
+
+        data = request.get_json(silent=True) or {}
+        nombre = str(data.get("nombre") or "").strip()
+        if not nombre:
+            return admin_json_error("El nombre de la empresa es obligatorio")
+
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/empresas",
+            headers={**headers, "Prefer": "return=representation"},
+            json={"nombre": nombre, "activo": bool(data.get("activo", True))},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        empresa = (r.json() or [None])[0]
+
+        requests.post(
+            f"{SUPABASE_URL}/rest/v1/configuracion_bot",
+            headers={**headers, "Prefer": "resolution=merge-duplicates,return=minimal"},
+            json={
+                "empresa_id": empresa["id"],
+                "tipo_negocio": "reservas",
+                "asistente_nombre": nombre,
+                "timezone": "America/Santiago",
+                "calendar_id": "primary",
+                "hora_apertura": 9,
+                "hora_cierre": 18,
+                "duracion_reserva": 60,
+                "dias_atencion": [0,1,2,3,4,5],
+                "modulos": {
+                    "ia": True, "reservas": True, "handoff_humano": True,
+                    "whatsapp": True, "instagram": True
+                },
+                "prompt_extra": ""
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        return portal_json({"ok": True, "empresa": empresa}, 201)
+    except Exception as e:
+        print("PORTAL ADMIN EMPRESAS ERROR:", repr(e))
+        return admin_json_error("No se pudo procesar la empresa", 500)
+
+
+@app.route("/portal/admin/empresa/<empresa_id>", methods=["GET", "PATCH", "OPTIONS"])
+def portal_admin_empresa(empresa_id):
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+
+    if not portal_admin_autorizado():
+        return admin_json_error("Administrador Nexia no autorizado", 403)
+
+    headers = backend_headers()
+    if not headers:
+        return admin_json_error("Supabase backend no configurado", 500)
+
+    try:
+        if request.method == "PATCH":
+            data = request.get_json(silent=True) or {}
+            payload = {}
+            if "nombre" in data:
+                payload["nombre"] = str(data.get("nombre") or "").strip()
+            if "activo" in data:
+                payload["activo"] = bool(data.get("activo"))
+            if payload:
+                r = requests.patch(
+                    f"{SUPABASE_URL}/rest/v1/empresas",
+                    headers={**headers, "Prefer": "return=representation"},
+                    params={"id": f"eq.{empresa_id}"},
+                    json=payload,
+                    timeout=SUPABASE_TIMEOUT,
+                )
+                r.raise_for_status()
+
+        er = requests.get(
+            f"{SUPABASE_URL}/rest/v1/empresas",
+            headers=headers,
+            params={"select": "id,nombre,activo,created_at", "id": f"eq.{empresa_id}", "limit": "1"},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        er.raise_for_status()
+        empresas = er.json() if er.content else []
+        if not empresas:
+            return admin_json_error("Empresa no encontrada", 404)
+
+        cr = requests.get(
+            f"{SUPABASE_URL}/rest/v1/configuracion_bot",
+            headers=headers,
+            params={"select": "*", "empresa_id": f"eq.{empresa_id}", "limit": "1"},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        cr.raise_for_status()
+
+        sr = requests.get(
+            f"{SUPABASE_URL}/rest/v1/servicios",
+            headers=headers,
+            params={"select": "*", "empresa_id": f"eq.{empresa_id}", "order": "orden.asc"},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        sr.raise_for_status()
+
+        chr_ = requests.get(
+            f"{SUPABASE_URL}/rest/v1/canales_empresa",
+            headers=headers,
+            params={
+                "select": "id,empresa_id,canal,provider,identificador_externo,sender,es_principal,activo,app_name,created_at",
+                "empresa_id": f"eq.{empresa_id}",
+                "order": "created_at.asc"
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        chr_.raise_for_status()
+
+        return portal_json({
+            "ok": True,
+            "empresa": empresas[0],
+            "configuracion": (cr.json() if cr.content else [None])[0],
+            "servicios": sr.json() if sr.content else [],
+            "canales": chr_.json() if chr_.content else []
+        })
+    except Exception as e:
+        print("PORTAL ADMIN EMPRESA ERROR:", repr(e))
+        return admin_json_error("No se pudo cargar la empresa", 500)
+
+
+@app.route("/portal/admin/configuracion/<empresa_id>", methods=["PATCH", "OPTIONS"])
+def portal_admin_configuracion(empresa_id):
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+
+    if not portal_admin_autorizado():
+        return admin_json_error("Administrador Nexia no autorizado", 403)
+
+    headers = backend_headers()
+    if not headers:
+        return admin_json_error("Supabase backend no configurado", 500)
+
+    try:
+        data = request.get_json(silent=True) or {}
+        allowed = {
+            "tipo_negocio", "asistente_nombre", "direccion", "telefono_ejecutivo",
+            "timezone", "calendar_id", "hora_apertura", "hora_cierre",
+            "duracion_reserva", "dias_atencion", "modulos", "prompt_extra"
+        }
+        payload = {k: data[k] for k in allowed if k in data}
+        payload["empresa_id"] = empresa_id
+
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/configuracion_bot",
+            headers={**headers, "Prefer": "resolution=merge-duplicates,return=representation"},
+            json=payload,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+
+        with TENANT_CACHE_LOCK:
+            TENANT_CACHE.pop(f"empresa:{empresa_id}", None)
+
+        rows = r.json() if r.content else []
+        return portal_json({"ok": True, "configuracion": rows[0] if rows else payload})
+    except Exception as e:
+        print("PORTAL ADMIN CONFIG ERROR:", repr(e))
+        return admin_json_error("No se pudo guardar la configuración", 500)
+
+
+@app.route("/portal/admin/servicios/<empresa_id>", methods=["POST", "OPTIONS"])
+def portal_admin_servicios_crear(empresa_id):
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+
+    if not portal_admin_autorizado():
+        return admin_json_error("Administrador Nexia no autorizado", 403)
+
+    headers = backend_headers()
+    if not headers:
+        return admin_json_error("Supabase backend no configurado", 500)
+
+    try:
+        data = request.get_json(silent=True) or {}
+        codigo = str(data.get("codigo") or "").strip()
+        nombre = str(data.get("nombre") or "").strip()
+        if not codigo or not nombre:
+            return admin_json_error("Código y nombre son obligatorios")
+
+        payload = {
+            "empresa_id": empresa_id,
+            "codigo": codigo,
+            "numero": data.get("numero"),
+            "nombre": nombre,
+            "categoria": str(data.get("categoria") or "Servicios"),
+            "precio": int(data.get("precio") or 0),
+            "precio_texto": str(data.get("precio_texto") or ""),
+            "detalle": str(data.get("detalle") or ""),
+            "aliases": data.get("aliases") or [],
+            "duracion_minutos": int(data.get("duracion_minutos") or 60),
+            "orden": int(data.get("orden") or 100),
+            "activo": bool(data.get("activo", True))
+        }
+
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/servicios",
+            headers={**headers, "Prefer": "return=representation"},
+            json=payload,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        with TENANT_CACHE_LOCK:
+            TENANT_CACHE.pop(f"empresa:{empresa_id}", None)
+
+        rows = r.json() if r.content else []
+        return portal_json({"ok": True, "servicio": rows[0] if rows else payload}, 201)
+    except Exception as e:
+        print("PORTAL ADMIN CREAR SERVICIO ERROR:", repr(e))
+        return admin_json_error("No se pudo crear el servicio", 500)
+
+
+@app.route("/portal/admin/servicio/<servicio_id>", methods=["PATCH", "DELETE", "OPTIONS"])
+def portal_admin_servicio(servicio_id):
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+
+    if not portal_admin_autorizado():
+        return admin_json_error("Administrador Nexia no autorizado", 403)
+
+    headers = backend_headers()
+    if not headers:
+        return admin_json_error("Supabase backend no configurado", 500)
+
+    try:
+        qr = requests.get(
+            f"{SUPABASE_URL}/rest/v1/servicios",
+            headers=headers,
+            params={"select": "id,empresa_id", "id": f"eq.{servicio_id}", "limit": "1"},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        qr.raise_for_status()
+        found = qr.json() if qr.content else []
+        if not found:
+            return admin_json_error("Servicio no encontrado", 404)
+        empresa_id = found[0]["empresa_id"]
+
+        if request.method == "DELETE":
+            r = requests.delete(
+                f"{SUPABASE_URL}/rest/v1/servicios",
+                headers=headers,
+                params={"id": f"eq.{servicio_id}"},
+                timeout=SUPABASE_TIMEOUT,
+            )
+            r.raise_for_status()
+            with TENANT_CACHE_LOCK:
+                TENANT_CACHE.pop(f"empresa:{empresa_id}", None)
+            return portal_json({"ok": True})
+
+        data = request.get_json(silent=True) or {}
+        allowed = {
+            "codigo","numero","nombre","categoria","precio","precio_texto",
+            "detalle","aliases","duracion_minutos","orden","activo"
+        }
+        payload = {k: data[k] for k in allowed if k in data}
+
+        r = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/servicios",
+            headers={**headers, "Prefer": "return=representation"},
+            params={"id": f"eq.{servicio_id}"},
+            json=payload,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+
+        with TENANT_CACHE_LOCK:
+            TENANT_CACHE.pop(f"empresa:{empresa_id}", None)
+
+        rows = r.json() if r.content else []
+        return portal_json({"ok": True, "servicio": rows[0] if rows else payload})
+    except Exception as e:
+        print("PORTAL ADMIN SERVICIO ERROR:", repr(e))
+        return admin_json_error("No se pudo modificar el servicio", 500)
 
 
 if __name__ == "__main__":
