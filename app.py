@@ -16,7 +16,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-07-V37-DIEGO-TWILIO-GUPSHUP-SUPABASE-PORTAL"
+APP_VERSION = "2026-09-07-V38-DIEGO-SUPABASE-RESERVAS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -51,7 +51,7 @@ GUPSHUP_API_URL = os.getenv("GUPSHUP_API_URL", "https://api.gupshup.io/wa/api/v1
 # Nunca debe ponerse en portal.html ni exponerse en el navegador.
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://nappdpkjtdzwtiuvrrhk.supabase.co").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-SUPABASE_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "0a9de921-9386-441c-b5aa-f432d3f44fe5")
+SUPABASE_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "97be347a-51d6-467d-be49-839a254a4ad0")
 SUPABASE_TIMEOUT = int(os.getenv("SUPABASE_TIMEOUT", "15"))
 
 
@@ -632,6 +632,72 @@ def guardar_mensaje_supabase(telefono, direccion, mensaje, nombre_contacto=None)
         print("SUPABASE LOG ERROR:", repr(e), detalle)
 
 
+def guardar_reserva_supabase(telefono, nombre_cliente, servicio_nombre, inicio, google_event_id=None):
+    """
+    Guarda una reserva confirmada en public.reservas para el Portal Nexia.
+
+    La reserva de Google Calendar sigue siendo la fuente de confirmación del bot.
+    Si Supabase falla, la cita ya creada en Calendar NO se elimina y el bot continúa.
+    """
+    headers = supabase_headers()
+    if not headers or not SUPABASE_EMPRESA_ID:
+        return False
+
+    telefono_limpio = re.sub(r"\D", "", normalizar_telefono(telefono))
+    nombre_cliente = (nombre_cliente or "").strip() or None
+    servicio_nombre = (servicio_nombre or "").strip()
+
+    if not telefono_limpio or not servicio_nombre or not inicio:
+        return False
+
+    try:
+        # Normalizar la fecha/hora a la zona horaria del negocio.
+        if inicio.tzinfo is None:
+            inicio_local = zona_local().localize(inicio)
+        else:
+            inicio_local = inicio.astimezone(zona_local())
+
+        nueva_reserva = {
+            "empresa_id": SUPABASE_EMPRESA_ID,
+            "telefono": telefono_limpio,
+            "nombre_cliente": nombre_cliente,
+            "servicio": servicio_nombre,
+            "fecha": inicio_local.date().isoformat(),
+            "hora": inicio_local.strftime("%H:%M:%S"),
+            "estado": "confirmada",
+            "google_event_id": google_event_id,
+            "updated_at": ahora_local().isoformat(),
+        }
+
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/reservas",
+            headers={**headers, "Prefer": "return=representation"},
+            json=nueva_reserva,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+
+        filas = r.json() if r.content else []
+        reserva_id = filas[0].get("id") if filas else None
+        print(
+            "SUPABASE RESERVA OK:",
+            telefono_limpio,
+            nueva_reserva["fecha"],
+            nueva_reserva["hora"],
+            reserva_id,
+        )
+        return True
+
+    except Exception as e:
+        detalle = ""
+        try:
+            detalle = f" | {r.status_code} {r.text[:1000]}"
+        except Exception:
+            pass
+        print("SUPABASE RESERVA ERROR:", repr(e), detalle)
+        return False
+
+
 # ============================================================
 # GOOGLE SHEETS OPCIONAL - LOG DE CONVERSACIONES
 # ============================================================
@@ -956,6 +1022,17 @@ def procesar_agenda(estado, texto):
         correo = estado["correo"]
         fecha_txt = formatear_fecha(inicio)
         telefono = estado["telefono"]
+
+        # Registrar también la reserva en Supabase para el Portal Nexia.
+        # Un fallo de Supabase no invalida la reserva ya confirmada en Calendar.
+        guardar_reserva_supabase(
+            telefono=telefono,
+            nombre_cliente=nombre,
+            servicio_nombre=servicio["nombre"],
+            inicio=inicio,
+            google_event_id=resultado.get("evento_id"),
+        )
+
         reset_estado(telefono)
         return (
             "✅ *¡Reserva confirmada!*\n\n"
