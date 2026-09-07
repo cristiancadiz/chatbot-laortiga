@@ -15,10 +15,11 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from openai import OpenAI
 from twilio.twiml.messaging_response import MessagingResponse
+from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-07-V43-NEXIA-PORTAL-ENVIO-OMNICANAL"
+APP_VERSION = "2026-09-07-V44-NEXIA-PORTAL-TWILIO-INSTAGRAM"
 load_dotenv()
 
 app = Flask(__name__)
@@ -36,6 +37,21 @@ TIMEZONE = os.getenv("TIMEZONE", "America/Santiago")
 CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 DIRECCION_ATENCION = os.getenv("DIRECCION_ATENCION", "3 Poniente 382, Viña del Mar")
 TELEFONO_EJECUTIVO = os.getenv("TELEFONO_EJECUTIVO", "+56966461436")
+
+# Twilio WhatsApp: recepción y respuestas manuales desde Portal Nexia.
+# Las credenciales deben guardarse SOLO en Render > Environment.
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+TWILIO_WHATSAPP_FROM = os.getenv(
+    "TWILIO_WHATSAPP_FROM",
+    "whatsapp:+56971906724",
+).strip()
+
+twilio_client = (
+    TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN
+    else None
+)
 
 HORA_APERTURA = int(os.getenv("HORA_APERTURA", "10"))
 HORA_CIERRE = int(os.getenv("HORA_CIERRE", "19"))
@@ -1162,6 +1178,43 @@ def whatsapp_webhook():
 
 
 # ============================================================
+# TWILIO WHATSAPP - ENVÍO DESDE PORTAL NEXIA
+# ============================================================
+
+def enviar_twilio_texto(destino, texto):
+    """Envía WhatsApp por el mismo sender Twilio que recibe /whatsapp/webhook."""
+    if not twilio_client:
+        raise RuntimeError(
+            "Faltan TWILIO_ACCOUNT_SID o TWILIO_AUTH_TOKEN en Render"
+        )
+    if not TWILIO_WHATSAPP_FROM:
+        raise RuntimeError("Falta TWILIO_WHATSAPP_FROM en Render")
+
+    destino = re.sub(r"\D", "", str(destino or ""))
+    if not destino:
+        raise ValueError("Destino Twilio vacío")
+
+    to_value = f"whatsapp:+{destino}"
+    from_value = TWILIO_WHATSAPP_FROM
+    if not from_value.startswith("whatsapp:"):
+        from_value = f"whatsapp:{from_value}"
+
+    msg = twilio_client.messages.create(
+        body=texto,
+        from_=from_value,
+        to=to_value,
+    )
+
+    print(
+        "TWILIO PORTAL SEND OK:",
+        "to=", to_value,
+        "sid=", getattr(msg, "sid", ""),
+        "status=", getattr(msg, "status", ""),
+    )
+    return msg
+
+
+# ============================================================
 # GUPSHUP WHATSAPP - ENVÍO + WEBHOOK EN PARALELO
 # ============================================================
 
@@ -1848,8 +1901,8 @@ def portal_enviar_mensaje():
             proveedor = "instagram"
 
         elif canal == "whatsapp":
-            enviar_gupshup_texto(destino, mensaje)
-            proveedor = "gupshup"
+            enviar_twilio_texto(destino, mensaje)
+            proveedor = "twilio"
 
         else:
             return portal_json(
