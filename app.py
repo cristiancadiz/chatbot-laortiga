@@ -18,7 +18,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-07-V40-DIEGO-INSTAGRAM-MESSAGE-EDIT-FALLBACK"
+APP_VERSION = "2026-09-07-V41-NEXIA-PORTAL-MULTICANAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -538,30 +538,44 @@ def supabase_headers():
     }
 
 
-def guardar_mensaje_supabase(telefono, direccion, mensaje, nombre_contacto=None):
+def guardar_mensaje_supabase(
+    telefono,
+    direccion,
+    mensaje,
+    nombre_contacto=None,
+    canal="whatsapp",
+):
     """
     Guarda/actualiza la conversación y agrega el mensaje al Portal Nexia.
-    direccion debe ser: 'entrante' o 'saliente'.
 
-    Si Supabase falla, el bot continúa funcionando normalmente.
+    direccion: 'entrante' o 'saliente'
+    canal: 'whatsapp' o 'instagram'
     """
     headers = supabase_headers()
     if not headers or not SUPABASE_EMPRESA_ID:
         return
 
-    telefono_limpio = re.sub(r"\D", "", normalizar_telefono(telefono))
+    canal = (canal or "whatsapp").strip().lower()
+    identificador = str(telefono or "").strip()
+
+    if canal == "whatsapp":
+        identificador = re.sub(r"\D", "", normalizar_telefono(identificador))
+    else:
+        identificador = re.sub(r"\D", "", identificador)
+
     mensaje = (mensaje or "").strip()
-    if not telefono_limpio or not mensaje:
+    if not identificador or not mensaje:
         return
 
     try:
-        # 1) Buscar conversación existente de este teléfono dentro de la empresa.
         params = {
-            "select": "id,nombre_contacto",
+            "select": "id,nombre_contacto,canal",
             "empresa_id": f"eq.{SUPABASE_EMPRESA_ID}",
-            "telefono": f"eq.{telefono_limpio}",
+            "telefono": f"eq.{identificador}",
+            "canal": f"eq.{canal}",
             "limit": "1",
         }
+
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/conversaciones",
             headers=headers,
@@ -579,6 +593,7 @@ def guardar_mensaje_supabase(telefono, direccion, mensaje, nombre_contacto=None)
             cambios = {
                 "ultimo_mensaje": mensaje,
                 "ultima_fecha": ahora_iso,
+                "canal": canal,
             }
             if nombre_contacto and not filas[0].get("nombre_contacto"):
                 cambios["nombre_contacto"] = nombre_contacto
@@ -591,14 +606,17 @@ def guardar_mensaje_supabase(telefono, direccion, mensaje, nombre_contacto=None)
                 timeout=SUPABASE_TIMEOUT,
             )
             r.raise_for_status()
+
         else:
             nueva = {
                 "empresa_id": SUPABASE_EMPRESA_ID,
-                "telefono": telefono_limpio,
+                "telefono": identificador,
                 "nombre_contacto": nombre_contacto,
                 "ultimo_mensaje": mensaje,
                 "ultima_fecha": ahora_iso,
+                "canal": canal,
             }
+
             r = requests.post(
                 f"{SUPABASE_URL}/rest/v1/conversaciones",
                 headers={**headers, "Prefer": "return=representation"},
@@ -606,19 +624,21 @@ def guardar_mensaje_supabase(telefono, direccion, mensaje, nombre_contacto=None)
                 timeout=SUPABASE_TIMEOUT,
             )
             r.raise_for_status()
+
             creadas = r.json() if r.content else []
             if not creadas:
                 raise RuntimeError("Supabase no devolvió la conversación creada")
             conversacion_id = creadas[0]["id"]
 
-        # 2) Insertar mensaje.
         nuevo_mensaje = {
             "conversacion_id": conversacion_id,
             "empresa_id": SUPABASE_EMPRESA_ID,
             "direccion": direccion,
             "mensaje": mensaje,
             "fecha": ahora_iso,
+            "canal": canal,
         }
+
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/mensajes",
             headers={**headers, "Prefer": "return=minimal"},
@@ -629,13 +649,13 @@ def guardar_mensaje_supabase(telefono, direccion, mensaje, nombre_contacto=None)
 
         print(
             "SUPABASE LOG OK:",
-            telefono_limpio,
+            canal,
+            identificador,
             direccion,
             conversacion_id,
         )
 
     except Exception as e:
-        # El historial no debe botar el webhook si Supabase tiene un problema.
         detalle = ""
         try:
             detalle = f" | {r.status_code} {r.text[:1000]}"
@@ -1482,7 +1502,7 @@ def procesar_texto_instagram(cliente_id, texto):
     session_id = f"instagram:{cliente_id}"
 
     guardar_mensaje(session_id, "user", texto, canal="instagram")
-    guardar_mensaje_supabase(cliente_id, "entrante", texto)
+    guardar_mensaje_supabase(cliente_id, "entrante", texto, canal="instagram")
 
     estado = get_estado(session_id)
 
@@ -1512,6 +1532,7 @@ def procesar_texto_instagram(cliente_id, texto):
         "saliente",
         respuesta,
         nombre_contacto=estado.get("nombre"),
+        canal="instagram",
     )
     return respuesta
 
@@ -1619,7 +1640,7 @@ def instagram_webhook_eventos():
                         "Escríbeme tu consulta, servicio o la fecha en que quieres agendar."
                     )
                     guardar_mensaje(f"instagram:{sender_id}", "assistant", respuesta, canal="instagram")
-                    guardar_mensaje_supabase(sender_id, "saliente", respuesta)
+                    guardar_mensaje_supabase(sender_id, "saliente", respuesta, canal="instagram")
                     enviar_instagram_texto(sender_id, respuesta)
                     continue
 
