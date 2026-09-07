@@ -2,6 +2,8 @@ import os
 import re
 import html
 import json
+import hmac
+import hashlib
 from datetime import datetime, timedelta
 from threading import Lock
 
@@ -16,7 +18,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-07-V38-DIEGO-SUPABASE-RESERVAS"
+APP_VERSION = "2026-09-07-V39-DIEGO-INSTAGRAM-INTEGRADO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -45,6 +47,16 @@ GUPSHUP_API_KEY = os.getenv("GUPSHUP_API_KEY")
 GUPSHUP_SOURCE = os.getenv("GUPSHUP_SOURCE", "56978316272")
 GUPSHUP_APP_NAME = os.getenv("GUPSHUP_APP_NAME", "NexiaTech")
 GUPSHUP_API_URL = os.getenv("GUPSHUP_API_URL", "https://api.gupshup.io/wa/api/v1/msg")
+
+# Instagram Messaging API (Meta).
+# El access token y el app secret deben guardarse SOLO en Render > Environment.
+# Nunca los pongas en portal.html ni los publiques en GitHub.
+INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
+INSTAGRAM_VERIFY_TOKEN = os.getenv("INSTAGRAM_VERIFY_TOKEN", "NEXIA_IG_WEBHOOK_2026")
+INSTAGRAM_APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET")
+INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "17841476077966070")
+INSTAGRAM_GRAPH_VERSION = os.getenv("INSTAGRAM_GRAPH_VERSION", "v26.0")
+INSTAGRAM_API_BASE = os.getenv("INSTAGRAM_API_BASE", "https://graph.instagram.com").rstrip("/")
 
 # Supabase: historial para Portal Nexia.
 # IMPORTANTE: SUPABASE_SERVICE_ROLE_KEY va SOLO en Render > Environment.
@@ -708,7 +720,7 @@ SHEETS_LOCK = Lock()
 SHEETS_READY = False
 
 
-def guardar_mensaje(telefono, rol, mensaje):
+def guardar_mensaje(telefono, rol, mensaje, canal="whatsapp"):
     global SHEETS_READY
     if not GOOGLE_SHEET_ID:
         return
@@ -737,7 +749,7 @@ def guardar_mensaje(telefono, rol, mensaje):
                 range=f"'{GOOGLE_SHEET_TAB}'!A:F",
                 valueInputOption="RAW",
                 insertDataOption="INSERT_ROWS",
-                body={"values": [[ahora_local().isoformat(), "whatsapp", telefono, normalizar_telefono(telefono), rol, mensaje]]},
+                body={"values": [[ahora_local().isoformat(), canal, telefono, normalizar_telefono(telefono), rol, mensaje]]},
             ).execute()
     except Exception as e:
         print("GOOGLE SHEETS LOG ERROR:", repr(e))
@@ -1280,6 +1292,221 @@ def gupshup_webhook():
         return "OK", 200
 
 
+
+# ============================================================
+# INSTAGRAM MESSAGING API - META DIRECTO
+# ============================================================
+
+def instagram_url(path):
+    """Construye una URL de Instagram Graph API usando una versión configurable."""
+    version = (INSTAGRAM_GRAPH_VERSION or "").strip().strip("/")
+    path = "/" + (path or "").lstrip("/")
+    if version:
+        return f"{INSTAGRAM_API_BASE}/{version}{path}"
+    return f"{INSTAGRAM_API_BASE}{path}"
+
+
+def verificar_firma_instagram(raw_body):
+    """
+    Valida X-Hub-Signature-256 cuando INSTAGRAM_APP_SECRET está configurado.
+    Si todavía no se configuró el secret, no bloquea el webhook para facilitar
+    la puesta en marcha inicial.
+    """
+    if not INSTAGRAM_APP_SECRET:
+        return True
+
+    firma = (request.headers.get("X-Hub-Signature-256") or "").strip()
+    if not firma.startswith("sha256="):
+        return False
+
+    esperado = "sha256=" + hmac.new(
+        INSTAGRAM_APP_SECRET.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(firma, esperado)
+
+
+def enviar_instagram_texto(destino_igsid, texto):
+    """Envía un DM de texto por Instagram Messaging API."""
+    if not INSTAGRAM_ACCESS_TOKEN:
+        raise RuntimeError("Falta INSTAGRAM_ACCESS_TOKEN en Render")
+    if not INSTAGRAM_USER_ID:
+        raise RuntimeError("Falta INSTAGRAM_USER_ID en Render")
+
+    destino_igsid = str(destino_igsid or "").strip()
+    if not destino_igsid:
+        raise ValueError("Destinatario Instagram vacío")
+
+    url = instagram_url(f"{INSTAGRAM_USER_ID}/messages")
+    headers = {
+        "Authorization": f"Bearer {INSTAGRAM_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "recipient": {"id": destino_igsid},
+        "message": {"text": str(texto or "")[:1000]},
+    }
+
+    r = requests.post(url, headers=headers, json=payload, timeout=20)
+    print("INSTAGRAM SEND STATUS:", r.status_code)
+    print("INSTAGRAM SEND RESPONSE:", r.text[:2000])
+
+    if not r.ok:
+        raise RuntimeError(f"Instagram HTTP {r.status_code}: {r.text[:1000]}")
+
+    try:
+        return r.json()
+    except Exception:
+        return {}
+
+
+def procesar_texto_instagram(cliente_id, texto):
+    """
+    Reutiliza la misma lógica conversacional del bot de Diego.
+    La sesión se separa de WhatsApp mediante el prefijo 'instagram:'.
+    """
+    session_id = f"instagram:{cliente_id}"
+
+    guardar_mensaje(session_id, "user", texto, canal="instagram")
+    guardar_mensaje_supabase(cliente_id, "entrante", texto)
+
+    estado = get_estado(session_id)
+
+    if quiere_hablar_con_persona(texto):
+        respuesta = mensaje_contacto_persona()
+    elif es_menu(texto):
+        reset_estado(session_id)
+        respuesta = mensaje_bienvenida()
+    elif estado.get("paso") != "inicio":
+        respuesta = procesar_agenda(estado, texto)
+    elif pregunta_servicios(texto):
+        respuesta = mostrar_servicios()
+    elif (
+        detectar_servicio(texto)
+        or corte_ambiguo(texto)
+        or intencion_agendar(texto)
+        or texto_menciona_fecha(texto)
+    ):
+        estado["paso"] = "inicio"
+        respuesta = procesar_agenda(estado, texto)
+    else:
+        respuesta = respuesta_general(texto)
+
+    guardar_mensaje(session_id, "assistant", respuesta, canal="instagram")
+    guardar_mensaje_supabase(
+        cliente_id,
+        "saliente",
+        respuesta,
+        nombre_contacto=estado.get("nombre"),
+    )
+    return respuesta
+
+
+@app.route("/instagram/webhook", methods=["GET"])
+def instagram_webhook_verificacion():
+    """
+    Verificación inicial que hace Meta.
+    En Meta configura:
+      URL: https://TU-SERVICIO.onrender.com/instagram/webhook
+      Verify token: el mismo valor de INSTAGRAM_VERIFY_TOKEN
+    """
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    print("INSTAGRAM VERIFY:", mode, "challenge:", challenge)
+
+    if mode == "subscribe" and token == INSTAGRAM_VERIFY_TOKEN:
+        return str(challenge or ""), 200
+
+    print("INSTAGRAM VERIFY ERROR: token o modo inválido")
+    return "Forbidden", 403
+
+
+@app.route("/instagram/webhook", methods=["POST"])
+def instagram_webhook_eventos():
+    """
+    Recibe eventos de Instagram. Procesa DMs de texto y responde por Meta.
+    Ignora ecos del propio bot y eventos que no sean mensajes de usuario.
+    """
+    try:
+        raw_body = request.get_data(cache=True)
+
+        if not verificar_firma_instagram(raw_body):
+            print("INSTAGRAM ERROR: firma X-Hub-Signature-256 inválida")
+            return "Forbidden", 403
+
+        data = request.get_json(silent=True) or {}
+
+        print("=" * 60)
+        print("INSTAGRAM WEBHOOK")
+        print(json.dumps(data, ensure_ascii=False)[:10000])
+        print("=" * 60)
+
+        if data.get("object") != "instagram":
+            return "OK", 200
+
+        for entry in data.get("entry") or []:
+            for evento in entry.get("messaging") or []:
+                message = evento.get("message") or {}
+
+                # Ignorar mensajes enviados por nuestra propia app.
+                if message.get("is_echo"):
+                    continue
+
+                message_id = str(message.get("mid") or "").strip()
+                sender_id = str((evento.get("sender") or {}).get("id") or "").strip()
+                texto = str(message.get("text") or "").strip()
+
+                print("INSTAGRAM FROM:", sender_id)
+                print("INSTAGRAM MESSAGE ID:", message_id)
+                print("INSTAGRAM BODY:", texto)
+
+                if not sender_id:
+                    continue
+
+                # Evitar respuestas duplicadas ante reintentos de Meta.
+                if message_id:
+                    clave_procesado = f"instagram:{message_id}"
+                    with PROCESADOS_LOCK:
+                        ahora_ts = datetime.now().timestamp()
+                        viejos = [k for k, ts in PROCESADOS.items() if ahora_ts - ts > 300]
+                        for k in viejos:
+                            PROCESADOS.pop(k, None)
+                        if clave_procesado in PROCESADOS:
+                            continue
+                        PROCESADOS[clave_procesado] = ahora_ts
+
+                if not texto:
+                    respuesta = (
+                        "Por ahora puedo ayudarte por texto 😊. "
+                        "Escríbeme tu consulta, servicio o la fecha en que quieres agendar."
+                    )
+                    guardar_mensaje(f"instagram:{sender_id}", "assistant", respuesta, canal="instagram")
+                    guardar_mensaje_supabase(sender_id, "saliente", respuesta)
+                    enviar_instagram_texto(sender_id, respuesta)
+                    continue
+
+                try:
+                    respuesta = procesar_texto_instagram(sender_id, texto)
+                    enviar_instagram_texto(sender_id, respuesta)
+                except Exception as e:
+                    print("INSTAGRAM PROCESAR/ENVIAR ERROR:", repr(e))
+                    import traceback
+                    print(traceback.format_exc())
+
+        # Meta espera una respuesta rápida 200 para no reintentar.
+        return "EVENT_RECEIVED", 200
+
+    except Exception as e:
+        print("INSTAGRAM WEBHOOK ERROR:", repr(e))
+        import traceback
+        print(traceback.format_exc())
+        # Evitamos tormenta de reintentos; el error queda en Render.
+        return "EVENT_RECEIVED", 200
+
+
 # ============================================================
 # HEALTHCHECK
 # ============================================================
@@ -1290,7 +1517,7 @@ def health():
         "ok": True,
         "app": "Asistente Virtual Estilista Diego",
         "version": APP_VERSION,
-        "channel": "Twilio WhatsApp + Gupshup WhatsApp",
+        "channel": "Twilio WhatsApp + Gupshup WhatsApp + Instagram Meta API",
         "calendar": "Google Calendar",
         "payments": "disabled",
     }, 200
