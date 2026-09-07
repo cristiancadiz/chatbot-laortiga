@@ -6,6 +6,7 @@ import hmac
 import hashlib
 from datetime import datetime, timedelta
 from threading import Lock
+from contextvars import ContextVar
 
 import pytz
 import requests
@@ -19,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-07-V45-NEXIA-HANDOFF-HUMANO"
+APP_VERSION = "2026-09-07-V50-NEXIA-CORE-MULTICLIENTE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -31,12 +32,12 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 # CONFIGURACIÓN GENERAL
 # ============================================================
 
-ESTILISTA_NOMBRE = os.getenv("ESTILISTA_NOMBRE", "Diego")
-NEGOCIO_NOMBRE = os.getenv("NEGOCIO_NOMBRE", "Estilista Diego")
+DEFAULT_ASISTENTE_NOMBRE = os.getenv("ESTILISTA_NOMBRE", "Diego")
+DEFAULT_NEGOCIO_NOMBRE = os.getenv("NEGOCIO_NOMBRE", "Estilista Diego")
 TIMEZONE = os.getenv("TIMEZONE", "America/Santiago")
-CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
-DIRECCION_ATENCION = os.getenv("DIRECCION_ATENCION", "3 Poniente 382, Viña del Mar")
-TELEFONO_EJECUTIVO = os.getenv("TELEFONO_EJECUTIVO", "+56966461436")
+DEFAULT_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+DEFAULT_DIRECCION_ATENCION = os.getenv("DIRECCION_ATENCION", "3 Poniente 382, Viña del Mar")
+DEFAULT_TELEFONO_EJECUTIVO = os.getenv("TELEFONO_EJECUTIVO", "+56966461436")
 
 # Twilio WhatsApp: recepción y respuestas manuales desde Portal Nexia.
 # Las credenciales deben guardarse SOLO en Render > Environment.
@@ -53,9 +54,9 @@ twilio_client = (
     else None
 )
 
-HORA_APERTURA = int(os.getenv("HORA_APERTURA", "10"))
-HORA_CIERRE = int(os.getenv("HORA_CIERRE", "19"))
-DURACION_RESERVA = int(os.getenv("DURACION_RESERVA", "60"))
+DEFAULT_HORA_APERTURA = int(os.getenv("HORA_APERTURA", "10"))
+DEFAULT_HORA_CIERRE = int(os.getenv("HORA_CIERRE", "19"))
+DEFAULT_DURACION_RESERVA = int(os.getenv("DURACION_RESERVA", "60"))
 
 # Gupshup: canal paralelo al Twilio actual.
 # La API key debe guardarse en Render > Environment, nunca dentro del código.
@@ -79,7 +80,7 @@ INSTAGRAM_API_BASE = os.getenv("INSTAGRAM_API_BASE", "https://graph.instagram.co
 # Nunca debe ponerse en portal.html ni exponerse en el navegador.
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://nappdpkjtdzwtiuvrrhk.supabase.co").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-SUPABASE_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "97be347a-51d6-467d-be49-839a254a4ad0")
+DEFAULT_EMPRESA_ID = os.getenv("empresa_actual_id()", "97be347a-51d6-467d-be49-839a254a4ad0")
 SUPABASE_TIMEOUT = int(os.getenv("SUPABASE_TIMEOUT", "15"))
 
 PORTAL_ORIGIN = os.getenv("PORTAL_ORIGIN", "https://nexia-tech.com").rstrip("/")
@@ -88,9 +89,89 @@ PORTAL_ORIGIN = os.getenv("PORTAL_ORIGIN", "https://nexia-tech.com").rstrip("/")
 # 0=lunes ... 5=sábado. Domingo cerrado.
 DIAS_ATENCION = {0, 1, 2, 3, 4, 5}
 
+# ============================================================
+# NEXIA CORE - CAPA MULTICLIENTE / MULTISERVICIO
+# ============================================================
+TENANT_CTX = ContextVar("TENANT_CTX", default=None)
+TENANT_CACHE = {}
+TENANT_CACHE_LOCK = Lock()
+TENANT_CACHE_TTL = int(os.getenv("TENANT_CACHE_TTL", "60"))
+
+def tenant_default():
+    return {"empresa_id": DEFAULT_EMPRESA_ID,"empresa_nombre": DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":"reservas","asistente_nombre":DEFAULT_ASISTENTE_NOMBRE,"direccion":DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":DEFAULT_TELEFONO_EJECUTIVO,"timezone":TIMEZONE,"calendar_id":DEFAULT_CALENDAR_ID,"hora_apertura":DEFAULT_HORA_APERTURA,"hora_cierre":DEFAULT_HORA_CIERRE,"duracion_reserva":DEFAULT_DURACION_RESERVA,"dias_atencion":[0,1,2,3,4,5],"prompt_extra":"","modulos":{"ia":True,"reservas":True,"handoff_humano":True,"whatsapp":True,"instagram":True},"servicios":None,"canal":None,"provider":None,"canal_config":{}}
+
+def tenant_actual(): return TENANT_CTX.get() or tenant_default()
+def set_tenant(data): TENANT_CTX.set(data or tenant_default())
+def empresa_actual_id(): return str(tenant_actual().get("empresa_id") or DEFAULT_EMPRESA_ID)
+def cfg(nombre, default=None):
+    v=tenant_actual().get(nombre); return default if v is None else v
+def cfg_int(nombre, default):
+    try:return int(cfg(nombre,default))
+    except:return int(default)
+def cfg_modulo(nombre, default=True): return bool((cfg("modulos",{}) or {}).get(nombre,default))
+def timezone_actual(): return str(cfg("timezone",TIMEZONE) or TIMEZONE)
+def servicios_actuales(): return cfg("servicios") or SERVICIOS_DEFAULT
+def servicio_por_numero_actual(): return {int(s["numero"]):c for c,s in servicios_actuales().items() if s.get("numero") is not None}
+
+def backend_headers():
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:return None
+    return {"apikey":SUPABASE_SERVICE_ROLE_KEY,"Authorization":f"Bearer {SUPABASE_SERVICE_ROLE_KEY}","Content-Type":"application/json"}
+
+def secret_from_env(env_name, fallback=None):
+    if env_name:
+        v=os.getenv(str(env_name),"")
+        if v:return v.strip()
+    return fallback
+
+def _cache_get(key):
+    import time
+    with TENANT_CACHE_LOCK:
+        item=TENANT_CACHE.get(key)
+        if not item:return None
+        if time.time()-item["ts"]>TENANT_CACHE_TTL:
+            TENANT_CACHE.pop(key,None);return None
+        return item["data"]
+def _cache_set(key,data):
+    import time
+    with TENANT_CACHE_LOCK:TENANT_CACHE[key]={"ts":time.time(),"data":data}
+
+def cargar_empresa_config(empresa_id,canal=None,provider=None,canal_config=None):
+    empresa_id=str(empresa_id or "").strip()
+    if not empresa_id:return tenant_default()
+    key=f"empresa:{empresa_id}";base=_cache_get(key);headers=backend_headers()
+    if base is None and headers:
+        er=requests.get(f"{SUPABASE_URL}/rest/v1/empresas",headers=headers,params={"select":"id,nombre,activo","id":f"eq.{empresa_id}","limit":"1"},timeout=SUPABASE_TIMEOUT);er.raise_for_status(); empresas=er.json() if er.content else []
+        if not empresas:raise RuntimeError("Empresa no encontrada")
+        cr=requests.get(f"{SUPABASE_URL}/rest/v1/configuracion_bot",headers=headers,params={"select":"*","empresa_id":f"eq.{empresa_id}","limit":"1"},timeout=SUPABASE_TIMEOUT);cr.raise_for_status(); rows=cr.json() if cr.content else []; conf=rows[0] if rows else {}
+        sr=requests.get(f"{SUPABASE_URL}/rest/v1/servicios",headers=headers,params={"select":"*","empresa_id":f"eq.{empresa_id}","activo":"eq.true","order":"orden.asc"},timeout=SUPABASE_TIMEOUT);sr.raise_for_status(); rows=sr.json() if sr.content else []
+        servicios={}
+        for row in rows:
+            codigo=str(row.get("codigo") or "").strip()
+            if codigo:servicios[codigo]={"numero":row.get("numero"),"nombre":row.get("nombre") or codigo,"precio":int(row.get("precio") or 0),"precio_texto":row.get("precio_texto") or "","detalle":row.get("detalle") or "","categoria":row.get("categoria") or "Servicios","aliases":row.get("aliases") or [],"duracion_minutos":row.get("duracion_minutos")}
+        base=tenant_default();base.update({"empresa_id":empresa_id,"empresa_nombre":empresas[0].get("nombre") or DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":conf.get("tipo_negocio") or "reservas","asistente_nombre":conf.get("asistente_nombre") or DEFAULT_ASISTENTE_NOMBRE,"direccion":conf.get("direccion") or DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":conf.get("telefono_ejecutivo") or DEFAULT_TELEFONO_EJECUTIVO,"timezone":conf.get("timezone") or TIMEZONE,"calendar_id":conf.get("calendar_id") or DEFAULT_CALENDAR_ID,"hora_apertura":conf.get("hora_apertura") if conf.get("hora_apertura") is not None else DEFAULT_HORA_APERTURA,"hora_cierre":conf.get("hora_cierre") if conf.get("hora_cierre") is not None else DEFAULT_HORA_CIERRE,"duracion_reserva":conf.get("duracion_reserva") if conf.get("duracion_reserva") is not None else DEFAULT_DURACION_RESERVA,"dias_atencion":conf.get("dias_atencion") or [0,1,2,3,4,5],"prompt_extra":conf.get("prompt_extra") or "","modulos":conf.get("modulos") or tenant_default()["modulos"],"servicios":servicios or None});_cache_set(key,base)
+    if base is None:base=tenant_default();base["empresa_id"]=empresa_id
+    out=dict(base);out["canal"]=canal;out["provider"]=provider;out["canal_config"]=dict(canal_config or {});return out
+
+def resolver_tenant(canal,provider,identificador_externo):
+    canal=str(canal or "").lower().strip();provider=str(provider or "").lower().strip();externo=str(identificador_externo or "").strip()
+    if canal=="whatsapp":externo=re.sub(r"\D","",externo)
+    headers=backend_headers()
+    if not headers:
+        out=tenant_default();out["canal"]=canal;out["provider"]=provider;return out
+    key=f"route:{canal}:{provider}:{externo}";row=_cache_get(key)
+    if row is None:
+        r=requests.get(f"{SUPABASE_URL}/rest/v1/canales_empresa",headers=headers,params={"select":"*","canal":f"eq.{canal}","provider":f"eq.{provider}","identificador_externo":f"eq.{externo}","activo":"eq.true","limit":"1"},timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else []
+        if not rows:
+            out=tenant_default();out["canal"]=canal;out["provider"]=provider;return out
+        row=rows[0];_cache_set(key,row)
+    return cargar_empresa_config(row["empresa_id"],canal=canal,provider=provider,canal_config=row)
+
+def activar_por_canal(canal,provider,identificador_externo):set_tenant(resolver_tenant(canal,provider,identificador_externo))
+def activar_por_empresa(empresa_id,canal=None,provider=None,canal_config=None):set_tenant(cargar_empresa_config(empresa_id,canal=canal,provider=provider,canal_config=canal_config))
+
 
 def zona_local():
-    return pytz.timezone(TIMEZONE)
+    return pytz.timezone(timezone_actual())
 
 
 def ahora_local():
@@ -114,10 +195,10 @@ def normalizar_telefono(valor):
 
 
 # ============================================================
-# SERVICIOS
+# servicios_actuales()
 # ============================================================
 
-SERVICIOS = {
+SERVICIOS_DEFAULT = {
     "corte_hombre": {
         "numero": 1,
         "nombre": "Corte de cabello hombre",
@@ -204,61 +285,32 @@ SERVICIOS = {
     },
 }
 
-SERVICIO_POR_NUMERO = {v["numero"]: k for k, v in SERVICIOS.items()}
+SERVICIO_POR_NUMERO_DEFAULT = {v["numero"]: k for k, v in SERVICIOS_DEFAULT.items()}
 
 
 def mostrar_servicios():
-    return (
-        "Estos son los servicios de Diego 👇\n\n"
-        "👨 HOMBRE\n"
-        "1. Corte de cabello hombre — $17.000\n"
-        "2. Perfilado de barba — $10.000\n"
-        "3. Base de rizos permanente — $65.000\n"
-        "4. Mechas — desde $70.000\n"
-        "5. Decoloración global — $120.000\n\n"
-        "👩 MUJER\n"
-        "6. Corte de cabello mujer — $30.000\n"
-        "7. Masaje de hidratación — $45.000\n"
-        "8. Botox capilar — desde $65.000\n"
-        "9. Alisado permanente — desde $70.000\n"
-        "10. Retoque de color de raíz — $50.000\n"
-        "11. Baño de color — $30.000\n"
-        "12. Diagnóstico para Balayage — gratuito; Balayage desde $150.000\n\n"
-        "Para agendar, responde con el número o nombre del servicio."
-    )
-
+    grupos={}
+    for _,s in sorted(servicios_actuales().items(),key=lambda kv:(str(kv[1].get("categoria") or "Servicios"),int(kv[1].get("numero") or 9999))):grupos.setdefault(str(s.get("categoria") or "Servicios"),[]).append(s)
+    out=[f"Estos son los servicios de {cfg('empresa_nombre',DEFAULT_NEGOCIO_NOMBRE)} 👇",""]
+    for categoria,items in grupos.items():
+        out.append(f"📌 {categoria.upper()}")
+        for s in items:
+            n=f"{s.get('numero')}. " if s.get("numero") is not None else "• ";p=f" — {s.get('precio_texto')}" if s.get("precio_texto") else "";out.append(f"{n}{s.get('nombre')}{p}")
+        out.append("")
+    if cfg_modulo("reservas",True):out.append("Para agendar, responde con el número o nombre del servicio.")
+    return "\n".join(out).strip()
 
 def detectar_servicio(texto):
-    t = normalizar_texto(texto)
-    m = re.fullmatch(r"\s*(\d{1,2})\s*", t)
-    if m:
-        return SERVICIO_POR_NUMERO.get(int(m.group(1)))
-
-    if "corte" in t and any(x in t for x in ("mujer", "dama", "femenino")):
-        return "corte_mujer"
-    if "corte" in t and any(x in t for x in ("hombre", "varon", "masculino")):
-        return "corte_hombre"
-    if "barba" in t:
-        return "perfilado_barba"
-    if "rizo" in t or "permanente" in t and "rizo" in t:
-        return "base_rizos"
-    if "mecha" in t:
-        return "mechas_hombre"
-    if "decolor" in t:
-        return "decoloracion_global"
-    if "masaje" in t and "hidrat" in t:
-        return "masaje_hidratacion"
-    if "botox" in t:
-        return "botox_capilar"
-    if "alisado" in t:
-        return "alisado_permanente"
-    if "retoque" in t and "raiz" in t:
-        return "retoque_raiz"
-    if "bano" in t and "color" in t:
-        return "bano_color"
-    if "balayage" in t:
-        return "diagnostico_balayage"
-    return None
+    t=normalizar_texto(texto);m=re.fullmatch(r"\s*(\d{1,3})\s*",t)
+    if m:return servicio_por_numero_actual().get(int(m.group(1)))
+    mejor=None;score=0
+    for codigo,s in servicios_actuales().items():
+        aliases=s.get("aliases") or []
+        if isinstance(aliases,str):aliases=[aliases]
+        for raw in [codigo,s.get("nombre") or ""]+list(aliases):
+            c=normalizar_texto(str(raw))
+            if c and (c in t or t in c) and len(c)>score:mejor=codigo;score=len(c)
+    return mejor
 
 
 def corte_ambiguo(texto):
@@ -297,13 +349,13 @@ def calendar_service():
 
 
 def es_dia_atencion(fecha):
-    return fecha.astimezone(zona_local()).weekday() in DIAS_ATENCION
+    return fecha.astimezone(zona_local()).weekday() in set(cfg("dias_atencion", [0,1,2,3,4,5]))
 
 
 def eventos_ocupados(inicio_rango, fin_rango):
     service = calendar_service()
     data = service.events().list(
-        calendarId=CALENDAR_ID,
+        calendarId=cfg("calendar_id", DEFAULT_CALENDAR_ID),
         timeMin=inicio_rango.isoformat(),
         timeMax=fin_rango.isoformat(),
         singleEvents=True,
@@ -335,7 +387,7 @@ def eventos_ocupados(inicio_rango, fin_rango):
 
 
 def hora_libre(inicio, ocupados):
-    fin = inicio + timedelta(minutes=DURACION_RESERVA)
+    fin = inicio + timedelta(minutes=cfg_int("duracion_reserva", DEFAULT_DURACION_RESERVA))
     return all(not (inicio < ocupado_fin and fin > ocupado_ini) for ocupado_ini, ocupado_fin in ocupados)
 
 
@@ -343,10 +395,10 @@ def verificar_disponibilidad(inicio):
     inicio = inicio.astimezone(zona_local())
     if inicio <= ahora_local() or not es_dia_atencion(inicio):
         return False
-    if inicio.minute != 0 or inicio.hour < HORA_APERTURA or inicio.hour >= HORA_CIERRE:
+    if inicio.minute != 0 or inicio.hour < cfg_int("hora_apertura", DEFAULT_HORA_APERTURA) or inicio.hour >= cfg_int("hora_cierre", DEFAULT_HORA_CIERRE):
         return False
-    fin = inicio + timedelta(minutes=DURACION_RESERVA)
-    limite = inicio.replace(hour=HORA_CIERRE, minute=0, second=0, microsecond=0)
+    fin = inicio + timedelta(minutes=cfg_int("duracion_reserva", DEFAULT_DURACION_RESERVA))
+    limite = inicio.replace(hour=cfg_int("hora_cierre", DEFAULT_HORA_CIERRE), minute=0, second=0, microsecond=0)
     if fin > limite:
         return False
     return hora_libre(inicio, eventos_ocupados(inicio, fin))
@@ -367,7 +419,7 @@ def buscar_proximas_horas(desde=None, limite=15):
         dia = (desde + timedelta(days=offset)).replace(hour=0, minute=0, second=0, microsecond=0)
         if not es_dia_atencion(dia):
             continue
-        for h in range(HORA_APERTURA, HORA_CIERRE):
+        for h in range(cfg_int("hora_apertura", DEFAULT_HORA_APERTURA), cfg_int("hora_cierre", DEFAULT_HORA_CIERRE)):
             slot = dia.replace(hour=h)
             if slot <= ahora or slot < desde:
                 continue
@@ -388,7 +440,7 @@ def buscar_horas_dia(fecha):
     ocupados = eventos_ocupados(inicio, fin)
     ahora = ahora_local()
     out = []
-    for h in range(HORA_APERTURA, HORA_CIERRE):
+    for h in range(cfg_int("hora_apertura", DEFAULT_HORA_APERTURA), cfg_int("hora_cierre", DEFAULT_HORA_CIERRE)):
         slot = inicio.replace(hour=h)
         if slot > ahora and hora_libre(slot, ocupados):
             out.append(slot)
@@ -400,18 +452,18 @@ def crear_evento(inicio, servicio_codigo, nombre, telefono, correo):
     if not verificar_disponibilidad(inicio):
         return {"ok": False, "ocupada": True}
 
-    servicio = SERVICIOS[servicio_codigo]
-    fin = inicio + timedelta(minutes=DURACION_RESERVA)
+    servicio = servicios_actuales()[servicio_codigo]
+    fin = inicio + timedelta(minutes=cfg_int("duracion_reserva", DEFAULT_DURACION_RESERVA))
     body = {
         "summary": f"{servicio['nombre']} - {nombre}",
         "description": (
-            f"Reserva creada por el Asistente Virtual de {ESTILISTA_NOMBRE}.\n\n"
+            f"Reserva creada por el Asistente Virtual de {cfg('asistente_nombre', DEFAULT_ASISTENTE_NOMBRE)}.\n\n"
             f"Cliente: {nombre}\nTeléfono: {telefono}\nCorreo: {correo}\n"
             f"Servicio: {servicio['nombre']}\nValor referencial: {servicio['precio_texto']}\n"
-            f"Duración: {DURACION_RESERVA} minutos\nOrigen: WhatsApp"
+            f"Duración: {cfg_int('duracion_reserva', DEFAULT_DURACION_RESERVA)} minutos\nOrigen: WhatsApp"
         ),
-        "start": {"dateTime": inicio.isoformat(), "timeZone": TIMEZONE},
-        "end": {"dateTime": fin.isoformat(), "timeZone": TIMEZONE},
+        "start": {"dateTime": inicio.isoformat(), "timeZone": timezone_actual()},
+        "end": {"dateTime": fin.isoformat(), "timeZone": timezone_actual()},
         "attendees": [{"email": correo, "displayName": nombre}],
         "extendedProperties": {
             "private": {
@@ -425,7 +477,7 @@ def crear_evento(inicio, servicio_codigo, nombre, telefono, correo):
     }
     try:
         resultado = calendar_service().events().insert(
-            calendarId=CALENDAR_ID,
+            calendarId=cfg("calendar_id", DEFAULT_CALENDAR_ID),
             body=body,
             sendUpdates="all",
         ).execute()
@@ -563,7 +615,7 @@ def obtener_modo_atencion(identificador, canal="whatsapp"):
     Si la conversación aún no existe o Supabase falla, usa 'bot'.
     """
     headers = supabase_headers()
-    if not headers or not SUPABASE_EMPRESA_ID:
+    if not headers or not empresa_actual_id():
         return "bot"
 
     canal = (canal or "whatsapp").strip().lower()
@@ -582,7 +634,7 @@ def obtener_modo_atencion(identificador, canal="whatsapp"):
             headers=headers,
             params={
                 "select": "modo_atencion",
-                "empresa_id": f"eq.{SUPABASE_EMPRESA_ID}",
+                "empresa_id": f"eq.{empresa_actual_id()}",
                 "telefono": f"eq.{identificador}",
                 "canal": f"eq.{canal}",
                 "limit": "1",
@@ -617,7 +669,7 @@ def establecer_modo_atencion(conversacion_id, modo):
         headers={**headers, "Prefer": "return=minimal"},
         params={
             "id": f"eq.{conversacion_id}",
-            "empresa_id": f"eq.{SUPABASE_EMPRESA_ID}",
+            "empresa_id": f"eq.{empresa_actual_id()}",
         },
         json={"modo_atencion": modo},
         timeout=SUPABASE_TIMEOUT,
@@ -641,7 +693,7 @@ def guardar_mensaje_supabase(
     canal: 'whatsapp' o 'instagram'
     """
     headers = supabase_headers()
-    if not headers or not SUPABASE_EMPRESA_ID:
+    if not headers or not empresa_actual_id():
         return
 
     canal = (canal or "whatsapp").strip().lower()
@@ -659,7 +711,7 @@ def guardar_mensaje_supabase(
     try:
         params = {
             "select": "id,nombre_contacto,canal",
-            "empresa_id": f"eq.{SUPABASE_EMPRESA_ID}",
+            "empresa_id": f"eq.{empresa_actual_id()}",
             "telefono": f"eq.{identificador}",
             "canal": f"eq.{canal}",
             "limit": "1",
@@ -699,7 +751,7 @@ def guardar_mensaje_supabase(
 
         else:
             nueva = {
-                "empresa_id": SUPABASE_EMPRESA_ID,
+                "empresa_id": empresa_actual_id(),
                 "telefono": identificador,
                 "nombre_contacto": nombre_contacto,
                 "ultimo_mensaje": mensaje,
@@ -722,7 +774,7 @@ def guardar_mensaje_supabase(
 
         nuevo_mensaje = {
             "conversacion_id": conversacion_id,
-            "empresa_id": SUPABASE_EMPRESA_ID,
+            "empresa_id": empresa_actual_id(),
             "direccion": direccion,
             "mensaje": mensaje,
             "fecha": ahora_iso,
@@ -762,7 +814,7 @@ def guardar_reserva_supabase(telefono, nombre_cliente, servicio_nombre, inicio, 
     Si Supabase falla, la cita ya creada en Calendar NO se elimina y el bot continúa.
     """
     headers = supabase_headers()
-    if not headers or not SUPABASE_EMPRESA_ID:
+    if not headers or not empresa_actual_id():
         return False
 
     telefono_limpio = re.sub(r"\D", "", normalizar_telefono(telefono))
@@ -780,7 +832,7 @@ def guardar_reserva_supabase(telefono, nombre_cliente, servicio_nombre, inicio, 
             inicio_local = inicio.astimezone(zona_local())
 
         nueva_reserva = {
-            "empresa_id": SUPABASE_EMPRESA_ID,
+            "empresa_id": empresa_actual_id(),
             "telefono": telefono_limpio,
             "nombre_cliente": nombre_cliente,
             "servicio": servicio_nombre,
@@ -876,21 +928,21 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 def respuesta_general(texto):
     base = (
-        f"Soy el asistente virtual de {ESTILISTA_NOMBRE} 😊. "
+        f"Soy el asistente virtual de {cfg('asistente_nombre', DEFAULT_ASISTENTE_NOMBRE)} 😊. "
         "Estoy aquí para ayudarte con sus servicios, precios, horarios disponibles y para agendar una hora."
     )
     if not openai_client:
         return base + "\n\nPuedes preguntarme por un servicio o escribir *AGENDAR* para reservar."
 
     contexto_servicios = "; ".join(
-        f"{s['nombre']}: {s['precio_texto']}" for s in SERVICIOS.values()
+        f"{s['nombre']}: {s['precio_texto']}" for s in servicios_actuales().values()
     )
     system = f"""
-Eres el asistente virtual de {ESTILISTA_NOMBRE}, estilista en Chile.
+Eres el asistente virtual de {cfg('empresa_nombre', DEFAULT_NEGOCIO_NOMBRE)}. Tipo de negocio: {cfg('tipo_negocio','reservas')}.
 Tu única función es ayudar a clientes con servicios, precios, horarios y reservas.
-Dirección de atención: {DIRECCION_ATENCION}.
-Si el cliente quiere hablar con Diego, con un ejecutivo o con una persona, indícale este teléfono: {TELEFONO_EJECUTIVO}.
-Horario: lunes a sábado, de {HORA_APERTURA}:00 a {HORA_CIERRE}:00.
+Dirección de atención: {cfg('direccion', DEFAULT_DIRECCION_ATENCION)}.
+Si el cliente quiere hablar con Diego, con un ejecutivo o con una persona, indícale este teléfono: {cfg('telefono_ejecutivo', DEFAULT_TELEFONO_EJECUTIVO)}.
+Horario: lunes a sábado, de {cfg_int('hora_apertura', DEFAULT_HORA_APERTURA)}:00 a {cfg_int('hora_cierre', DEFAULT_HORA_CIERRE)}:00.
 Servicios: {contexto_servicios}.
 No inventes información. No hables de sistemas internos, APIs ni código.
 Si el usuario escribe algo fuera de este ámbito, responde amablemente que eres el asistente de Diego y que puedes ayudar con servicios, precios, disponibilidad o agendar.
@@ -944,7 +996,7 @@ def reset_estado(telefono):
 
 def mensaje_bienvenida():
     return (
-        f"¡Hola! 👋 Soy el asistente virtual de {ESTILISTA_NOMBRE}.\n\n"
+        f"¡Hola! 👋 Soy el asistente virtual de {cfg('asistente_nombre', DEFAULT_ASISTENTE_NOMBRE)}.\n\n"
         "Estoy aquí para ayudarte con sus servicios, precios, horarios disponibles y para agendar tu hora 📅.\n\n"
         "Puedes escribirme de forma natural, por ejemplo:\n"
         "• Quiero agendar un corte de hombre mañana\n"
@@ -984,8 +1036,8 @@ def quiere_hablar_con_persona(texto):
 
 def mensaje_contacto_persona():
     return (
-        f"Claro 😊 Si quieres hablar directamente con {ESTILISTA_NOMBRE} o con una persona, "
-        f"puedes comunicarte al *{TELEFONO_EJECUTIVO}*."
+        f"Claro 😊 Si quieres hablar directamente con {cfg('asistente_nombre', DEFAULT_ASISTENTE_NOMBRE)} o con una persona, "
+        f"puedes comunicarte al *{cfg('telefono_ejecutivo', DEFAULT_TELEFONO_EJECUTIVO)}*."
     )
 
 
@@ -1040,7 +1092,7 @@ def procesar_agenda(estado, texto):
                 return f"Estas son las horas disponibles para ese día 👇\n\n{listar_horas(horas)}\n\nResponde con el número de la hora que prefieres."
 
             return (
-                f"Perfecto 👍 Servicio: *{SERVICIOS[servicio]['nombre']}* ({SERVICIOS[servicio]['precio_texto']}).\n\n"
+                f"Perfecto 👍 Servicio: *{servicios_actuales()[servicio]['nombre']}* ({servicios_actuales()[servicio]['precio_texto']}).\n\n"
                 "¿Qué día te gustaría venir? Puedes escribir, por ejemplo, *mañana*, *viernes* o *12 de septiembre*."
             )
 
@@ -1106,7 +1158,7 @@ def procesar_agenda(estado, texto):
             return "Ese correo no parece válido. Escríbelo nuevamente, por ejemplo: nombre@correo.cl"
         estado["correo"] = correo
         estado["paso"] = "confirmar"
-        servicio = SERVICIOS[estado["servicio"]]
+        servicio = servicios_actuales()[estado["servicio"]]
         fecha = datetime.fromisoformat(estado["fecha_hora"])
         return (
             "Confirma tu reserva 👇\n\n"
@@ -1115,7 +1167,7 @@ def procesar_agenda(estado, texto):
             f"📅 {formatear_fecha(fecha)}\n"
             f"👤 {estado['nombre']}\n"
             f"📧 {estado['correo']}\n"
-            f"📍 {DIRECCION_ATENCION}\n\n"
+            f"📍 {cfg('direccion', DEFAULT_DIRECCION_ATENCION)}\n\n"
             "Si todo está correcto, escribe *CONFIRMAR*."
         )
 
@@ -1139,7 +1191,7 @@ def procesar_agenda(estado, texto):
         if not resultado.get("ok"):
             return "Tuve un problema creando la reserva en Calendar. Intenta nuevamente en unos segundos."
 
-        servicio = SERVICIOS[estado["servicio"]]
+        servicio = servicios_actuales()[estado["servicio"]]
         nombre = estado["nombre"]
         correo = estado["correo"]
         fecha_txt = formatear_fecha(inicio)
@@ -1163,8 +1215,8 @@ def procesar_agenda(estado, texto):
             f"📅 {fecha_txt}\n"
             f"👤 {nombre}\n"
             f"📧 {correo}\n"
-            f"📍 {DIRECCION_ATENCION}\n"
-            f"⏱️ Duración: {DURACION_RESERVA} minutos\n\n"
+            f"📍 {cfg('direccion', DEFAULT_DIRECCION_ATENCION)}\n"
+            f"⏱️ Duración: {cfg_int('duracion_reserva', DEFAULT_DURACION_RESERVA)} minutos\n\n"
             "No necesitas realizar ningún pago para agendar. ¡Te esperamos! 😊"
         )
 
@@ -1180,6 +1232,8 @@ def procesar_agenda(estado, texto):
 def whatsapp_webhook():
     twiml = MessagingResponse()
     try:
+        to_numero = re.sub(r"\D", "", str(request.form.get("To") or TWILIO_WHATSAPP_FROM))
+        activar_por_canal("whatsapp", "twilio", to_numero)
         telefono = (request.form.get("From") or "").strip()
         texto = (request.form.get("Body") or "").strip()
         message_id = (request.form.get("MessageSid") or "").strip()
@@ -1248,7 +1302,7 @@ def whatsapp_webhook():
         import traceback
         print(traceback.format_exc())
         twiml.message(
-            f"Disculpa 🙏 Soy el asistente virtual de {ESTILISTA_NOMBRE}. "
+            f"Disculpa 🙏 Soy el asistente virtual de {cfg('asistente_nombre', DEFAULT_ASISTENTE_NOMBRE)}. "
             "Tuve un problema técnico. Intenta nuevamente en unos segundos; puedo ayudarte a revisar servicios, horarios y agendar tu hora."
         )
         return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
@@ -1259,36 +1313,10 @@ def whatsapp_webhook():
 # ============================================================
 
 def enviar_twilio_texto(destino, texto):
-    """Envía WhatsApp por el mismo sender Twilio que recibe /whatsapp/webhook."""
-    if not twilio_client:
-        raise RuntimeError(
-            "Faltan TWILIO_ACCOUNT_SID o TWILIO_AUTH_TOKEN en Render"
-        )
-    if not TWILIO_WHATSAPP_FROM:
-        raise RuntimeError("Falta TWILIO_WHATSAPP_FROM en Render")
-
-    destino = re.sub(r"\D", "", str(destino or ""))
-    if not destino:
-        raise ValueError("Destino Twilio vacío")
-
-    to_value = f"whatsapp:+{destino}"
-    from_value = TWILIO_WHATSAPP_FROM
-    if not from_value.startswith("whatsapp:"):
-        from_value = f"whatsapp:{from_value}"
-
-    msg = twilio_client.messages.create(
-        body=texto,
-        from_=from_value,
-        to=to_value,
-    )
-
-    print(
-        "TWILIO PORTAL SEND OK:",
-        "to=", to_value,
-        "sid=", getattr(msg, "sid", ""),
-        "status=", getattr(msg, "status", ""),
-    )
-    return msg
+    cc=cfg("canal_config",{}) or {};sid=secret_from_env(cc.get("account_sid_env"),TWILIO_ACCOUNT_SID);token=secret_from_env(cc.get("auth_token_env"),TWILIO_AUTH_TOKEN);sender=str(cc.get("sender") or TWILIO_WHATSAPP_FROM or "").strip()
+    if not sid or not token or not sender:raise RuntimeError("Falta configuración Twilio de la empresa")
+    cliente=TwilioClient(sid,token);destino=re.sub(r"\D","",str(destino or ""));to_value=f"whatsapp:+{destino}";from_value=sender if sender.startswith("whatsapp:") else f"whatsapp:{sender}"
+    msg=cliente.messages.create(body=texto,from_=from_value,to=to_value);print("TWILIO PORTAL SEND OK:",empresa_actual_id(),to_value,getattr(msg,"sid",""));return msg
 
 
 # ============================================================
@@ -1357,6 +1385,7 @@ def enviar_gupshup_texto(destino, texto):
 def gupshup_webhook():
     try:
         data = request.get_json(silent=True) or {}
+        activar_por_canal("whatsapp", "gupshup", str(data.get("app") or GUPSHUP_APP_NAME))
 
         print("=" * 60)
         print("GUPSHUP WEBHOOK")
@@ -1485,38 +1514,9 @@ def verificar_firma_instagram(raw_body):
 
 
 def enviar_instagram_texto(destino_igsid, texto):
-    """Envía un DM de texto por Instagram Messaging API."""
-    if not INSTAGRAM_ACCESS_TOKEN:
-        raise RuntimeError("Falta INSTAGRAM_ACCESS_TOKEN en Render")
-    if not INSTAGRAM_USER_ID:
-        raise RuntimeError("Falta INSTAGRAM_USER_ID en Render")
-
-    destino_igsid = str(destino_igsid or "").strip()
-    if not destino_igsid:
-        raise ValueError("Destinatario Instagram vacío")
-
-    url = instagram_url(f"{INSTAGRAM_USER_ID}/messages")
-    headers = {
-        "Authorization": f"Bearer {INSTAGRAM_ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "recipient": {"id": destino_igsid},
-        "message": {"text": str(texto or "")[:1000]},
-    }
-
-    r = requests.post(url, headers=headers, json=payload, timeout=20)
-    print("INSTAGRAM SEND STATUS:", r.status_code)
-    print("INSTAGRAM SEND RESPONSE:", r.text[:2000])
-
-    if not r.ok:
-        raise RuntimeError(f"Instagram HTTP {r.status_code}: {r.text[:1000]}")
-
-    try:
-        return r.json()
-    except Exception:
-        return {}
-
+    cc=cfg("canal_config",{}) or {};token=secret_from_env(cc.get("access_token_env"),INSTAGRAM_ACCESS_TOKEN);account_id=str(cc.get("sender") or cc.get("identificador_externo") or INSTAGRAM_USER_ID or "").strip()
+    if not token or not account_id:raise RuntimeError("Falta configuración Instagram de la empresa")
+    url=instagram_url(f"{account_id}/messages");headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"};payload={"recipient":{"id":str(destino_igsid)},"message":{"text":str(texto)}};r=requests.post(url,headers=headers,json=payload,timeout=20);print("INSTAGRAM SEND STATUS:",r.status_code);print("INSTAGRAM SEND RESPONSE:",r.text[:1000]);r.raise_for_status();return True
 
 
 def recuperar_mensaje_instagram_por_mid(mid):
@@ -1736,6 +1736,8 @@ def instagram_webhook_eventos():
             return "OK", 200
 
         for entry in data.get("entry") or []:
+            entry_id = str(entry.get("id") or "").strip()
+            activar_por_canal("instagram", "meta", entry_id)
             for evento in entry.get("messaging") or []:
                 message = evento.get("message") or {}
 
@@ -1783,7 +1785,7 @@ def instagram_webhook_eventos():
                 print("INSTAGRAM MESSAGE ID:", message_id)
                 print("INSTAGRAM BODY:", texto)
 
-                if sender_id and str(sender_id) == str(INSTAGRAM_USER_ID):
+                if sender_id and str(sender_id) == str((cfg("canal_config", {}) or {}).get("identificador_externo") or INSTAGRAM_USER_ID):
                     print("INSTAGRAM EVENTO IGNORADO: sender es la propia cuenta del negocio")
                     continue
 
@@ -1939,7 +1941,7 @@ def portal_usuario_autorizado():
         params={
             "select": "id,empresa_id,email,rol",
             "id": f"eq.{user_id}",
-            "empresa_id": f"eq.{SUPABASE_EMPRESA_ID}",
+            "empresa_id": f"eq.{empresa_actual_id()}",
             "limit": "1",
         },
         timeout=SUPABASE_TIMEOUT,
@@ -1962,7 +1964,7 @@ def obtener_conversacion_supabase(conversacion_id):
         params={
             "select": "id,empresa_id,telefono,nombre_contacto,canal,modo_atencion",
             "id": f"eq.{conversacion_id}",
-            "empresa_id": f"eq.{SUPABASE_EMPRESA_ID}",
+            "empresa_id": f"eq.{empresa_actual_id()}",
             "limit": "1",
         },
         timeout=SUPABASE_TIMEOUT,
@@ -1983,6 +1985,7 @@ def portal_modo_atencion():
     if not perfil_portal:
         return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
 
+    activar_por_empresa(perfil_portal["empresa_id"])
     data = request.get_json(silent=True) or {}
     conversacion_id = str(data.get("conversacion_id") or "").strip()
     modo = str(data.get("modo") or "").strip().lower()
@@ -2012,6 +2015,7 @@ def portal_enviar_mensaje():
     if not perfil_portal:
         return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
 
+    activar_por_empresa(perfil_portal["empresa_id"])
     data = request.get_json(silent=True) or {}
     conversacion_id = str(data.get("conversacion_id") or "").strip()
     mensaje = str(data.get("mensaje") or "").strip()
@@ -2029,6 +2033,18 @@ def portal_enviar_mensaje():
 
         canal = str(conv.get("canal") or "whatsapp").lower()
         destino = str(conv.get("telefono") or "").strip()
+
+        canal_cfg = {}
+        provider = "meta" if canal == "instagram" else "twilio"
+        hb = backend_headers()
+        if hb:
+            rc = requests.get(f"{SUPABASE_URL}/rest/v1/canales_empresa", headers=hb, params={"select":"*","empresa_id":f"eq.{perfil_portal['empresa_id']}","canal":f"eq.{canal}","activo":"eq.true","es_principal":"eq.true","limit":"1"}, timeout=SUPABASE_TIMEOUT)
+            if rc.ok:
+                rows = rc.json() if rc.content else []
+                if rows:
+                    canal_cfg = rows[0]
+                    provider = str(canal_cfg.get("provider") or provider)
+        activar_por_empresa(perfil_portal["empresa_id"], canal=canal, provider=provider, canal_config=canal_cfg)
 
         # En cuanto un ejecutivo responde desde el portal, el bot deja de intervenir
         # en esta conversación hasta que se reactive manualmente.
