@@ -16,7 +16,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-06-V36-DIEGO-TWILIO-GUPSHUP-LIVE"
+APP_VERSION = "2026-09-07-V37-DIEGO-TWILIO-GUPSHUP-SUPABASE-PORTAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -45,6 +45,15 @@ GUPSHUP_API_KEY = os.getenv("GUPSHUP_API_KEY")
 GUPSHUP_SOURCE = os.getenv("GUPSHUP_SOURCE", "56978316272")
 GUPSHUP_APP_NAME = os.getenv("GUPSHUP_APP_NAME", "NexiaTech")
 GUPSHUP_API_URL = os.getenv("GUPSHUP_API_URL", "https://api.gupshup.io/wa/api/v1/msg")
+
+# Supabase: historial para Portal Nexia.
+# IMPORTANTE: SUPABASE_SERVICE_ROLE_KEY va SOLO en Render > Environment.
+# Nunca debe ponerse en portal.html ni exponerse en el navegador.
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://nappdpkjtdzwtiuvrrhk.supabase.co").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "0a9de921-9386-441c-b5aa-f432d3f44fe5")
+SUPABASE_TIMEOUT = int(os.getenv("SUPABASE_TIMEOUT", "15"))
+
 
 # 0=lunes ... 5=sábado. Domingo cerrado.
 DIAS_ATENCION = {0, 1, 2, 3, 4, 5}
@@ -504,6 +513,126 @@ def listar_horas(horas):
 
 
 # ============================================================
+# SUPABASE - HISTORIAL PARA PORTAL NEXIA
+# ============================================================
+
+def supabase_headers():
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        return None
+    return {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+def guardar_mensaje_supabase(telefono, direccion, mensaje, nombre_contacto=None):
+    """
+    Guarda/actualiza la conversación y agrega el mensaje al Portal Nexia.
+    direccion debe ser: 'entrante' o 'saliente'.
+
+    Si Supabase falla, el bot continúa funcionando normalmente.
+    """
+    headers = supabase_headers()
+    if not headers or not SUPABASE_EMPRESA_ID:
+        return
+
+    telefono_limpio = re.sub(r"\D", "", normalizar_telefono(telefono))
+    mensaje = (mensaje or "").strip()
+    if not telefono_limpio or not mensaje:
+        return
+
+    try:
+        # 1) Buscar conversación existente de este teléfono dentro de la empresa.
+        params = {
+            "select": "id,nombre_contacto",
+            "empresa_id": f"eq.{SUPABASE_EMPRESA_ID}",
+            "telefono": f"eq.{telefono_limpio}",
+            "limit": "1",
+        }
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/conversaciones",
+            headers=headers,
+            params=params,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        filas = r.json() if r.content else []
+
+        ahora_iso = ahora_local().isoformat()
+        conversacion_id = None
+
+        if filas:
+            conversacion_id = filas[0]["id"]
+            cambios = {
+                "ultimo_mensaje": mensaje,
+                "ultima_fecha": ahora_iso,
+            }
+            if nombre_contacto and not filas[0].get("nombre_contacto"):
+                cambios["nombre_contacto"] = nombre_contacto
+
+            r = requests.patch(
+                f"{SUPABASE_URL}/rest/v1/conversaciones",
+                headers={**headers, "Prefer": "return=minimal"},
+                params={"id": f"eq.{conversacion_id}"},
+                json=cambios,
+                timeout=SUPABASE_TIMEOUT,
+            )
+            r.raise_for_status()
+        else:
+            nueva = {
+                "empresa_id": SUPABASE_EMPRESA_ID,
+                "telefono": telefono_limpio,
+                "nombre_contacto": nombre_contacto,
+                "ultimo_mensaje": mensaje,
+                "ultima_fecha": ahora_iso,
+            }
+            r = requests.post(
+                f"{SUPABASE_URL}/rest/v1/conversaciones",
+                headers={**headers, "Prefer": "return=representation"},
+                json=nueva,
+                timeout=SUPABASE_TIMEOUT,
+            )
+            r.raise_for_status()
+            creadas = r.json() if r.content else []
+            if not creadas:
+                raise RuntimeError("Supabase no devolvió la conversación creada")
+            conversacion_id = creadas[0]["id"]
+
+        # 2) Insertar mensaje.
+        nuevo_mensaje = {
+            "conversacion_id": conversacion_id,
+            "empresa_id": SUPABASE_EMPRESA_ID,
+            "direccion": direccion,
+            "mensaje": mensaje,
+            "fecha": ahora_iso,
+        }
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/mensajes",
+            headers={**headers, "Prefer": "return=minimal"},
+            json=nuevo_mensaje,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+
+        print(
+            "SUPABASE LOG OK:",
+            telefono_limpio,
+            direccion,
+            conversacion_id,
+        )
+
+    except Exception as e:
+        # El historial no debe botar el webhook si Supabase tiene un problema.
+        detalle = ""
+        try:
+            detalle = f" | {r.status_code} {r.text[:1000]}"
+        except Exception:
+            pass
+        print("SUPABASE LOG ERROR:", repr(e), detalle)
+
+
+# ============================================================
 # GOOGLE SHEETS OPCIONAL - LOG DE CONVERSACIONES
 # ============================================================
 
@@ -881,6 +1010,7 @@ def whatsapp_webhook():
             respuesta = mensaje_bienvenida()
         else:
             guardar_mensaje(telefono, "user", texto)
+            guardar_mensaje_supabase(telefono, "entrante", texto)
             estado = get_estado(telefono)
 
             if quiere_hablar_con_persona(texto):
@@ -900,6 +1030,12 @@ def whatsapp_webhook():
                 respuesta = respuesta_general(texto)
 
         guardar_mensaje(telefono, "assistant", respuesta)
+        guardar_mensaje_supabase(
+            telefono,
+            "saliente",
+            respuesta,
+            nombre_contacto=(get_estado(telefono).get("nombre") if telefono else None),
+        )
         twiml.message(respuesta)
         return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
@@ -1029,6 +1165,7 @@ def gupshup_webhook():
             respuesta = mensaje_bienvenida()
         else:
             guardar_mensaje(telefono, "user", texto)
+            guardar_mensaje_supabase(telefono, "entrante", texto)
             estado = get_estado(telefono)
 
             if quiere_hablar_con_persona(texto):
@@ -1047,6 +1184,12 @@ def gupshup_webhook():
                 respuesta = respuesta_general(texto)
 
         guardar_mensaje(telefono, "assistant", respuesta)
+        guardar_mensaje_supabase(
+            telefono,
+            "saliente",
+            respuesta,
+            nombre_contacto=(get_estado(telefono).get("nombre") if telefono else None),
+        )
         enviar_gupshup_texto(telefono, respuesta)
         return "OK", 200
 
