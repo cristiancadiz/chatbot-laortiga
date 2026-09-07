@@ -18,7 +18,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-07-V41-NEXIA-PORTAL-MULTICANAL"
+APP_VERSION = "2026-09-07-V42-NEXIA-INSTAGRAM-USERNAME"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1452,10 +1452,15 @@ def recuperar_mensaje_instagram_por_mid(mid):
                 sender_id = origen.get("id")
 
             if texto or sender_id:
+                username = ""
+                if isinstance(origen, dict):
+                    username = str(origen.get("username") or "").strip()
+
                 return {
                     "ok": True,
                     "texto": str(texto or "").strip(),
                     "sender_id": str(sender_id or "").strip(),
+                    "username": username,
                     "data": data,
                     "fuente": etiqueta,
                 }
@@ -1487,6 +1492,7 @@ def intentar_recuperar_desde_message_edit(entry_id, evento):
     if recuperado:
         print("INSTAGRAM MESSAGE_EDIT RECUPERADO:", recuperado.get("fuente"))
         print("INSTAGRAM MESSAGE_EDIT SENDER:", recuperado.get("sender_id"))
+        print("INSTAGRAM MESSAGE_EDIT USERNAME:", recuperado.get("username"))
         print("INSTAGRAM MESSAGE_EDIT TEXTO:", recuperado.get("texto"))
         return recuperado
 
@@ -1494,15 +1500,26 @@ def intentar_recuperar_desde_message_edit(entry_id, evento):
     return None
 
 
-def procesar_texto_instagram(cliente_id, texto):
+def procesar_texto_instagram(cliente_id, texto, username=None):
     """
     Reutiliza la misma lógica conversacional del bot de Diego.
     La sesión se separa de WhatsApp mediante el prefijo 'instagram:'.
+
+    Si Meta entrega username, se guarda como nombre_contacto para que
+    Portal Nexia muestre @usuario en lugar del IGSID numérico.
     """
     session_id = f"instagram:{cliente_id}"
+    username = str(username or "").strip().lstrip("@")
+    nombre_instagram = f"@{username}" if username else None
 
     guardar_mensaje(session_id, "user", texto, canal="instagram")
-    guardar_mensaje_supabase(cliente_id, "entrante", texto, canal="instagram")
+    guardar_mensaje_supabase(
+        cliente_id,
+        "entrante",
+        texto,
+        nombre_contacto=nombre_instagram,
+        canal="instagram",
+    )
 
     estado = get_estado(session_id)
 
@@ -1531,7 +1548,7 @@ def procesar_texto_instagram(cliente_id, texto):
         cliente_id,
         "saliente",
         respuesta,
-        nombre_contacto=estado.get("nombre"),
+        nombre_contacto=nombre_instagram or estado.get("nombre"),
         canal="instagram",
     )
     return respuesta
@@ -1586,6 +1603,8 @@ def instagram_webhook_eventos():
                 message = evento.get("message") or {}
 
                 # Caso normal documentado por Meta.
+                username = ""
+
                 if message:
                     # Ignorar mensajes enviados por nuestra propia app.
                     if message.get("is_echo"):
@@ -1594,6 +1613,13 @@ def instagram_webhook_eventos():
                     message_id = str(message.get("mid") or "").strip()
                     sender_id = str((evento.get("sender") or {}).get("id") or "").strip()
                     texto = str(message.get("text") or "").strip()
+
+                    # El webhook normal no siempre incluye username.
+                    # El MID sí lo está devolviendo en Meta, por eso lo consultamos.
+                    if message_id:
+                        perfil_mid = recuperar_mensaje_instagram_por_mid(message_id)
+                        if perfil_mid:
+                            username = str(perfil_mid.get("username") or "").strip()
 
                 # Fallback para el comportamiento observado en Instagram API v26:
                 # Meta está enviando message_edit incluso para mensajes nuevos.
@@ -1608,6 +1634,7 @@ def instagram_webhook_eventos():
                     )
                     if recuperado:
                         sender_id = str(recuperado.get("sender_id") or "").strip()
+                        username = str(recuperado.get("username") or "").strip()
                         texto = str(recuperado.get("texto") or "").strip()
 
                 else:
@@ -1615,8 +1642,13 @@ def instagram_webhook_eventos():
                     continue
 
                 print("INSTAGRAM FROM:", sender_id)
+                print("INSTAGRAM USERNAME:", username)
                 print("INSTAGRAM MESSAGE ID:", message_id)
                 print("INSTAGRAM BODY:", texto)
+
+                if sender_id and str(sender_id) == str(INSTAGRAM_USER_ID):
+                    print("INSTAGRAM EVENTO IGNORADO: sender es la propia cuenta del negocio")
+                    continue
 
                 if not sender_id:
                     print("INSTAGRAM EVENTO IGNORADO: no hay sender_id recuperable")
@@ -1640,12 +1672,18 @@ def instagram_webhook_eventos():
                         "Escríbeme tu consulta, servicio o la fecha en que quieres agendar."
                     )
                     guardar_mensaje(f"instagram:{sender_id}", "assistant", respuesta, canal="instagram")
-                    guardar_mensaje_supabase(sender_id, "saliente", respuesta, canal="instagram")
+                    guardar_mensaje_supabase(
+                        sender_id,
+                        "saliente",
+                        respuesta,
+                        nombre_contacto=(f"@{username.lstrip('@')}" if username else None),
+                        canal="instagram",
+                    )
                     enviar_instagram_texto(sender_id, respuesta)
                     continue
 
                 try:
-                    respuesta = procesar_texto_instagram(sender_id, texto)
+                    respuesta = procesar_texto_instagram(sender_id, texto, username=username)
                     enviar_instagram_texto(sender_id, respuesta)
                 except Exception as e:
                     print("INSTAGRAM PROCESAR/ENVIAR ERROR:", repr(e))
