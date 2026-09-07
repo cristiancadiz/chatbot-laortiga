@@ -18,7 +18,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-07-V42-NEXIA-INSTAGRAM-USERNAME"
+APP_VERSION = "2026-09-07-V43-NEXIA-PORTAL-ENVIO-OMNICANAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -65,6 +65,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "https://nappdpkjtdzwtiuvrrhk.supabase.
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "97be347a-51d6-467d-be49-839a254a4ad0")
 SUPABASE_TIMEOUT = int(os.getenv("SUPABASE_TIMEOUT", "15"))
+
+PORTAL_ORIGIN = os.getenv("PORTAL_ORIGIN", "https://nexia-tech.com").rstrip("/")
 
 
 # 0=lunes ... 5=sábado. Domingo cerrado.
@@ -1722,6 +1724,158 @@ def instagram_diagnostico():
 # ============================================================
 # HEALTHCHECK
 # ============================================================
+
+
+def portal_cors_response(response):
+    response.headers["Access-Control-Allow-Origin"] = PORTAL_ORIGIN
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    response.headers["Vary"] = "Origin"
+    return response
+
+
+def portal_json(payload, status=200):
+    from flask import jsonify
+    response = jsonify(payload)
+    return portal_cors_response(response), status
+
+
+def portal_usuario_autorizado():
+    """
+    Valida la sesión real de Supabase enviada por portal.html y confirma
+    que el usuario pertenece a la empresa configurada en este backend.
+    No usa secretos compartidos en el navegador.
+    """
+    auth = str(request.headers.get("Authorization") or "").strip()
+    if not auth.lower().startswith("bearer "):
+        return None
+
+    jwt = auth.split(" ", 1)[1].strip()
+    if not jwt:
+        return None
+
+    # 1) Validar JWT contra Supabase Auth.
+    r = requests.get(
+        f"{SUPABASE_URL}/auth/v1/user",
+        headers={
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": f"Bearer {jwt}",
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if not r.ok:
+        print("PORTAL AUTH ERROR:", r.status_code, r.text[:500])
+        return None
+
+    usuario = r.json() if r.content else {}
+    user_id = str(usuario.get("id") or "").strip()
+    if not user_id:
+        return None
+
+    # 2) Confirmar empresa del perfil.
+    headers = supabase_headers()
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/perfiles",
+        headers=headers,
+        params={
+            "select": "id,empresa_id,email,rol",
+            "id": f"eq.{user_id}",
+            "empresa_id": f"eq.{SUPABASE_EMPRESA_ID}",
+            "limit": "1",
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if not r.ok:
+        return None
+
+    filas = r.json() if r.content else []
+    return filas[0] if filas else None
+
+
+def obtener_conversacion_supabase(conversacion_id):
+    headers = supabase_headers()
+    if not headers:
+        return None
+
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/conversaciones",
+        headers=headers,
+        params={
+            "select": "id,empresa_id,telefono,nombre_contacto,canal",
+            "id": f"eq.{conversacion_id}",
+            "empresa_id": f"eq.{SUPABASE_EMPRESA_ID}",
+            "limit": "1",
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    filas = r.json() if r.content else []
+    return filas[0] if filas else None
+
+
+@app.route("/portal/enviar-mensaje", methods=["POST", "OPTIONS"])
+def portal_enviar_mensaje():
+    if request.method == "OPTIONS":
+        from flask import make_response
+        return portal_cors_response(make_response("", 204))
+
+    perfil_portal = portal_usuario_autorizado()
+    if not perfil_portal:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+
+    data = request.get_json(silent=True) or {}
+    conversacion_id = str(data.get("conversacion_id") or "").strip()
+    mensaje = str(data.get("mensaje") or "").strip()
+
+    if not conversacion_id or not mensaje:
+        return portal_json({"ok": False, "error": "Falta conversación o mensaje"}, 400)
+
+    if len(mensaje) > 4000:
+        return portal_json({"ok": False, "error": "Mensaje demasiado largo"}, 400)
+
+    try:
+        conv = obtener_conversacion_supabase(conversacion_id)
+        if not conv:
+            return portal_json({"ok": False, "error": "Conversación no encontrada"}, 404)
+
+        canal = str(conv.get("canal") or "whatsapp").lower()
+        destino = str(conv.get("telefono") or "").strip()
+
+        if canal == "instagram":
+            resultado = enviar_instagram_texto(destino, mensaje)
+            if resultado is False:
+                raise RuntimeError("Instagram no confirmó el envío")
+            proveedor = "instagram"
+
+        elif canal == "whatsapp":
+            enviar_gupshup_texto(destino, mensaje)
+            proveedor = "gupshup"
+
+        else:
+            return portal_json(
+                {"ok": False, "error": f"Canal no soportado: {canal}"},
+                400,
+            )
+
+        guardar_mensaje_supabase(
+            destino,
+            "saliente",
+            mensaje,
+            nombre_contacto=conv.get("nombre_contacto"),
+            canal=canal,
+        )
+
+        print("PORTAL MENSAJE OK:", canal, destino, proveedor)
+        return portal_json({
+            "ok": True,
+            "canal": canal,
+            "proveedor": proveedor,
+        })
+
+    except Exception as e:
+        print("PORTAL MENSAJE ERROR:", repr(e))
+        return portal_json({"ok": False, "error": str(e)[:300]}, 502)
+
 
 @app.route("/")
 def health():
