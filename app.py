@@ -18,7 +18,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-07-V39-DIEGO-INSTAGRAM-INTEGRADO"
+APP_VERSION = "2026-09-07-V40-DIEGO-INSTAGRAM-MESSAGE-EDIT-FALLBACK"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1361,6 +1361,119 @@ def enviar_instagram_texto(destino_igsid, texto):
         return {}
 
 
+
+def recuperar_mensaje_instagram_por_mid(mid):
+    """
+    Intenta recuperar detalles del mensaje usando el MID recibido en message_edit.
+
+    Nota:
+    - Meta no siempre permite consultar directamente el objeto Message por MID.
+    - Por eso esta función prueba varias rutas compatibles y deja logs claros.
+    - Si ninguna funciona, devuelve None sin botar el webhook.
+    """
+    if not INSTAGRAM_ACCESS_TOKEN or not mid:
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {INSTAGRAM_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    intentos = []
+
+    # Intento 1: consultar directamente el MID como objeto Graph.
+    intentos.append(
+        (
+            "direct_mid",
+            instagram_url(str(mid)),
+            {"fields": "id,message,from,to,created_time"},
+        )
+    )
+
+    # Intento 2: consultar vía graph.facebook.com sin prefijo de cuenta.
+    # Algunas respuestas de Meta usan objetos compatibles con Graph general.
+    graph_version = (INSTAGRAM_GRAPH_VERSION or "").strip().strip("/")
+    direct_fb_url = f"https://graph.facebook.com/{graph_version}/{mid}" if graph_version else f"https://graph.facebook.com/{mid}"
+    intentos.append(
+        (
+            "facebook_graph_mid",
+            direct_fb_url,
+            {"fields": "id,message,from,to,created_time"},
+        )
+    )
+
+    for etiqueta, url, params in intentos:
+        try:
+            r = requests.get(
+                url,
+                headers=headers,
+                params=params,
+                timeout=20,
+            )
+            print(f"INSTAGRAM MID LOOKUP [{etiqueta}] STATUS:", r.status_code)
+            print(f"INSTAGRAM MID LOOKUP [{etiqueta}] RESPONSE:", r.text[:4000])
+
+            if not r.ok:
+                continue
+
+            data = r.json() if r.content else {}
+            if not isinstance(data, dict):
+                continue
+
+            texto = (
+                data.get("message")
+                or data.get("text")
+                or ((data.get("message") or {}).get("text") if isinstance(data.get("message"), dict) else None)
+            )
+
+            sender_id = None
+            origen = data.get("from")
+            if isinstance(origen, dict):
+                sender_id = origen.get("id")
+
+            if texto or sender_id:
+                return {
+                    "ok": True,
+                    "texto": str(texto or "").strip(),
+                    "sender_id": str(sender_id or "").strip(),
+                    "data": data,
+                    "fuente": etiqueta,
+                }
+
+        except Exception as e:
+            print(f"INSTAGRAM MID LOOKUP [{etiqueta}] ERROR:", repr(e))
+
+    return None
+
+
+def intentar_recuperar_desde_message_edit(entry_id, evento):
+    """
+    Procesa el extraño evento message_edit que Meta está enviando para mensajes nuevos.
+    Devuelve dict con sender_id/texto si logra recuperar algo.
+    """
+    edit = evento.get("message_edit") or {}
+    mid = str(edit.get("mid") or "").strip()
+    num_edit = edit.get("num_edit")
+
+    print("INSTAGRAM MESSAGE_EDIT DETECTADO")
+    print("INSTAGRAM MESSAGE_EDIT MID:", mid)
+    print("INSTAGRAM MESSAGE_EDIT NUM_EDIT:", num_edit)
+    print("INSTAGRAM ENTRY ID:", entry_id)
+
+    if not mid:
+        return None
+
+    recuperado = recuperar_mensaje_instagram_por_mid(mid)
+    if recuperado:
+        print("INSTAGRAM MESSAGE_EDIT RECUPERADO:", recuperado.get("fuente"))
+        print("INSTAGRAM MESSAGE_EDIT SENDER:", recuperado.get("sender_id"))
+        print("INSTAGRAM MESSAGE_EDIT TEXTO:", recuperado.get("texto"))
+        return recuperado
+
+    print("INSTAGRAM MESSAGE_EDIT: no fue posible recuperar el mensaje por MID")
+    return None
+
+
 def procesar_texto_instagram(cliente_id, texto):
     """
     Reutiliza la misma lógica conversacional del bot de Diego.
@@ -1451,19 +1564,41 @@ def instagram_webhook_eventos():
             for evento in entry.get("messaging") or []:
                 message = evento.get("message") or {}
 
-                # Ignorar mensajes enviados por nuestra propia app.
-                if message.get("is_echo"):
-                    continue
+                # Caso normal documentado por Meta.
+                if message:
+                    # Ignorar mensajes enviados por nuestra propia app.
+                    if message.get("is_echo"):
+                        continue
 
-                message_id = str(message.get("mid") or "").strip()
-                sender_id = str((evento.get("sender") or {}).get("id") or "").strip()
-                texto = str(message.get("text") or "").strip()
+                    message_id = str(message.get("mid") or "").strip()
+                    sender_id = str((evento.get("sender") or {}).get("id") or "").strip()
+                    texto = str(message.get("text") or "").strip()
+
+                # Fallback para el comportamiento observado en Instagram API v26:
+                # Meta está enviando message_edit incluso para mensajes nuevos.
+                elif evento.get("message_edit"):
+                    message_id = str((evento.get("message_edit") or {}).get("mid") or "").strip()
+                    sender_id = ""
+                    texto = ""
+
+                    recuperado = intentar_recuperar_desde_message_edit(
+                        str(entry.get("id") or ""),
+                        evento,
+                    )
+                    if recuperado:
+                        sender_id = str(recuperado.get("sender_id") or "").strip()
+                        texto = str(recuperado.get("texto") or "").strip()
+
+                else:
+                    # Reacciones, seen, postbacks u otros eventos no conversacionales.
+                    continue
 
                 print("INSTAGRAM FROM:", sender_id)
                 print("INSTAGRAM MESSAGE ID:", message_id)
                 print("INSTAGRAM BODY:", texto)
 
                 if not sender_id:
+                    print("INSTAGRAM EVENTO IGNORADO: no hay sender_id recuperable")
                     continue
 
                 # Evitar respuestas duplicadas ante reintentos de Meta.
@@ -1505,6 +1640,24 @@ def instagram_webhook_eventos():
         print(traceback.format_exc())
         # Evitamos tormenta de reintentos; el error queda en Render.
         return "EVENT_RECEIVED", 200
+
+
+
+@app.route("/instagram/diagnostico", methods=["GET"])
+def instagram_diagnostico():
+    """
+    Diagnóstico seguro: confirma qué variables existen sin exponer secretos.
+    """
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "instagram_access_token_configurado": bool(INSTAGRAM_ACCESS_TOKEN),
+        "instagram_verify_token_configurado": bool(INSTAGRAM_VERIFY_TOKEN),
+        "instagram_app_secret_configurado": bool(INSTAGRAM_APP_SECRET),
+        "instagram_user_id": INSTAGRAM_USER_ID,
+        "instagram_graph_version": INSTAGRAM_GRAPH_VERSION,
+        "webhook": "/instagram/webhook",
+    }, 200
 
 
 # ============================================================
