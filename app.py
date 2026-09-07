@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-07-V51-NEXIA-CORE-ADMIN"
+APP_VERSION = "2026-09-07-V52-NEXIA-CORE-ADMIN-AUTH-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1891,7 +1891,7 @@ def instagram_diagnostico():
 def portal_cors_response(response):
     response.headers["Access-Control-Allow-Origin"] = PORTAL_ORIGIN
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
     response.headers["Vary"] = "Origin"
     return response
 
@@ -1904,19 +1904,29 @@ def portal_json(payload, status=200):
 
 def portal_usuario_autorizado():
     """
-    Valida la sesión real de Supabase enviada por portal.html y confirma
-    que el usuario pertenece a la empresa configurada en este backend.
-    No usa secretos compartidos en el navegador.
+    Valida el access token real enviado por portal.html y obtiene el perfil
+    del usuario autenticado.
+
+    IMPORTANTE:
+    Aquí NO se filtra por empresa_actual_id().
+    Primero identificamos al usuario y su empresa real en public.perfiles.
+    Después cada endpoint activa y restringe el tenant correspondiente.
     """
     auth = str(request.headers.get("Authorization") or "").strip()
     if not auth.lower().startswith("bearer "):
+        print("PORTAL AUTH: falta Bearer token")
         return None
 
     jwt = auth.split(" ", 1)[1].strip()
     if not jwt:
+        print("PORTAL AUTH: token vacío")
         return None
 
-    # 1) Validar JWT contra Supabase Auth.
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        print("PORTAL AUTH: Supabase backend no configurado")
+        return None
+
+    # 1) Validar token contra Supabase Auth.
     r = requests.get(
         f"{SUPABASE_URL}/auth/v1/user",
         headers={
@@ -1926,32 +1936,59 @@ def portal_usuario_autorizado():
         timeout=SUPABASE_TIMEOUT,
     )
     if not r.ok:
-        print("PORTAL AUTH ERROR:", r.status_code, r.text[:500])
+        print("PORTAL AUTH ERROR /auth/v1/user:", r.status_code, r.text[:500])
         return None
 
     usuario = r.json() if r.content else {}
     user_id = str(usuario.get("id") or "").strip()
+    email_auth = str(usuario.get("email") or "").strip()
+
     if not user_id:
+        print("PORTAL AUTH: Supabase no devolvió user_id")
         return None
 
-    # 2) Confirmar empresa del perfil.
+    # 2) Buscar el perfil SOLO por id.
+    # La propia fila nos dice a qué empresa pertenece el usuario.
     headers = supabase_headers()
+    if not headers:
+        print("PORTAL AUTH: faltan headers backend")
+        return None
+
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/perfiles",
         headers=headers,
         params={
-            "select": "id,empresa_id,email,rol",
+            "select": "id,empresa_id,nombre,email,rol",
             "id": f"eq.{user_id}",
-            "empresa_id": f"eq.{empresa_actual_id()}",
             "limit": "1",
         },
         timeout=SUPABASE_TIMEOUT,
     )
+
     if not r.ok:
+        print("PORTAL PERFIL ERROR:", r.status_code, r.text[:500])
         return None
 
     filas = r.json() if r.content else []
-    return filas[0] if filas else None
+    if not filas:
+        print("PORTAL AUTH: usuario válido pero sin perfil:", user_id, email_auth)
+        return None
+
+    perfil = filas[0]
+
+    if not perfil.get("empresa_id"):
+        print("PORTAL AUTH: perfil sin empresa_id:", user_id)
+        return None
+
+    print(
+        "PORTAL AUTH OK:",
+        "user_id=", user_id,
+        "email=", perfil.get("email") or email_auth,
+        "rol=", perfil.get("rol"),
+        "empresa_id=", perfil.get("empresa_id"),
+    )
+
+    return perfil
 
 
 def obtener_conversacion_supabase(conversacion_id):
@@ -2058,8 +2095,12 @@ def portal_enviar_mensaje():
             proveedor = "instagram"
 
         elif canal == "whatsapp":
-            enviar_twilio_texto(destino, mensaje)
-            proveedor = "twilio"
+            if str(cfg("provider", "twilio")).lower() == "gupshup":
+                enviar_gupshup_texto(destino, mensaje)
+                proveedor = "gupshup"
+            else:
+                enviar_twilio_texto(destino, mensaje)
+                proveedor = "twilio"
 
         else:
             return portal_json(
@@ -2091,7 +2132,7 @@ def portal_enviar_mensaje():
 def health():
     return {
         "ok": True,
-        "app": "Asistente Virtual Estilista Diego",
+        "app": "Nexia Core",
         "version": APP_VERSION,
         "channel": "Twilio WhatsApp + Gupshup WhatsApp + Instagram Meta API",
         "calendar": "Google Calendar",
@@ -2106,17 +2147,32 @@ def health():
 def portal_admin_autorizado():
     perfil = portal_usuario_autorizado()
     if not perfil:
+        print("PORTAL ADMIN AUTH: sin perfil autorizado")
         return None
 
     rol = str(perfil.get("rol") or "").strip().lower()
     empresa_id = str(perfil.get("empresa_id") or "").strip()
+    nexia_id = str(NEXIA_EMPRESA_ID or "").strip()
 
-    if empresa_id != str(NEXIA_EMPRESA_ID):
+    if empresa_id != nexia_id:
+        print(
+            "PORTAL ADMIN AUTH: empresa no corresponde",
+            "perfil_empresa=", empresa_id,
+            "nexia_empresa=", nexia_id,
+        )
         return None
 
-    if rol not in {"admin", "nexia_admin", "superadmin", "administrador"}:
+    roles_admin = {"admin", "nexia_admin", "superadmin", "administrador"}
+    if rol not in roles_admin:
+        print("PORTAL ADMIN AUTH: rol no permitido:", rol)
         return None
 
+    print(
+        "PORTAL ADMIN AUTH OK:",
+        "email=", perfil.get("email"),
+        "rol=", rol,
+        "empresa_id=", empresa_id,
+    )
     return perfil
 
 
