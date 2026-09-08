@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-08-V65-NEXIA-SIN-DIRECCION-TELEFONO-HORARIO"
+APP_VERSION = "2026-09-08-V66-NEXIA-PROTECCION-DATOS-CONTACTO-FINAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -50,7 +50,11 @@ TIMEZONE = os.getenv("TIMEZONE", "America/Santiago")
 CONVERSACION_ONLINE_MINUTOS = int(os.getenv("CONVERSACION_ONLINE_MINUTOS", "15"))
 CONVERSACION_ESPERA_HORAS = int(os.getenv("CONVERSACION_ESPERA_HORAS", "24"))
 MODO_EJECUTIVO_TIMEOUT_MINUTOS = int(os.getenv("MODO_EJECUTIVO_TIMEOUT_MINUTOS", "30"))
-NEXIA_EMPRESA_ID = os.getenv("NEXIA_EMPRESA_ID", "1675736f-e605-405a-b7bb-eed29e013dd1").strip()
+# Empresa CLIENTE Nexia: protección pública de datos de contacto.
+NEXIA_CLIENTE_EMPRESA_ID = os.getenv(
+    "NEXIA_CLIENTE_EMPRESA_ID",
+    "1675736f-e605-405a-b7bb-eed29e013dd1",
+).strip()
 DEFAULT_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 DEFAULT_DIRECCION_ATENCION = os.getenv("DIRECCION_ATENCION", "3 Poniente 382, Viña del Mar")
 DEFAULT_TELEFONO_EJECUTIVO = os.getenv("TELEFONO_EJECUTIVO", "+56966461436")
@@ -97,7 +101,11 @@ INSTAGRAM_API_BASE = os.getenv("INSTAGRAM_API_BASE", "https://graph.instagram.co
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://nappdpkjtdzwtiuvrrhk.supabase.co").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 DEFAULT_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "97be347a-51d6-467d-be49-839a254a4ad0")
-NEXIA_EMPRESA_ID = os.getenv("NEXIA_EMPRESA_ID", "0a9de921-9386-441c-b5aa-f432d3f44fe5")
+# Empresa administrativa/superadmin histórica. Se mantiene separada del cliente Nexia.
+ADMIN_EMPRESA_ID = os.getenv(
+    "ADMIN_EMPRESA_ID",
+    "0a9de921-9386-441c-b5aa-f432d3f44fe5",
+).strip()
 SUPABASE_TIMEOUT = int(os.getenv("SUPABASE_TIMEOUT", "15"))
 
 PORTAL_ORIGIN = os.getenv("PORTAL_ORIGIN", "https://nexia-tech.com").rstrip("/")
@@ -223,8 +231,8 @@ def normalizar_texto(texto):
 
 
 def es_empresa_nexia():
-    """Protección de información pública específica para Nexia Tech."""
-    return str(empresa_actual_id() or "").strip() == NEXIA_EMPRESA_ID
+    """True únicamente para la empresa cliente Nexia, no para Administración General."""
+    return str(empresa_actual_id() or "").strip() == NEXIA_CLIENTE_EMPRESA_ID
 
 
 def mensaje_horario_no_publicado():
@@ -236,31 +244,98 @@ def mensaje_horario_no_publicado():
 
 def proteger_respuesta_publica_nexia(texto):
     """
-    Evita que Nexia exponga por WhatsApp/Instagram dirección, teléfono o horario
-    aunque algún dato antiguo siga configurado en Supabase o variables de entorno.
+    Filtro FINAL de salida para Nexia (WhatsApp e Instagram).
+
+    Impide publicar:
+    - dirección física;
+    - teléfono/celular/número del ejecutivo;
+    - horario de atención.
+
+    Esta capa se ejecuta justo antes de guardar/enviar la respuesta, además de las
+    reglas del prompt. Así, aunque OpenAI o una configuración antigua agreguen
+    esos datos, no salen al cliente.
     """
     if not es_empresa_nexia():
-        return texto
+        return str(texto or "")
 
-    salida = str(texto or "")
-    sensibles = [
-        str(cfg("direccion", "") or "").strip(),
-        str(cfg("telefono_ejecutivo", "") or "").strip(),
+    original = str(texto or "")
+    if not original:
+        return original
+
+    # Datos exactos que pudieran seguir configurados en Supabase/Render.
+    direccion_cfg = str(cfg("direccion", "") or "").strip()
+    telefono_cfg = str(cfg("telefono_ejecutivo", "") or "").strip()
+    sensibles_exactos = [
+        direccion_cfg,
+        telefono_cfg,
         str(DEFAULT_DIRECCION_ATENCION or "").strip(),
         str(DEFAULT_TELEFONO_EJECUTIVO or "").strip(),
     ]
-    for valor in sensibles:
-        if valor:
-            salida = salida.replace(valor, "")
 
-    # Limpieza de líneas que pudieran haber quedado etiquetadas tras una respuesta IA.
-    lineas = []
-    for linea in salida.splitlines():
-        t = normalizar_texto(linea)
-        if any(k in t for k in ("direccion:", "direccion configurada:", "telefono:", "telefono de ejecutivo:", "horario configurado:")):
-            continue
-        lineas.append(linea)
-    return "\n".join(lineas).strip()
+    # Etiquetas públicas que no deben aparecer para Nexia.
+    patron_etiqueta = re.compile(
+        r"(?i)\b(?:"
+        r"horario(?:\s+de\s+atenci[oó]n)?|"
+        r"direcci[oó]n(?:\s+f[ií]sica)?|"
+        r"tel[eé]fono(?:\s+de\s+ejecutivo)?|"
+        r"n[uú]mero\s+de\s+tel[eé]fono|"
+        r"celular|ubicaci[oó]n"
+        r")\s*:"
+    )
+    patron_telefono_cl = re.compile(r"(?<!\d)(?:\+?56[ .-]*)?9(?:[ .-]*\d){8}(?!\d)")
+    patron_hora = re.compile(r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b")
+
+    lineas_limpias = []
+    for linea in original.splitlines():
+        limpia = linea
+        normal = normalizar_texto(limpia)
+
+        # Si contiene una dirección/teléfono exactos, corta la línea antes de ese dato.
+        posiciones = []
+        for valor in sensibles_exactos:
+            if not valor:
+                continue
+            pos = limpia.lower().find(valor.lower())
+            if pos >= 0:
+                posiciones.append(pos)
+
+        # Si aparece una etiqueta sensible, conserva solo el texto útil que hubiera antes.
+        m = patron_etiqueta.search(limpia)
+        if m:
+            posiciones.append(m.start())
+
+        # Horarios redactados sin etiqueta, p. ej. "Atendemos lunes a sábado 09:00–18:00".
+        if patron_hora.search(limpia) and any(
+            k in normal
+            for k in (
+                "horario", "atendemos", "atencion de", "atencion entre",
+                "lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo",
+            )
+        ):
+            posiciones.append(0)
+
+        # Teléfono chileno redactado sin etiqueta.
+        mt = patron_telefono_cl.search(limpia)
+        if mt:
+            posiciones.append(mt.start())
+
+        if posiciones:
+            limpia = limpia[:min(posiciones)].rstrip(" -–—|,.;:")
+
+        # Segunda pasada: jamás dejar valores exactos residuales.
+        for valor in sensibles_exactos:
+            if valor:
+                limpia = re.sub(re.escape(valor), "", limpia, flags=re.IGNORECASE)
+        limpia = patron_telefono_cl.sub("", limpia)
+        limpia = limpia.strip()
+
+        if limpia:
+            lineas_limpias.append(limpia)
+
+    salida = "\n".join(lineas_limpias).strip()
+    if not salida:
+        salida = mensaje_horario_no_publicado()
+    return salida
 
 
 def normalizar_telefono(valor):
@@ -1879,6 +1954,8 @@ def whatsapp_webhook():
                 # Cualquier otra cosa recibe una respuesta natural pero acotada al negocio actual.
                 respuesta = respuesta_general(texto)
 
+        # V66: filtro final de privacidad para Nexia antes de guardar y enviar.
+        respuesta = proteger_respuesta_publica_nexia(respuesta)
         guardar_mensaje(telefono, "assistant", respuesta)
         guardar_mensaje_supabase(
             telefono,
@@ -2087,6 +2164,8 @@ def gupshup_webhook():
             else:
                 respuesta = respuesta_general(texto)
 
+        # V66: filtro final de privacidad para Nexia antes de guardar y enviar.
+        respuesta = proteger_respuesta_publica_nexia(respuesta)
         guardar_mensaje(telefono, "assistant", respuesta)
         guardar_mensaje_supabase(
             telefono,
@@ -2335,6 +2414,8 @@ def procesar_texto_instagram(cliente_id, texto, username=None):
     else:
         respuesta = respuesta_general(texto)
 
+    # V66: filtro final de privacidad para Nexia antes de guardar y enviar.
+    respuesta = proteger_respuesta_publica_nexia(respuesta)
     guardar_mensaje(session_id, "assistant", respuesta, canal="instagram")
     guardar_mensaje_supabase(
         cliente_id,
@@ -3157,7 +3238,7 @@ def portal_admin_autorizado():
     Reglas:
     - superadmin: acceso global a TODAS las empresas, independiente de empresa_id.
     - admin / nexia_admin / administrador: acceso administrativo solo si
-      pertenecen a la empresa administrativa definida en NEXIA_EMPRESA_ID.
+      pertenecen a la empresa administrativa definida en ADMIN_EMPRESA_ID.
     - cliente u otros roles: sin acceso administrativo.
 
     Esto permite mantener una empresa administrativa separada de las empresas
@@ -3175,7 +3256,7 @@ def portal_admin_autorizado():
 
     rol = str(perfil.get("rol") or "").strip().lower()
     empresa_id = str(perfil.get("empresa_id") or "").strip()
-    nexia_id = str(NEXIA_EMPRESA_ID or "").strip()
+    nexia_id = str(ADMIN_EMPRESA_ID or "").strip()
 
     # SUPERADMIN GLOBAL
     # No depende de que el perfil pertenezca a una empresa cliente concreta.
