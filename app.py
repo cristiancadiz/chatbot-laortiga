@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-08-V57-NEXIA-CORE-FLUJOS-NEGOCIO-HORARIOS"
+APP_VERSION = "2026-09-08-V58-NEXIA-CORE-BLOQUEO-24H-WHATSAPP"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2421,6 +2421,126 @@ def portal_mensajes_conversacion(conversacion_id):
         return portal_json({"ok": False, "error": str(e)[:300]}, 500)
 
 
+def _parsear_fecha_iso_segura(valor):
+    """
+    Convierte una fecha ISO de Supabase a datetime con zona horaria.
+    Si no se puede interpretar, retorna None.
+    """
+    if not valor:
+        return None
+
+    texto = str(valor).strip()
+    if texto.endswith("Z"):
+        texto = texto[:-1] + "+00:00"
+
+    try:
+        fecha = datetime.fromisoformat(texto)
+    except Exception:
+        return None
+
+    if fecha.tzinfo is None:
+        fecha = pytz.UTC.localize(fecha)
+
+    return fecha
+
+
+def estado_ventana_whatsapp_24h(conversacion_id):
+    """
+    Verifica de forma conservadora la ventana de atención de WhatsApp.
+
+    Regla inicial:
+    - La ventana se abre durante 24 horas desde el ÚLTIMO mensaje ENTRANTE
+      recibido desde el usuario.
+    - Si no existe un mensaje entrante verificable, se considera CERRADA.
+    - Esta función NO envía templates fuera de ventana; solo informa si
+      una respuesta libre puede enviarse.
+
+    Retorna:
+      {
+        "abierta": bool,
+        "ultima_entrada": ISO | None,
+        "vence": ISO | None,
+        "segundos_restantes": int,
+        "motivo": str
+      }
+    """
+    headers = supabase_headers()
+    if not headers:
+        return {
+            "abierta": False,
+            "ultima_entrada": None,
+            "vence": None,
+            "segundos_restantes": 0,
+            "motivo": "No fue posible verificar Supabase",
+        }
+
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/mensajes",
+            headers=headers,
+            params={
+                "select": "fecha,direccion,canal",
+                "conversacion_id": f"eq.{conversacion_id}",
+                "direccion": "eq.entrante",
+                "canal": "eq.whatsapp",
+                "order": "fecha.desc",
+                "limit": "1",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+
+        filas = r.json() if r.content else []
+        if not filas:
+            return {
+                "abierta": False,
+                "ultima_entrada": None,
+                "vence": None,
+                "segundos_restantes": 0,
+                "motivo": "No existe un mensaje entrante de WhatsApp registrado",
+            }
+
+        ultima_raw = filas[0].get("fecha")
+        ultima = _parsear_fecha_iso_segura(ultima_raw)
+
+        if not ultima:
+            return {
+                "abierta": False,
+                "ultima_entrada": ultima_raw,
+                "vence": None,
+                "segundos_restantes": 0,
+                "motivo": "No fue posible interpretar la fecha del último mensaje entrante",
+            }
+
+        ahora = datetime.now(pytz.UTC)
+        ultima_utc = ultima.astimezone(pytz.UTC)
+        vence = ultima_utc + timedelta(hours=24)
+        segundos = max(0, int((vence - ahora).total_seconds()))
+        abierta = ahora <= vence
+
+        return {
+            "abierta": abierta,
+            "ultima_entrada": ultima_utc.isoformat(),
+            "vence": vence.isoformat(),
+            "segundos_restantes": segundos if abierta else 0,
+            "motivo": (
+                "Ventana de atención WhatsApp abierta"
+                if abierta
+                else "Han transcurrido más de 24 horas desde el último mensaje entrante"
+            ),
+        }
+
+    except Exception as e:
+        print("WHATSAPP 24H CHECK ERROR:", repr(e))
+        return {
+            "abierta": False,
+            "ultima_entrada": None,
+            "vence": None,
+            "segundos_restantes": 0,
+            "motivo": "No fue posible verificar la ventana de 24 horas",
+        }
+
+
 @app.route("/portal/modo-atencion", methods=["POST", "OPTIONS"])
 def portal_modo_atencion():
     if request.method == "OPTIONS":
@@ -2479,6 +2599,42 @@ def portal_enviar_mensaje():
         empresa_conv_id = str(conv.get("empresa_id") or "").strip()
         canal = str(conv.get("canal") or "whatsapp").lower()
         destino = str(conv.get("telefono") or "").strip()
+
+        # ============================================================
+        # BLOQUEO INICIAL WHATSAPP — VENTANA DE 24 HORAS
+        # ============================================================
+        # Para respuestas libres enviadas manualmente desde el portal,
+        # no permitimos enviar si la ventana de atención de WhatsApp
+        # está cerrada. Inicialmente NO se envían templates automáticos.
+        #
+        # Esto se valida en backend para que no pueda saltarse desde
+        # el navegador/portal.
+        if canal == "whatsapp":
+            ventana = estado_ventana_whatsapp_24h(conversacion_id)
+
+            if not ventana.get("abierta"):
+                print(
+                    "PORTAL WHATSAPP BLOQUEADO 24H:",
+                    "conversacion_id=", conversacion_id,
+                    "destino=", destino,
+                    "motivo=", ventana.get("motivo"),
+                    "ultima_entrada=", ventana.get("ultima_entrada"),
+                )
+
+                return portal_json(
+                    {
+                        "ok": False,
+                        "bloqueado": True,
+                        "codigo": "WHATSAPP_24H_CERRADA",
+                        "error": (
+                            "No puedes enviar una respuesta libre por WhatsApp porque "
+                            "la ventana de atención de 24 horas está cerrada. "
+                            "El cliente debe volver a escribir para abrir una nueva ventana."
+                        ),
+                        "ventana_24h": ventana,
+                    },
+                    409,
+                )
 
         canal_cfg = {}
         provider = "meta" if canal == "instagram" else "twilio"
