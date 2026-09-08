@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-08-V62-NEXIA-CORE-DERIVACION-EMAIL-RESEND"
+APP_VERSION = "2026-09-08-V63-NEXIA-CORE-DIAGNOSTICO-ROUTING"
 load_dotenv()
 
 app = Flask(__name__)
@@ -197,7 +197,20 @@ def resolver_tenant(canal,provider,identificador_externo):
         row=rows[0];_cache_set(key,row)
     return cargar_empresa_config(row["empresa_id"],canal=canal,provider=provider,canal_config=row)
 
-def activar_por_canal(canal,provider,identificador_externo):set_tenant(resolver_tenant(canal,provider,identificador_externo))
+def activar_por_canal(canal,provider,identificador_externo):
+    tenant = resolver_tenant(canal,provider,identificador_externo)
+    set_tenant(tenant)
+    print("=" * 60)
+    print("ROUTING DIAGNOSTICO")
+    print("CANAL:", canal)
+    print("PROVIDER:", provider)
+    print("IDENTIFICADOR RECIBIDO:", identificador_externo)
+    print("EMPRESA:", tenant.get("empresa_nombre"))
+    print("EMPRESA_ID:", tenant.get("empresa_id"))
+    print("CANAL_CONFIG_ID:", (tenant.get("canal_config") or {}).get("id"))
+    print("CANAL_CONFIG_EXTERNO:", (tenant.get("canal_config") or {}).get("identificador_externo"))
+    print("=" * 60)
+    return tenant
 def activar_por_empresa(empresa_id,canal=None,provider=None,canal_config=None):set_tenant(cargar_empresa_config(empresa_id,canal=canal,provider=provider,canal_config=canal_config))
 
 
@@ -1701,7 +1714,10 @@ def procesar_agenda(estado, texto):
 def whatsapp_webhook():
     twiml = MessagingResponse()
     try:
-        to_numero = re.sub(r"\D", "", str(request.form.get("To") or TWILIO_WHATSAPP_FROM))
+        to_raw = str(request.form.get("To") or TWILIO_WHATSAPP_FROM)
+        to_numero = re.sub(r"\D", "", to_raw)
+        print("WHATSAPP TO RAW:", to_raw)
+        print("WHATSAPP TO NORMALIZADO:", to_numero)
         activar_por_canal("whatsapp", "twilio", to_numero)
         telefono = (request.form.get("From") or "").strip()
         texto = (request.form.get("Body") or "").strip()
