@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-08-V54-NEXIA-CORE-SALUDO-MULTICLIENTE"
+APP_VERSION = "2026-09-08-V55-NEXIA-CORE-SUPERADMIN"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2171,7 +2171,7 @@ def portal_enviar_mensaje():
 def health():
     return {
         "ok": True,
-        "app": "Nexia Core",
+        "app": "Nexia Core - Multiempresa",
         "version": APP_VERSION,
         "channel": "Twilio WhatsApp + Gupshup WhatsApp + Instagram Meta API",
         "calendar": "Google Calendar",
@@ -2184,6 +2184,23 @@ def health():
 # ============================================================
 
 def portal_admin_autorizado():
+    """
+    Autorización del panel administrativo Nexia Core.
+
+    Reglas:
+    - superadmin: acceso global a TODAS las empresas, independiente de empresa_id.
+    - admin / nexia_admin / administrador: acceso administrativo solo si
+      pertenecen a la empresa administrativa definida en NEXIA_EMPRESA_ID.
+    - cliente u otros roles: sin acceso administrativo.
+
+    Esto permite mantener una empresa administrativa separada de las empresas
+    clientes, por ejemplo:
+
+        Administración General (empresa administrativa)
+            ├── Estilista Diego
+            ├── Nexia
+            └── futuros clientes
+    """
     perfil = portal_usuario_autorizado()
     if not perfil:
         print("PORTAL ADMIN AUTH: sin perfil autorizado")
@@ -2193,17 +2210,31 @@ def portal_admin_autorizado():
     empresa_id = str(perfil.get("empresa_id") or "").strip()
     nexia_id = str(NEXIA_EMPRESA_ID or "").strip()
 
+    # SUPERADMIN GLOBAL
+    # No depende de que el perfil pertenezca a una empresa cliente concreta.
+    if rol == "superadmin":
+        print(
+            "PORTAL SUPERADMIN AUTH OK:",
+            "email=", perfil.get("email"),
+            "rol=", rol,
+            "empresa_administrativa=", empresa_id,
+        )
+        return perfil
+
+    # Roles administrativos tradicionales:
+    # siguen restringidos a la empresa administrativa Nexia.
+    roles_admin_locales = {"admin", "nexia_admin", "administrador"}
+
+    if rol not in roles_admin_locales:
+        print("PORTAL ADMIN AUTH: rol no permitido:", rol)
+        return None
+
     if empresa_id != nexia_id:
         print(
             "PORTAL ADMIN AUTH: empresa no corresponde",
             "perfil_empresa=", empresa_id,
             "nexia_empresa=", nexia_id,
         )
-        return None
-
-    roles_admin = {"admin", "nexia_admin", "superadmin", "administrador"}
-    if rol not in roles_admin:
-        print("PORTAL ADMIN AUTH: rol no permitido:", rol)
         return None
 
     print(
