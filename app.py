@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-08-V62-NEXIA-CORE-DERIVACION-EMAIL-RESEND"
+APP_VERSION = "2026-09-08-V64-NEXIA-FLUIDO-EJECUTIVO-TIMEOUT"
 load_dotenv()
 
 app = Flask(__name__)
@@ -49,6 +49,7 @@ TIMEZONE = os.getenv("TIMEZONE", "America/Santiago")
 # Se pueden cambiar desde Render Environment sin tocar el código.
 CONVERSACION_ONLINE_MINUTOS = int(os.getenv("CONVERSACION_ONLINE_MINUTOS", "15"))
 CONVERSACION_ESPERA_HORAS = int(os.getenv("CONVERSACION_ESPERA_HORAS", "24"))
+MODO_EJECUTIVO_TIMEOUT_MINUTOS = int(os.getenv("MODO_EJECUTIVO_TIMEOUT_MINUTOS", "30"))
 DEFAULT_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 DEFAULT_DIRECCION_ATENCION = os.getenv("DIRECCION_ATENCION", "3 Poniente 382, Viña del Mar")
 DEFAULT_TELEFONO_EJECUTIVO = os.getenv("TELEFONO_EJECUTIVO", "+56966461436")
@@ -685,7 +686,7 @@ def obtener_modo_atencion(identificador, canal="whatsapp"):
             f"{SUPABASE_URL}/rest/v1/conversaciones",
             headers=headers,
             params={
-                "select": "modo_atencion",
+                "select": "id,modo_atencion,ultima_fecha",
                 "empresa_id": f"eq.{empresa_actual_id()}",
                 "telefono": f"eq.{identificador}",
                 "canal": f"eq.{canal}",
@@ -697,7 +698,33 @@ def obtener_modo_atencion(identificador, canal="whatsapp"):
         filas = r.json() if r.content else []
         if not filas:
             return "bot"
-        return str(filas[0].get("modo_atencion") or "bot").lower()
+
+        fila = filas[0]
+        modo = str(fila.get("modo_atencion") or "bot").lower()
+
+        # El modo ejecutivo nunca queda bloqueado para siempre.
+        # Si pasó el tiempo configurado sin actividad, la conversación vuelve al bot.
+        if modo == "ejecutivo" and MODO_EJECUTIVO_TIMEOUT_MINUTOS > 0:
+            ultima = str(fila.get("ultima_fecha") or "").strip()
+            if ultima:
+                try:
+                    ultima_dt = datetime.fromisoformat(ultima.replace("Z", "+00:00"))
+                    if ultima_dt.tzinfo is None:
+                        ultima_dt = pytz.timezone(TIMEZONE).localize(ultima_dt)
+                    ahora_dt = datetime.now(pytz.UTC)
+                    minutos = (ahora_dt - ultima_dt.astimezone(pytz.UTC)).total_seconds() / 60
+                    if minutos >= MODO_EJECUTIVO_TIMEOUT_MINUTOS:
+                        establecer_modo_atencion(fila.get("id"), "bot")
+                        print(
+                            "MODO EJECUTIVO EXPIRADO:",
+                            fila.get("id"),
+                            f"{minutos:.1f} min -> bot",
+                        )
+                        return "bot"
+                except Exception as e:
+                    print("MODO EJECUTIVO TIMEOUT PARSE ERROR:", repr(e))
+
+        return modo
     except Exception as e:
         print("SUPABASE MODO ATENCION ERROR:", repr(e))
         return "bot"
@@ -1731,11 +1758,12 @@ def whatsapp_webhook():
         if not texto:
             respuesta = mensaje_bienvenida()
         else:
+            modo_actual = obtener_modo_atencion(telefono, "whatsapp")
             guardar_mensaje(telefono, "user", texto)
             guardar_mensaje_supabase(telefono, "entrante", texto)
 
-            if obtener_modo_atencion(telefono, "whatsapp") == "ejecutivo":
-                print("WHATSAPP MODO EJECUTIVO: bot no responde")
+            if modo_actual == "ejecutivo":
+                print("WHATSAPP MODO EJECUTIVO: solo esta conversación queda con ejecutivo")
                 return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
             estado = get_estado(telefono)
@@ -1937,11 +1965,12 @@ def gupshup_webhook():
         elif not texto:
             respuesta = mensaje_bienvenida()
         else:
+            modo_actual = obtener_modo_atencion(telefono, "whatsapp")
             guardar_mensaje(telefono, "user", texto)
             guardar_mensaje_supabase(telefono, "entrante", texto)
 
-            if obtener_modo_atencion(telefono, "whatsapp") == "ejecutivo":
-                print("GUPSHUP MODO EJECUTIVO: bot no responde")
+            if modo_actual == "ejecutivo":
+                print("GUPSHUP MODO EJECUTIVO: solo esta conversación queda con ejecutivo")
                 return "OK", 200
 
             estado = get_estado(telefono)
