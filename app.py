@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-08-V64-NEXIA-FLUIDO-EJECUTIVO-TIMEOUT"
+APP_VERSION = "2026-09-08-V65-NEXIA-SIN-DIRECCION-TELEFONO-HORARIO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -50,6 +50,7 @@ TIMEZONE = os.getenv("TIMEZONE", "America/Santiago")
 CONVERSACION_ONLINE_MINUTOS = int(os.getenv("CONVERSACION_ONLINE_MINUTOS", "15"))
 CONVERSACION_ESPERA_HORAS = int(os.getenv("CONVERSACION_ESPERA_HORAS", "24"))
 MODO_EJECUTIVO_TIMEOUT_MINUTOS = int(os.getenv("MODO_EJECUTIVO_TIMEOUT_MINUTOS", "30"))
+NEXIA_EMPRESA_ID = os.getenv("NEXIA_EMPRESA_ID", "1675736f-e605-405a-b7bb-eed29e013dd1").strip()
 DEFAULT_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 DEFAULT_DIRECCION_ATENCION = os.getenv("DIRECCION_ATENCION", "3 Poniente 382, Viña del Mar")
 DEFAULT_TELEFONO_EJECUTIVO = os.getenv("TELEFONO_EJECUTIVO", "+56966461436")
@@ -219,6 +220,47 @@ def normalizar_texto(texto):
     for a, b in reemplazos.items():
         texto = texto.replace(a, b)
     return texto
+
+
+def es_empresa_nexia():
+    """Protección de información pública específica para Nexia Tech."""
+    return str(empresa_actual_id() or "").strip() == NEXIA_EMPRESA_ID
+
+
+def mensaje_horario_no_publicado():
+    return (
+        "La atención de Nexia se gestiona directamente por este chat 😊. "
+        "Déjame tu consulta y te ayudo por aquí."
+    )
+
+
+def proteger_respuesta_publica_nexia(texto):
+    """
+    Evita que Nexia exponga por WhatsApp/Instagram dirección, teléfono o horario
+    aunque algún dato antiguo siga configurado en Supabase o variables de entorno.
+    """
+    if not es_empresa_nexia():
+        return texto
+
+    salida = str(texto or "")
+    sensibles = [
+        str(cfg("direccion", "") or "").strip(),
+        str(cfg("telefono_ejecutivo", "") or "").strip(),
+        str(DEFAULT_DIRECCION_ATENCION or "").strip(),
+        str(DEFAULT_TELEFONO_EJECUTIVO or "").strip(),
+    ]
+    for valor in sensibles:
+        if valor:
+            salida = salida.replace(valor, "")
+
+    # Limpieza de líneas que pudieran haber quedado etiquetadas tras una respuesta IA.
+    lineas = []
+    for linea in salida.splitlines():
+        t = normalizar_texto(linea)
+        if any(k in t for k in ("direccion:", "direccion configurada:", "telefono:", "telefono de ejecutivo:", "horario configurado:")):
+            continue
+        lineas.append(linea)
+    return "\n".join(lineas).strip()
 
 
 def normalizar_telefono(valor):
@@ -1046,6 +1088,20 @@ No inventes que ya se creó una reserva ni una reunión.
 """
         ambito = "servicios, precios, contratación y atención comercial"
 
+    if es_empresa_nexia():
+        contexto_contacto = """
+REGLA ESTRICTA PARA NEXIA:
+No entregues, menciones ni inventes dirección física, número de teléfono ni horarios de atención.
+Si preguntan por dirección, teléfono o horario, indica que la atención se gestiona directamente por este chat y ofrece ayudar o derivar a un ejecutivo.
+La derivación al ejecutivo ocurre internamente; nunca muestres datos personales del ejecutivo.
+"""
+    else:
+        contexto_contacto = f"""
+Dirección configurada: {cfg('direccion', DEFAULT_DIRECCION_ATENCION)}.
+Teléfono de ejecutivo: {cfg('telefono_ejecutivo', DEFAULT_TELEFONO_EJECUTIVO)}.
+Horario configurado: {mensaje_horarios(solo_texto=True)}.
+"""
+
     system = f"""
 Eres el asistente virtual de {empresa}.
 Tipo de negocio: {cfg('tipo_negocio','')}.
@@ -1053,10 +1109,7 @@ Descripción de la empresa: {cfg('descripcion_empresa','') or 'Sin descripción 
 
 Tu función es ayudar a clientes basándote únicamente en la información real configurada para esta empresa.
 {regla_flujo}
-
-Dirección configurada: {cfg('direccion', DEFAULT_DIRECCION_ATENCION)}.
-Teléfono de ejecutivo: {cfg('telefono_ejecutivo', DEFAULT_TELEFONO_EJECUTIVO)}.
-Horario configurado: {mensaje_horarios(solo_texto=True)}.
+{contexto_contacto}
 Servicios: {contexto_servicios}.
 
 No inventes información.
@@ -1070,7 +1123,8 @@ Mantén la respuesta breve, natural y en español de Chile.
             model=OPENAI_MODEL,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": texto}],
         )
-        return (r.choices[0].message.content or "").strip() or base
+        respuesta_ia = (r.choices[0].message.content or "").strip() or base
+        return proteger_respuesta_publica_nexia(respuesta_ia)
     except Exception as e:
         print("OPENAI FALLBACK ERROR:", repr(e))
         if usa_reservas:
@@ -1161,6 +1215,23 @@ def mensaje_bienvenida():
 
     return f"{presentacion}\n\n{ayuda}{ejemplos}"
 
+
+
+def pregunta_contacto_sensible(texto):
+    t = normalizar_texto(texto)
+    frases = (
+        "direccion", "direccion de nexia", "donde estan", "donde quedan",
+        "ubicacion", "ubicacion de nexia", "telefono", "numero de telefono",
+        "numero de contacto", "dame tu numero", "fono", "whatsapp de contacto"
+    )
+    return any(x in t for x in frases)
+
+
+def mensaje_contacto_no_publicado():
+    return (
+        "La atención de Nexia se gestiona directamente por este chat 😊. "
+        "Cuéntame qué necesitas y, si corresponde, te derivo a un ejecutivo sin compartir datos personales."
+    )
 
 
 def pregunta_horarios(texto):
@@ -1775,8 +1846,10 @@ def whatsapp_webhook():
             elif es_menu(texto):
                 reset_estado(telefono)
                 respuesta = mensaje_bienvenida()
+            elif es_empresa_nexia() and pregunta_contacto_sensible(texto):
+                respuesta = mensaje_contacto_no_publicado()
             elif pregunta_horarios(texto):
-                respuesta = mensaje_horarios()
+                respuesta = mensaje_horario_no_publicado() if es_empresa_nexia() else mensaje_horarios()
             elif negocio_es_comercial() and (
                 estado.get("paso", "inicio").startswith("comercial_")
                 or intencion_interes_comercial(texto)
@@ -1982,8 +2055,10 @@ def gupshup_webhook():
             elif es_menu(texto):
                 reset_estado(telefono)
                 respuesta = mensaje_bienvenida()
+            elif es_empresa_nexia() and pregunta_contacto_sensible(texto):
+                respuesta = mensaje_contacto_no_publicado()
             elif pregunta_horarios(texto):
-                respuesta = mensaje_horarios()
+                respuesta = mensaje_horario_no_publicado() if es_empresa_nexia() else mensaje_horarios()
             elif negocio_es_comercial() and (
                 estado.get("paso", "inicio").startswith("comercial_")
                 or intencion_interes_comercial(texto)
@@ -2228,8 +2303,10 @@ def procesar_texto_instagram(cliente_id, texto, username=None):
     elif es_menu(texto):
         reset_estado(session_id)
         respuesta = mensaje_bienvenida()
+    elif es_empresa_nexia() and pregunta_contacto_sensible(texto):
+        respuesta = mensaje_contacto_no_publicado()
     elif pregunta_horarios(texto):
-        respuesta = mensaje_horarios()
+        respuesta = mensaje_horario_no_publicado() if es_empresa_nexia() else mensaje_horarios()
     elif negocio_es_comercial() and (
         estado.get("paso", "inicio").startswith("comercial_")
         or intencion_interes_comercial(texto)
