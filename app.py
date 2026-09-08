@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-08-V60-NEXIA-CORE-EJEMPLO-COMERCIAL"
+APP_VERSION = "2026-09-08-V61-NEXIA-CORE-ESTADISTICAS-MENSAJES"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2869,6 +2869,201 @@ def portal_admin_autorizado():
 
 def admin_json_error(msg, status=400):
     return portal_json({"ok": False, "error": msg}, status)
+
+
+def _contar_supabase(tabla, filtros=None):
+    """
+    Cuenta filas usando Prefer: count=exact sin descargar registros.
+    """
+    headers = dict(supabase_headers() or {})
+    if not headers:
+        raise RuntimeError("Supabase backend no configurado")
+
+    headers["Prefer"] = "count=exact"
+    params = {"select": "id", "limit": "1"}
+    for clave, valor in (filtros or {}).items():
+        params[clave] = valor
+
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/{tabla}",
+        headers=headers,
+        params=params,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+
+    content_range = r.headers.get("Content-Range", "")
+    if "/" in content_range:
+        total = content_range.split("/")[-1]
+        if total.isdigit():
+            return int(total)
+
+    # Fallback si el proxy no devuelve Content-Range.
+    datos = r.json() if r.content else []
+    return len(datos)
+
+
+def _estadisticas_empresa(empresa_id, empresa_nombre=None):
+    """
+    Estadísticas principales de una empresa.
+    """
+    filtros_conv = {"empresa_id": f"eq.{empresa_id}"}
+    filtros_msg = {"empresa_id": f"eq.{empresa_id}"}
+
+    # Algunas instalaciones antiguas pueden no tener empresa_id en mensajes.
+    # En ese caso calculamos por conversaciones.
+    try:
+        recibidos = _contar_supabase(
+            "mensajes",
+            {**filtros_msg, "direccion": "eq.entrante"},
+        )
+        enviados = _contar_supabase(
+            "mensajes",
+            {**filtros_msg, "direccion": "eq.saliente"},
+        )
+    except Exception:
+        headers = supabase_headers()
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/conversaciones",
+            headers=headers,
+            params={
+                "select": "id",
+                "empresa_id": f"eq.{empresa_id}",
+                "limit": "10000",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        ids = [str(x.get("id")) for x in (r.json() if r.content else []) if x.get("id")]
+
+        recibidos = 0
+        enviados = 0
+        for conv_id in ids:
+            recibidos += _contar_supabase(
+                "mensajes",
+                {"conversacion_id": f"eq.{conv_id}", "direccion": "eq.entrante"},
+            )
+            enviados += _contar_supabase(
+                "mensajes",
+                {"conversacion_id": f"eq.{conv_id}", "direccion": "eq.saliente"},
+            )
+
+    conversaciones = _contar_supabase("conversaciones", filtros_conv)
+
+    return {
+        "empresa_id": empresa_id,
+        "empresa_nombre": empresa_nombre,
+        "mensajes_recibidos": recibidos,
+        "mensajes_enviados": enviados,
+        "mensajes_totales": recibidos + enviados,
+        "conversaciones": conversaciones,
+    }
+
+
+@app.route("/portal/estadisticas", methods=["GET", "OPTIONS"])
+def portal_estadisticas():
+    """
+    Estadísticas del portal.
+
+    Usuario empresa:
+      - ve solo sus propios mensajes/conversaciones.
+
+    superadmin:
+      - ve el total global de todas las empresas.
+      - recibe además un desglose por empresa.
+    """
+    if request.method == "OPTIONS":
+        from flask import make_response
+        return portal_cors_response(make_response("", 204))
+
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+
+    try:
+        rol = str(perfil.get("rol") or "").strip().lower()
+
+        if rol != "superadmin":
+            empresa_id = str(perfil.get("empresa_id") or "").strip()
+
+            headers = supabase_headers()
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/empresas",
+                headers=headers,
+                params={
+                    "select": "id,nombre",
+                    "id": f"eq.{empresa_id}",
+                    "limit": "1",
+                },
+                timeout=SUPABASE_TIMEOUT,
+            )
+            r.raise_for_status()
+            filas = r.json() if r.content else []
+            nombre = filas[0].get("nombre") if filas else None
+
+            datos = _estadisticas_empresa(empresa_id, nombre)
+
+            return portal_json({
+                "ok": True,
+                "alcance": "empresa",
+                "totales": datos,
+                "empresas": [datos],
+            })
+
+        # SUPERADMIN: suma todas las empresas operativas.
+        headers = supabase_headers()
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/empresas",
+            headers=headers,
+            params={
+                "select": "id,nombre,activo",
+                "order": "nombre.asc",
+                "limit": "1000",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        empresas = r.json() if r.content else []
+
+        detalle = []
+        total_recibidos = 0
+        total_enviados = 0
+        total_conversaciones = 0
+
+        for empresa in empresas:
+            empresa_id = str(empresa.get("id") or "").strip()
+            if not empresa_id:
+                continue
+
+            estadistica = _estadisticas_empresa(
+                empresa_id,
+                empresa.get("nombre"),
+            )
+            detalle.append(estadistica)
+
+            total_recibidos += estadistica["mensajes_recibidos"]
+            total_enviados += estadistica["mensajes_enviados"]
+            total_conversaciones += estadistica["conversaciones"]
+
+        return portal_json({
+            "ok": True,
+            "alcance": "global",
+            "totales": {
+                "mensajes_recibidos": total_recibidos,
+                "mensajes_enviados": total_enviados,
+                "mensajes_totales": total_recibidos + total_enviados,
+                "conversaciones": total_conversaciones,
+                "empresas": len(detalle),
+            },
+            "empresas": detalle,
+        })
+
+    except Exception as e:
+        print("PORTAL ESTADISTICAS ERROR:", repr(e))
+        return portal_json(
+            {"ok": False, "error": str(e)[:300]},
+            500,
+        )
 
 
 @app.route("/portal/admin/empresas", methods=["GET", "POST", "OPTIONS"])
