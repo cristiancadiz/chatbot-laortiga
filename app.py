@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-08-V58-NEXIA-CORE-BLOQUEO-24H-WHATSAPP"
+APP_VERSION = "2026-09-08-V60-NEXIA-CORE-EJEMPLO-COMERCIAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -35,6 +35,20 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 DEFAULT_ASISTENTE_NOMBRE = os.getenv("ESTILISTA_NOMBRE", "Diego")
 DEFAULT_NEGOCIO_NOMBRE = os.getenv("NEGOCIO_NOMBRE", "Estilista Diego")
 TIMEZONE = os.getenv("TIMEZONE", "America/Santiago")
+
+# ============================================================
+# ESTADOS AUTOMÁTICOS DE CONVERSACIÓN
+# ============================================================
+# ONLINE:
+#   actividad reciente dentro de este número de minutos.
+# EN ESPERA:
+#   sin actividad reciente, pero todavía dentro del rango de espera.
+# TERMINADA:
+#   supera el rango de espera definido.
+#
+# Se pueden cambiar desde Render Environment sin tocar el código.
+CONVERSACION_ONLINE_MINUTOS = int(os.getenv("CONVERSACION_ONLINE_MINUTOS", "15"))
+CONVERSACION_ESPERA_HORAS = int(os.getenv("CONVERSACION_ESPERA_HORAS", "24"))
 DEFAULT_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 DEFAULT_DIRECCION_ATENCION = os.getenv("DIRECCION_ATENCION", "3 Poniente 382, Viña del Mar")
 DEFAULT_TELEFONO_EJECUTIVO = os.getenv("TELEFONO_EJECUTIVO", "+56966461436")
@@ -1224,7 +1238,7 @@ def procesar_comercial(estado, texto):
         estado["paso"] = "comercial_datos"
         return (
             "Perfecto 👍 Ahora indícame tu *nombre* y el *nombre de tu empresa o emprendimiento*.\n\n"
-            "Por ejemplo: `Cristian Cadiz, La Ortiga`"
+            "Por ejemplo: `Fabian Lopez, Centro Dental`"
         )
 
     if paso == "comercial_datos":
@@ -2325,7 +2339,7 @@ def obtener_conversacion_supabase(conversacion_id, perfil_portal=None):
     )
     r.raise_for_status()
     filas = r.json() if r.content else []
-    return filas[0] if filas else None
+    return enriquecer_estado_conversacion(filas[0]) if filas else None
 
 
 
@@ -2366,10 +2380,15 @@ def portal_conversaciones():
         )
         r.raise_for_status()
         filas = r.json() if r.content else []
+        filas = [enriquecer_estado_conversacion(fila) for fila in filas]
 
         return portal_json({
             "ok": True,
             "alcance": "global" if es_superadmin(perfil_portal) else "empresa",
+            "criterios_estado": {
+                "online_minutos": CONVERSACION_ONLINE_MINUTOS,
+                "espera_horas": CONVERSACION_ESPERA_HORAS,
+            },
             "conversaciones": filas,
         })
 
@@ -2442,6 +2461,83 @@ def _parsear_fecha_iso_segura(valor):
         fecha = pytz.UTC.localize(fecha)
 
     return fecha
+
+
+
+def estado_conversacion_automatico(conversacion):
+    """
+    Calcula el estado visual de una conversación según su última actividad.
+
+    Reglas por defecto:
+    - online: actividad en los últimos 15 minutos.
+    - en_espera: más de 15 minutos y hasta 24 horas.
+    - terminada: más de 24 horas sin actividad.
+
+    Los umbrales son configurables desde Render:
+    CONVERSACION_ONLINE_MINUTOS
+    CONVERSACION_ESPERA_HORAS
+
+    No modifica el modo bot/ejecutivo; es un estado independiente.
+    """
+    ultima_raw = (
+        (conversacion or {}).get("ultima_fecha")
+        or (conversacion or {}).get("created_at")
+    )
+
+    fecha = _parsear_fecha_iso_segura(ultima_raw)
+
+    if not fecha:
+        return {
+            "estado": "terminada",
+            "estado_label": "Terminada",
+            "ultima_actividad": ultima_raw,
+            "minutos_inactivo": None,
+            "motivo": "No fue posible verificar la última actividad",
+        }
+
+    ahora = datetime.now(pytz.UTC)
+    fecha_utc = fecha.astimezone(pytz.UTC)
+    minutos = max(0, int((ahora - fecha_utc).total_seconds() // 60))
+
+    limite_online = max(1, CONVERSACION_ONLINE_MINUTOS)
+    limite_espera = max(limite_online + 1, CONVERSACION_ESPERA_HORAS * 60)
+
+    if minutos <= limite_online:
+        estado = "online"
+        label = "Online"
+        motivo = f"Actividad dentro de los últimos {limite_online} minutos"
+    elif minutos <= limite_espera:
+        estado = "en_espera"
+        label = "En espera"
+        motivo = f"Sin actividad reciente; todavía dentro de {CONVERSACION_ESPERA_HORAS} horas"
+    else:
+        estado = "terminada"
+        label = "Terminada"
+        motivo = f"Sin actividad por más de {CONVERSACION_ESPERA_HORAS} horas"
+
+    return {
+        "estado": estado,
+        "estado_label": label,
+        "ultima_actividad": fecha_utc.isoformat(),
+        "minutos_inactivo": minutos,
+        "motivo": motivo,
+    }
+
+
+def enriquecer_estado_conversacion(conversacion):
+    """
+    Agrega campos de estado automático a una conversación sin alterar
+    los datos originales almacenados en Supabase.
+    """
+    fila = dict(conversacion or {})
+    estado = estado_conversacion_automatico(fila)
+
+    fila["estado_conversacion"] = estado["estado"]
+    fila["estado_conversacion_label"] = estado["estado_label"]
+    fila["minutos_inactivo"] = estado["minutos_inactivo"]
+    fila["estado_conversacion_motivo"] = estado["motivo"]
+
+    return fila
 
 
 def estado_ventana_whatsapp_24h(conversacion_id):
