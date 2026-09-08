@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-08-V61-NEXIA-CORE-ESTADISTICAS-MENSAJES"
+APP_VERSION = "2026-09-08-V62-NEXIA-CORE-DERIVACION-EMAIL-RESEND"
 load_dotenv()
 
 app = Flask(__name__)
@@ -100,6 +100,22 @@ SUPABASE_TIMEOUT = int(os.getenv("SUPABASE_TIMEOUT", "15"))
 
 PORTAL_ORIGIN = os.getenv("PORTAL_ORIGIN", "https://nexia-tech.com").rstrip("/")
 
+# ============================================================
+# RESEND - NOTIFICACIONES DE DERIVACIÓN A EJECUTIVO
+# ============================================================
+# La API Key debe guardarse SOLO en Render > Environment.
+# Nunca debe escribirse dentro del código ni publicarse en GitHub.
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+RESEND_API_URL = os.getenv("RESEND_API_URL", "https://api.resend.com/emails").strip()
+RESEND_FROM_EMAIL = os.getenv(
+    "RESEND_FROM_EMAIL",
+    "Nexia Tech <notificaciones@nexia-tech.com>",
+).strip()
+
+# Correo general de respaldo.
+# Cada empresa puede definir su propio correo_ejecutivo en configuracion_bot.
+EJECUTIVO_EMAIL = os.getenv("EJECUTIVO_EMAIL", "").strip()
+
 
 # 0=lunes ... 5=sábado. Domingo cerrado.
 DIAS_ATENCION = {0, 1, 2, 3, 4, 5}
@@ -113,7 +129,7 @@ TENANT_CACHE_LOCK = Lock()
 TENANT_CACHE_TTL = int(os.getenv("TENANT_CACHE_TTL", "60"))
 
 def tenant_default():
-    return {"empresa_id": DEFAULT_EMPRESA_ID,"empresa_nombre": DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":"reservas","descripcion_empresa":"","asistente_nombre":DEFAULT_ASISTENTE_NOMBRE,"direccion":DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":DEFAULT_TELEFONO_EJECUTIVO,"timezone":TIMEZONE,"calendar_id":DEFAULT_CALENDAR_ID,"hora_apertura":DEFAULT_HORA_APERTURA,"hora_cierre":DEFAULT_HORA_CIERRE,"duracion_reserva":DEFAULT_DURACION_RESERVA,"dias_atencion":[0,1,2,3,4,5],"prompt_extra":"","modulos":{"ia":True,"reservas":True,"handoff_humano":True,"whatsapp":True,"instagram":True},"servicios":None,"canal":None,"provider":None,"canal_config":{}}
+    return {"empresa_id": DEFAULT_EMPRESA_ID,"empresa_nombre": DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":"reservas","descripcion_empresa":"","asistente_nombre":DEFAULT_ASISTENTE_NOMBRE,"direccion":DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":DEFAULT_TELEFONO_EJECUTIVO,"correo_ejecutivo":EJECUTIVO_EMAIL,"timezone":TIMEZONE,"calendar_id":DEFAULT_CALENDAR_ID,"hora_apertura":DEFAULT_HORA_APERTURA,"hora_cierre":DEFAULT_HORA_CIERRE,"duracion_reserva":DEFAULT_DURACION_RESERVA,"dias_atencion":[0,1,2,3,4,5],"prompt_extra":"","modulos":{"ia":True,"reservas":True,"handoff_humano":True,"whatsapp":True,"instagram":True},"servicios":None,"canal":None,"provider":None,"canal_config":{}}
 
 def tenant_actual(): return TENANT_CTX.get() or tenant_default()
 def set_tenant(data): TENANT_CTX.set(data or tenant_default())
@@ -163,7 +179,7 @@ def cargar_empresa_config(empresa_id,canal=None,provider=None,canal_config=None)
         for row in rows:
             codigo=str(row.get("codigo") or "").strip()
             if codigo:servicios[codigo]={"numero":row.get("numero"),"nombre":row.get("nombre") or codigo,"precio":int(row.get("precio") or 0),"precio_texto":row.get("precio_texto") or "","detalle":row.get("detalle") or "","categoria":row.get("categoria") or "Servicios","aliases":row.get("aliases") or [],"duracion_minutos":row.get("duracion_minutos")}
-        base=tenant_default();base.update({"empresa_id":empresa_id,"empresa_nombre":empresas[0].get("nombre") or DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":conf.get("tipo_negocio") or "reservas","descripcion_empresa":conf.get("descripcion_empresa") or "","asistente_nombre":conf.get("asistente_nombre") or DEFAULT_ASISTENTE_NOMBRE,"direccion":conf.get("direccion") or DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":conf.get("telefono_ejecutivo") or DEFAULT_TELEFONO_EJECUTIVO,"timezone":conf.get("timezone") or TIMEZONE,"calendar_id":conf.get("calendar_id") or DEFAULT_CALENDAR_ID,"hora_apertura":conf.get("hora_apertura") if conf.get("hora_apertura") is not None else DEFAULT_HORA_APERTURA,"hora_cierre":conf.get("hora_cierre") if conf.get("hora_cierre") is not None else DEFAULT_HORA_CIERRE,"duracion_reserva":conf.get("duracion_reserva") if conf.get("duracion_reserva") is not None else DEFAULT_DURACION_RESERVA,"dias_atencion":conf.get("dias_atencion") or [0,1,2,3,4,5],"prompt_extra":conf.get("prompt_extra") or "","modulos":conf.get("modulos") or tenant_default()["modulos"],"servicios":servicios or None});_cache_set(key,base)
+        base=tenant_default();base.update({"empresa_id":empresa_id,"empresa_nombre":empresas[0].get("nombre") or DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":conf.get("tipo_negocio") or "reservas","descripcion_empresa":conf.get("descripcion_empresa") or "","asistente_nombre":conf.get("asistente_nombre") or DEFAULT_ASISTENTE_NOMBRE,"direccion":conf.get("direccion") or DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":conf.get("telefono_ejecutivo") or DEFAULT_TELEFONO_EJECUTIVO,"correo_ejecutivo":conf.get("correo_ejecutivo") or EJECUTIVO_EMAIL,"timezone":conf.get("timezone") or TIMEZONE,"calendar_id":conf.get("calendar_id") or DEFAULT_CALENDAR_ID,"hora_apertura":conf.get("hora_apertura") if conf.get("hora_apertura") is not None else DEFAULT_HORA_APERTURA,"hora_cierre":conf.get("hora_cierre") if conf.get("hora_cierre") is not None else DEFAULT_HORA_CIERRE,"duracion_reserva":conf.get("duracion_reserva") if conf.get("duracion_reserva") is not None else DEFAULT_DURACION_RESERVA,"dias_atencion":conf.get("dias_atencion") or [0,1,2,3,4,5],"prompt_extra":conf.get("prompt_extra") or "","modulos":conf.get("modulos") or tenant_default()["modulos"],"servicios":servicios or None});_cache_set(key,base)
     if base is None:base=tenant_default();base["empresa_id"]=empresa_id
     out=dict(base);out["canal"]=canal;out["provider"]=provider;out["canal_config"]=dict(canal_config or {});return out
 
@@ -771,7 +787,6 @@ def guardar_mensaje_supabase(
                 "ultimo_mensaje": mensaje,
                 "ultima_fecha": ahora_iso,
                 "canal": canal,
-                "modo_atencion": "bot",
             }
             if nombre_contacto and not filas[0].get("nombre_contacto"):
                 cambios["nombre_contacto"] = nombre_contacto
@@ -1220,8 +1235,8 @@ def procesar_comercial(estado, texto):
             f"Ya tengo la información:\n"
             f"• Empresa/emprendimiento: *{empresa_cliente}*\n"
             f"• Necesidad: *{objetivo}*\n\n"
-            f"Podemos ayudarte a revisar la mejor configuración para tu negocio. "
-            f"Si quieres hablar con un ejecutivo, escríbeme *EJECUTIVO*."
+            f"Con esta información ya puedo derivarte a nuestro equipo. "
+            f"Un ejecutivo continuará contigo por este mismo chat."
         )
 
     if paso in {"inicio", "comercial_inicio"}:
@@ -1252,15 +1267,14 @@ def procesar_comercial(estado, texto):
                 f"Ya tengo la información:\n"
                 f"• Empresa/emprendimiento: *{estado['empresa_cliente']}*\n"
                 f"• Necesidad: *{estado.get('objetivo_comercial') or 'Por definir'}*\n\n"
-                f"Podemos ayudarte a revisar la mejor configuración. "
-                f"Si quieres hablar con un ejecutivo, escríbeme *EJECUTIVO*."
+                f"Con esta información ya puedo derivarte a nuestro equipo. "
+                f"Un ejecutivo continuará contigo por este mismo chat."
             )
         return "Indícame ambos datos, por favor: *tu nombre, empresa o emprendimiento*."
 
     if paso == "comercial_completo":
         return (
-            "Ya tengo tus datos 😊. Si quieres, puedes hacerme otra consulta sobre los servicios "
-            "o escribir *EJECUTIVO* para hablar con una persona."
+            "Ya tengo tus datos 😊. La conversación está siendo atendida por un ejecutivo."
         )
 
     estado["paso"] = "comercial_inicio"
@@ -1298,12 +1312,202 @@ def quiere_hablar_con_persona(texto):
     return any(x in t for x in frases)
 
 
-def mensaje_contacto_persona():
+
+def obtener_conversacion_por_identificador(identificador, canal="whatsapp"):
+    """
+    Busca la conversación actual de la empresa/canal y devuelve su fila.
+    """
+    headers = supabase_headers()
+    if not headers or not empresa_actual_id():
+        return None
+
+    canal = str(canal or "whatsapp").strip().lower()
+    identificador = str(identificador or "").strip()
+
+    if canal == "whatsapp":
+        identificador = re.sub(r"\D", "", normalizar_telefono(identificador))
+    else:
+        identificador = re.sub(r"\D", "", identificador)
+
+    if not identificador:
+        return None
+
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/conversaciones",
+        headers=headers,
+        params={
+            "select": "id,empresa_id,telefono,nombre_contacto,canal,modo_atencion,ultimo_mensaje,ultima_fecha",
+            "empresa_id": f"eq.{empresa_actual_id()}",
+            "telefono": f"eq.{identificador}",
+            "canal": f"eq.{canal}",
+            "limit": "1",
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    filas = r.json() if r.content else []
+    return filas[0] if filas else None
+
+
+def enviar_correo_resend(destinatario, asunto, texto=None, html_body=None):
+    """
+    Envía una notificación con Resend.
+    Retorna True si Resend acepta el envío.
+    """
+    destinatario = str(destinatario or "").strip()
+    if not destinatario:
+        print("RESEND: empresa sin correo_ejecutivo; no se envía notificación")
+        return False
+
+    if not RESEND_API_KEY:
+        print("RESEND: falta RESEND_API_KEY en Render")
+        return False
+
+    payload = {
+        "from": RESEND_FROM_EMAIL,
+        "to": [destinatario],
+        "subject": str(asunto or "Nueva conversación derivada"),
+    }
+
+    if html_body:
+        payload["html"] = html_body
+    if texto:
+        payload["text"] = texto
+
+    try:
+        r = requests.post(
+            RESEND_API_URL,
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+        print("RESEND EMAIL OK:", destinatario, data.get("id"))
+        return True
+    except Exception as e:
+        detalle = ""
+        try:
+            detalle = f" | {r.status_code} {r.text[:600]}"
+        except Exception:
+            pass
+        print("RESEND EMAIL ERROR:", repr(e), detalle)
+        return False
+
+
+def notificar_derivacion_ejecutivo(identificador, canal, estado=None, motivo=None):
+    """
+    Notifica por correo al ejecutivo de la empresa cuando una conversación
+    pasa desde el bot a atención humana.
+    """
+    correo = str(cfg("correo_ejecutivo", EJECUTIVO_EMAIL) or "").strip()
+    if not correo:
+        print("DERIVACION: correo_ejecutivo no configurado para", empresa_actual_id())
+        return False
+
+    estado = estado or {}
+    empresa = str(cfg("empresa_nombre", DEFAULT_NEGOCIO_NOMBRE) or "Empresa").strip()
+    nombre = str(
+        estado.get("nombre")
+        or (obtener_conversacion_por_identificador(identificador, canal) or {}).get("nombre_contacto")
+        or "Cliente"
+    ).strip()
+    empresa_cliente = str(estado.get("empresa_cliente") or "").strip()
+    objetivo = str(estado.get("objetivo_comercial") or motivo or "Solicita atención de un ejecutivo").strip()
+    canal_label = "WhatsApp" if str(canal).lower() == "whatsapp" else "Instagram"
+    identificador_limpio = str(identificador or "").strip()
+
+    portal_url = f"{PORTAL_ORIGIN}/portal.html"
+
+    asunto = f"🔔 Nueva conversación para ejecutivo — {empresa}"
+
+    texto = (
+        f"Nueva conversación derivada a ejecutivo\n\n"
+        f"Empresa: {empresa}\n"
+        f"Cliente: {nombre}\n"
+        f"Empresa/emprendimiento del cliente: {empresa_cliente or 'No informado'}\n"
+        f"Necesidad: {objetivo}\n"
+        f"Canal: {canal_label}\n"
+        f"Identificador: {identificador_limpio}\n\n"
+        f"Ingresa al Portal Nexia para continuar la conversación:\n{portal_url}"
+    )
+
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:620px;margin:auto;color:#111827">
+      <h2 style="margin-bottom:6px">🔔 Nueva conversación para ejecutivo</h2>
+      <p style="margin-top:0;color:#6b7280">Se derivó una conversación desde el asistente de {html.escape(empresa)}.</p>
+      <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:18px">
+        <p><strong>Cliente:</strong> {html.escape(nombre)}</p>
+        <p><strong>Empresa/emprendimiento:</strong> {html.escape(empresa_cliente or "No informado")}</p>
+        <p><strong>Necesidad:</strong> {html.escape(objetivo)}</p>
+        <p><strong>Canal:</strong> {html.escape(canal_label)}</p>
+        <p><strong>Identificador:</strong> {html.escape(identificador_limpio)}</p>
+      </div>
+      <p style="margin-top:22px">
+        <a href="{html.escape(portal_url)}"
+           style="display:inline-block;background:#111827;color:#fff;text-decoration:none;padding:12px 18px;border-radius:9px">
+          Abrir Portal Nexia
+        </a>
+      </p>
+    </div>
+    """
+
+    return enviar_correo_resend(
+        correo,
+        asunto,
+        texto=texto,
+        html_body=html_body,
+    )
+
+
+def derivar_a_ejecutivo(identificador, canal="whatsapp", estado=None, motivo=None):
+    """
+    Cambia la conversación a modo ejecutivo y envía una sola notificación
+    cuando efectivamente se produce la transición bot -> ejecutivo.
+    """
+    try:
+        conversacion = obtener_conversacion_por_identificador(identificador, canal)
+        if not conversacion:
+            print("DERIVACION: conversación no encontrada")
+            return False
+
+        modo_anterior = str(conversacion.get("modo_atencion") or "bot").lower()
+        if modo_anterior == "ejecutivo":
+            print("DERIVACION: ya estaba en modo ejecutivo; no se duplica correo")
+            return True
+
+        establecer_modo_atencion(conversacion["id"], "ejecutivo")
+
+        if estado is not None:
+            estado["paso"] = "derivado_ejecutivo"
+
+        notificar_derivacion_ejecutivo(
+            identificador,
+            canal,
+            estado=estado,
+            motivo=motivo,
+        )
+        return True
+
+    except Exception as e:
+        print("DERIVACION EJECUTIVO ERROR:", repr(e))
+        return False
+
+
+def mensaje_derivacion_ejecutivo():
     empresa = str(cfg("empresa_nombre", DEFAULT_NEGOCIO_NOMBRE) or "").strip()
     return (
-        f"Claro 😊 Si quieres hablar directamente con una persona de {empresa}, "
-        f"puedes comunicarte al *{cfg('telefono_ejecutivo', DEFAULT_TELEFONO_EJECUTIVO)}*."
+        f"Perfecto 🙌 Ya envié tu solicitud al equipo de {empresa}. "
+        "Un ejecutivo continuará contigo por este mismo chat."
     )
+
+
+def mensaje_contacto_persona():
+    # Compatibilidad con llamadas antiguas: ya no entrega un teléfono personal.
+    return mensaje_derivacion_ejecutivo()
 
 
 def es_menu(texto):
@@ -1535,9 +1739,11 @@ def whatsapp_webhook():
                 return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
             estado = get_estado(telefono)
+            debe_derivar = False
 
             if quiere_hablar_con_persona(texto):
-                respuesta = mensaje_contacto_persona()
+                respuesta = mensaje_derivacion_ejecutivo()
+                debe_derivar = True
             elif es_menu(texto):
                 reset_estado(telefono)
                 respuesta = mensaje_bienvenida()
@@ -1547,7 +1753,10 @@ def whatsapp_webhook():
                 estado.get("paso", "inicio").startswith("comercial_")
                 or intencion_interes_comercial(texto)
             ):
+                paso_antes = estado.get("paso")
                 respuesta = procesar_comercial(estado, texto)
+                if estado.get("paso") == "comercial_completo" and paso_antes != "comercial_completo":
+                    debe_derivar = True
             elif negocio_usa_reservas() and estado.get("paso") != "inicio":
                 respuesta = procesar_agenda(estado, texto)
             elif pregunta_servicios(texto):
@@ -1576,6 +1785,13 @@ def whatsapp_webhook():
             respuesta,
             nombre_contacto=(get_estado(telefono).get("nombre") if telefono else None),
         )
+        if 'debe_derivar' in locals() and debe_derivar:
+            derivar_a_ejecutivo(
+                telefono,
+                "whatsapp",
+                estado=get_estado(telefono),
+                motivo=texto,
+            )
         twiml.message(respuesta)
         return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
@@ -1729,9 +1945,11 @@ def gupshup_webhook():
                 return "OK", 200
 
             estado = get_estado(telefono)
+            debe_derivar = False
 
             if quiere_hablar_con_persona(texto):
-                respuesta = mensaje_contacto_persona()
+                respuesta = mensaje_derivacion_ejecutivo()
+                debe_derivar = True
             elif es_menu(texto):
                 reset_estado(telefono)
                 respuesta = mensaje_bienvenida()
@@ -1741,7 +1959,10 @@ def gupshup_webhook():
                 estado.get("paso", "inicio").startswith("comercial_")
                 or intencion_interes_comercial(texto)
             ):
+                paso_antes = estado.get("paso")
                 respuesta = procesar_comercial(estado, texto)
+                if estado.get("paso") == "comercial_completo" and paso_antes != "comercial_completo":
+                    debe_derivar = True
             elif negocio_usa_reservas() and estado.get("paso") != "inicio":
                 respuesta = procesar_agenda(estado, texto)
             elif pregunta_servicios(texto):
@@ -1769,6 +1990,13 @@ def gupshup_webhook():
             respuesta,
             nombre_contacto=(get_estado(telefono).get("nombre") if telefono else None),
         )
+        if 'debe_derivar' in locals() and debe_derivar:
+            derivar_a_ejecutivo(
+                telefono,
+                "whatsapp",
+                estado=get_estado(telefono),
+                motivo=texto,
+            )
         enviar_gupshup_texto(telefono, respuesta)
         return "OK", 200
 
@@ -1963,9 +2191,11 @@ def procesar_texto_instagram(cliente_id, texto, username=None):
     )
 
     estado = get_estado(session_id)
+    debe_derivar = False
 
     if quiere_hablar_con_persona(texto):
-        respuesta = mensaje_contacto_persona()
+        respuesta = mensaje_derivacion_ejecutivo()
+        debe_derivar = True
     elif es_menu(texto):
         reset_estado(session_id)
         respuesta = mensaje_bienvenida()
@@ -1975,7 +2205,10 @@ def procesar_texto_instagram(cliente_id, texto, username=None):
         estado.get("paso", "inicio").startswith("comercial_")
         or intencion_interes_comercial(texto)
     ):
+        paso_antes = estado.get("paso")
         respuesta = procesar_comercial(estado, texto)
+        if estado.get("paso") == "comercial_completo" and paso_antes != "comercial_completo":
+            debe_derivar = True
     elif negocio_usa_reservas() and estado.get("paso") != "inicio":
         respuesta = procesar_agenda(estado, texto)
     elif pregunta_servicios(texto):
@@ -2004,6 +2237,13 @@ def procesar_texto_instagram(cliente_id, texto, username=None):
         nombre_contacto=nombre_instagram or estado.get("nombre"),
         canal="instagram",
     )
+    if debe_derivar:
+        derivar_a_ejecutivo(
+            cliente_id,
+            "instagram",
+            estado=estado,
+            motivo=texto,
+        )
     return respuesta
 
 
@@ -3227,7 +3467,7 @@ def portal_admin_configuracion(empresa_id):
     try:
         data = request.get_json(silent=True) or {}
         allowed = {
-            "tipo_negocio", "descripcion_empresa", "asistente_nombre", "direccion", "telefono_ejecutivo",
+            "tipo_negocio", "descripcion_empresa", "asistente_nombre", "direccion", "telefono_ejecutivo", "correo_ejecutivo",
             "timezone", "calendar_id", "hora_apertura", "hora_cierre",
             "duracion_reserva", "dias_atencion", "modulos", "prompt_extra"
         }
