@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-08-V56-NEXIA-CORE-SUPERADMIN-GLOBAL-CONVERSACIONES"
+APP_VERSION = "2026-09-08-V57-NEXIA-CORE-FLUJOS-NEGOCIO-HORARIOS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -289,6 +289,24 @@ SERVICIOS_DEFAULT = {
 SERVICIO_POR_NUMERO_DEFAULT = {v["numero"]: k for k, v in SERVICIOS_DEFAULT.items()}
 
 
+def tipo_negocio_actual():
+    return normalizar_texto(str(cfg("tipo_negocio", "reservas") or ""))
+
+
+def negocio_usa_reservas():
+    tipo = tipo_negocio_actual()
+    tipos_reserva = {
+        "reservas", "agenda", "agendamiento", "servicios",
+        "peluqueria", "barberia", "salon", "salon de belleza",
+        "estilista", "spa", "clinica", "consulta"
+    }
+    return tipo in tipos_reserva and cfg_modulo("reservas", True)
+
+
+def negocio_es_comercial():
+    return not negocio_usa_reservas()
+
+
 def mostrar_servicios():
     grupos={}
     for _,s in sorted(servicios_actuales().items(),key=lambda kv:(str(kv[1].get("categoria") or "Servicios"),int(kv[1].get("numero") or 9999))):grupos.setdefault(str(s.get("categoria") or "Servicios"),[]).append(s)
@@ -298,7 +316,10 @@ def mostrar_servicios():
         for s in items:
             n=f"{s.get('numero')}. " if s.get("numero") is not None else "• ";p=f" — {s.get('precio_texto')}" if s.get("precio_texto") else "";out.append(f"{n}{s.get('nombre')}{p}")
         out.append("")
-    if cfg_modulo("reservas",True):out.append("Para agendar, responde con el número o nombre del servicio.")
+    if negocio_usa_reservas():
+        out.append("Para agendar, responde con el número o nombre del servicio.")
+    else:
+        out.append("Si te interesa alguno, dime cuál o simplemente escribe *ME INTERESA* y te ayudo a avanzar.")
     return "\n".join(out).strip()
 
 def detectar_servicio(texto):
@@ -928,28 +949,65 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 
 def respuesta_general(texto):
-    base = (
-        f"Soy el asistente virtual de {cfg('asistente_nombre', DEFAULT_ASISTENTE_NOMBRE)} 😊. "
-        "Estoy aquí para ayudarte con sus servicios, precios, horarios disponibles y para agendar una hora."
-    )
+    empresa = str(cfg("empresa_nombre", DEFAULT_NEGOCIO_NOMBRE) or "").strip()
+    asistente = str(cfg("asistente_nombre", DEFAULT_ASISTENTE_NOMBRE) or "").strip()
+    usa_reservas = negocio_usa_reservas()
+
+    if usa_reservas:
+        base = (
+            f"Soy el asistente virtual de {asistente} 😊. "
+            "Puedo ayudarte con servicios, precios, horarios de atención, disponibilidad y reservas."
+        )
+    else:
+        base = (
+            f"Soy el asistente virtual de {empresa} 😊. "
+            "Puedo ayudarte con sus servicios, precios y con información para contratar."
+        )
+
     if not openai_client:
-        return base + "\n\nPuedes preguntarme por un servicio o escribir *AGENDAR* para reservar."
+        if usa_reservas:
+            return base + "\n\nPuedes preguntarme por un servicio, por nuestros horarios o escribir *AGENDAR*."
+        return base + "\n\nPuedes preguntarme por los servicios o escribir *ME INTERESA* para avanzar."
 
     contexto_servicios = "; ".join(
         f"{s['nombre']}: {s['precio_texto']}" for s in servicios_actuales().values()
     )
+
+    if usa_reservas:
+        regla_flujo = """
+Este negocio USA agenda y reservas.
+Puedes orientar al cliente para elegir un servicio y reservar una hora.
+Si pregunta por los horarios de atención, informa el horario configurado.
+"""
+        ambito = "servicios, precios, horarios de atención, disponibilidad y reservas"
+    else:
+        regla_flujo = """
+Este negocio NO usa reservas de horas.
+NUNCA ofrezcas reservar, agendar una cita, elegir fecha u hora.
+Si el cliente manifiesta interés en contratar, pregúntale primero qué necesita que haga el servicio o bot.
+Luego solicita su nombre y empresa/emprendimiento para continuar la atención comercial.
+No inventes que ya se creó una reserva ni una reunión.
+"""
+        ambito = "servicios, precios, contratación y atención comercial"
+
     system = f"""
-Eres el asistente virtual de {cfg('empresa_nombre', DEFAULT_NEGOCIO_NOMBRE)}.
-Tipo de negocio: {cfg('tipo_negocio','reservas')}.
+Eres el asistente virtual de {empresa}.
+Tipo de negocio: {cfg('tipo_negocio','')}.
 Descripción de la empresa: {cfg('descripcion_empresa','') or 'Sin descripción adicional configurada.'}
-Tu función es ayudar a clientes basándote únicamente en la información real configurada para esta empresa: su descripción, servicios, precios, horarios, dirección y reservas.
-Dirección de atención: {cfg('direccion', DEFAULT_DIRECCION_ATENCION)}.
-Si el cliente quiere hablar con una persona o con un ejecutivo, indícale este teléfono: {cfg('telefono_ejecutivo', DEFAULT_TELEFONO_EJECUTIVO)}.
-Horario: lunes a sábado, de {cfg_int('hora_apertura', DEFAULT_HORA_APERTURA)}:00 a {cfg_int('hora_cierre', DEFAULT_HORA_CIERRE)}:00.
+
+Tu función es ayudar a clientes basándote únicamente en la información real configurada para esta empresa.
+{regla_flujo}
+
+Dirección configurada: {cfg('direccion', DEFAULT_DIRECCION_ATENCION)}.
+Teléfono de ejecutivo: {cfg('telefono_ejecutivo', DEFAULT_TELEFONO_EJECUTIVO)}.
+Horario configurado: {mensaje_horarios(solo_texto=True)}.
 Servicios: {contexto_servicios}.
-No inventes información. No hables de sistemas internos, APIs ni código.
-Si el usuario escribe algo fuera de este ámbito, responde amablemente que eres el asistente virtual de {cfg('empresa_nombre', DEFAULT_NEGOCIO_NOMBRE)} y que puedes ayudar con información del negocio, servicios, precios, disponibilidad o reservas.
-Mantén la respuesta breve y en español de Chile.
+
+No inventes información.
+No hables de sistemas internos, APIs ni código.
+No copies flujos de otras empresas.
+Si el usuario escribe algo fuera de este ámbito, responde amablemente que eres el asistente virtual de {empresa} y que puedes ayudar con {ambito}.
+Mantén la respuesta breve, natural y en español de Chile.
 """
     try:
         r = openai_client.chat.completions.create(
@@ -959,7 +1017,9 @@ Mantén la respuesta breve y en español de Chile.
         return (r.choices[0].message.content or "").strip() or base
     except Exception as e:
         print("OPENAI FALLBACK ERROR:", repr(e))
-        return base + "\n\nPuedes preguntarme por un servicio o escribir *AGENDAR* para reservar."
+        if usa_reservas:
+            return base + "\n\nPuedes preguntarme por un servicio, por nuestros horarios o escribir *AGENDAR*."
+        return base + "\n\nPuedes preguntarme por los servicios o escribir *ME INTERESA* para avanzar."
 
 
 # ============================================================
@@ -981,6 +1041,8 @@ def estado_inicial(telefono):
         "horas_ofrecidas": [],
         "nombre": None,
         "correo": None,
+        "objetivo_comercial": None,
+        "empresa_cliente": None,
     }
 
 
@@ -1018,16 +1080,16 @@ def mensaje_bienvenida():
             "• ¿Cuáles son sus horarios?\n"
             "• Quiero hacer una reserva"
         )
-    elif tipo_negocio in {"ventas", "ecommerce", "tienda", "comercio", "retail"}:
+    elif tipo_negocio in {"ventas", "ecommerce", "tienda", "comercio", "retail", "tecnologia", "tecnológico", "tecnologico", "software", "servicios tecnologicos", "servicios tecnológicos", "automatizacion", "automatización"}:
         ayuda = (
-            "Estoy aquí para ayudarte con información del negocio, productos, "
-            "precios y consultas de atención."
+            "Estoy aquí para ayudarte con información del negocio, servicios, "
+            "precios y contratación."
         )
         ejemplos = (
             "\n\nPuedes escribirme de forma natural, por ejemplo:\n"
-            "• ¿Qué productos tienen?\n"
-            "• ¿Cuáles son sus horarios?\n"
-            "• Necesito ayuda con una compra"
+            "• ¿Qué servicios ofrecen?\n"
+            "• ¿Cuáles son sus precios?\n"
+            "• Me interesa contratar"
         )
     else:
         ayuda = (
@@ -1044,11 +1106,160 @@ def mensaje_bienvenida():
     return f"{presentacion}\n\n{ayuda}{ejemplos}"
 
 
+
+def pregunta_horarios(texto):
+    t = normalizar_texto(texto)
+    frases = (
+        "horario", "horarios", "horario de atencion", "horarios de atencion",
+        "a que hora atienden", "a que hora abren", "a que hora cierran",
+        "cuando atienden", "que dias atienden", "dias de atencion",
+        "estan abiertos", "atienden hoy"
+    )
+    return any(x in t for x in frases)
+
+
+def _dias_atencion_texto():
+    dias = cfg("dias_atencion", [0,1,2,3,4,5]) or []
+    try:
+        dias = sorted({int(d) for d in dias})
+    except Exception:
+        dias = [0,1,2,3,4,5]
+
+    nombres = {
+        0: "lunes", 1: "martes", 2: "miércoles", 3: "jueves",
+        4: "viernes", 5: "sábado", 6: "domingo"
+    }
+
+    # Rangos comunes para una respuesta más natural.
+    if dias == [0,1,2,3,4]:
+        return "lunes a viernes"
+    if dias == [0,1,2,3,4,5]:
+        return "lunes a sábado"
+    if dias == [0,1,2,3,4,5,6]:
+        return "lunes a domingo"
+
+    return ", ".join(nombres.get(d, str(d)) for d in dias)
+
+
+def _hora_legible(valor):
+    texto = str(valor if valor is not None else "").strip()
+    if not texto:
+        return ""
+    if re.fullmatch(r"\d{1,2}", texto):
+        return f"{int(texto):02d}:00"
+    if re.fullmatch(r"\d{1,2}:\d{2}(?::\d{2})?", texto):
+        return texto[:5]
+    try:
+        return f"{int(float(texto)):02d}:00"
+    except Exception:
+        return texto
+
+
+def mensaje_horarios(solo_texto=False):
+    dias = _dias_atencion_texto()
+    apertura = _hora_legible(cfg("hora_apertura", DEFAULT_HORA_APERTURA))
+    cierre = _hora_legible(cfg("hora_cierre", DEFAULT_HORA_CIERRE))
+    texto = f"{dias}, de {apertura} a {cierre}"
+    if solo_texto:
+        return texto
+    return f"🕒 Nuestro horario de atención es de *{texto}*."
+
+
+def intencion_interes_comercial(texto):
+    t = normalizar_texto(texto)
+    frases = (
+        "me interesa", "me interea", "estoy interesado", "estoy interesada",
+        "quiero contratar", "quiero comprar", "quiero el servicio",
+        "como contrato", "quiero contratarlo", "quiero hacerlo",
+        "quiero un bot", "necesito un bot"
+    )
+    return any(x in t for x in frases)
+
+
+def _parsear_nombre_empresa_objetivo(texto):
+    partes = [p.strip() for p in re.split(r"[,;|]+", str(texto or "")) if p.strip()]
+    if len(partes) >= 3:
+        return partes[0], partes[1], ", ".join(partes[2:])
+    return None, None, None
+
+
+def procesar_comercial(estado, texto):
+    """
+    Flujo comercial genérico para empresas que NO trabajan con reservas.
+
+    Flujo:
+      interés -> necesidad/objetivo -> nombre + empresa -> resumen.
+    También acepta una respuesta compacta:
+      "Cristian Cadiz, La Ortiga, responder consultas"
+    """
+    t = str(texto or "").strip()
+    paso = estado.get("paso") or "inicio"
+
+    nombre, empresa_cliente, objetivo = _parsear_nombre_empresa_objetivo(t)
+    if nombre and empresa_cliente and objetivo:
+        estado["nombre"] = nombre
+        estado["empresa_cliente"] = empresa_cliente
+        estado["objetivo_comercial"] = objetivo
+        estado["paso"] = "comercial_completo"
+        return (
+            f"¡Perfecto, {nombre}! 🙌\n\n"
+            f"Ya tengo la información:\n"
+            f"• Empresa/emprendimiento: *{empresa_cliente}*\n"
+            f"• Necesidad: *{objetivo}*\n\n"
+            f"Podemos ayudarte a revisar la mejor configuración para tu negocio. "
+            f"Si quieres hablar con un ejecutivo, escríbeme *EJECUTIVO*."
+        )
+
+    if paso in {"inicio", "comercial_inicio"}:
+        estado["paso"] = "comercial_objetivo"
+        return (
+            "¡Genial! 🙌 Para orientarte mejor, cuéntame primero:\n\n"
+            "*¿Qué te gustaría que hiciera el bot o servicio en tu negocio?*\n\n"
+            "Por ejemplo: responder consultas, entregar información, gestionar pedidos, "
+            "derivar clientes o automatizar procesos."
+        )
+
+    if paso == "comercial_objetivo":
+        estado["objetivo_comercial"] = t
+        estado["paso"] = "comercial_datos"
+        return (
+            "Perfecto 👍 Ahora indícame tu *nombre* y el *nombre de tu empresa o emprendimiento*.\n\n"
+            "Por ejemplo: `Cristian Cadiz, La Ortiga`"
+        )
+
+    if paso == "comercial_datos":
+        partes = [p.strip() for p in re.split(r"[,;|]+", t) if p.strip()]
+        if len(partes) >= 2:
+            estado["nombre"] = partes[0]
+            estado["empresa_cliente"] = partes[1]
+            estado["paso"] = "comercial_completo"
+            return (
+                f"¡Gracias, {estado['nombre']}! 🙌\n\n"
+                f"Ya tengo la información:\n"
+                f"• Empresa/emprendimiento: *{estado['empresa_cliente']}*\n"
+                f"• Necesidad: *{estado.get('objetivo_comercial') or 'Por definir'}*\n\n"
+                f"Podemos ayudarte a revisar la mejor configuración. "
+                f"Si quieres hablar con un ejecutivo, escríbeme *EJECUTIVO*."
+            )
+        return "Indícame ambos datos, por favor: *tu nombre, empresa o emprendimiento*."
+
+    if paso == "comercial_completo":
+        return (
+            "Ya tengo tus datos 😊. Si quieres, puedes hacerme otra consulta sobre los servicios "
+            "o escribir *EJECUTIVO* para hablar con una persona."
+        )
+
+    estado["paso"] = "comercial_inicio"
+    return procesar_comercial(estado, t)
+
+
 def pedir_servicio():
     return "Claro 😊 ¿Qué servicio quieres agendar?\n\n" + mostrar_servicios()
 
 
 def intencion_agendar(texto):
+    if not negocio_usa_reservas():
+        return False
     t = normalizar_texto(texto)
     return any(x in t for x in (
         "agendar", "reservar", "reserva", "hora", "cita", "turno",
@@ -1316,15 +1527,32 @@ def whatsapp_webhook():
             elif es_menu(texto):
                 reset_estado(telefono)
                 respuesta = mensaje_bienvenida()
-            elif estado.get("paso") != "inicio":
+            elif pregunta_horarios(texto):
+                respuesta = mensaje_horarios()
+            elif negocio_es_comercial() and (
+                estado.get("paso", "inicio").startswith("comercial_")
+                or intencion_interes_comercial(texto)
+            ):
+                respuesta = procesar_comercial(estado, texto)
+            elif negocio_usa_reservas() and estado.get("paso") != "inicio":
                 respuesta = procesar_agenda(estado, texto)
             elif pregunta_servicios(texto):
                 respuesta = mostrar_servicios()
-            elif detectar_servicio(texto) or corte_ambiguo(texto) or intencion_agendar(texto) or texto_menciona_fecha(texto):
+            elif negocio_usa_reservas() and (
+                detectar_servicio(texto)
+                or corte_ambiguo(texto)
+                or intencion_agendar(texto)
+                or texto_menciona_fecha(texto)
+            ):
                 estado["paso"] = "inicio"
                 respuesta = procesar_agenda(estado, texto)
+            elif negocio_es_comercial() and detectar_servicio(texto):
+                respuesta = (
+                    f"Sí 😊 Ese servicio está disponible. "
+                    f"Si te interesa contratarlo, escribe *ME INTERESA* y te hago unas preguntas breves."
+                )
             else:
-                # Cualquier otra cosa recibe una respuesta natural pero acotada al rol.
+                # Cualquier otra cosa recibe una respuesta natural pero acotada al negocio actual.
                 respuesta = respuesta_general(texto)
 
         guardar_mensaje(telefono, "assistant", respuesta)
@@ -1343,7 +1571,7 @@ def whatsapp_webhook():
         print(traceback.format_exc())
         twiml.message(
             f"Disculpa 🙏 Soy el asistente virtual de {cfg('asistente_nombre', DEFAULT_ASISTENTE_NOMBRE)}. "
-            "Tuve un problema técnico. Intenta nuevamente en unos segundos; puedo ayudarte a revisar servicios, horarios y agendar tu hora."
+            "Tuve un problema técnico. Intenta nuevamente en unos segundos."
         )
         return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
@@ -1470,7 +1698,12 @@ def gupshup_webhook():
         # Por ahora el bot conversa por texto. Si llega imagen/audio/documento,
         # respondemos indicando que escriba el mensaje para mantener el flujo estable.
         if tipo != "text":
-            respuesta = "Por ahora puedo ayudarte por texto 😊. Escríbeme tu consulta, servicio o la fecha en que quieres agendar."
+            respuesta = (
+                "Por ahora puedo ayudarte por texto 😊. "
+                + ("Escríbeme tu consulta, servicio o la fecha en que quieres agendar."
+                   if negocio_usa_reservas()
+                   else "Escríbeme tu consulta o el servicio que te interesa.")
+            )
         elif not texto:
             respuesta = mensaje_bienvenida()
         else:
@@ -1488,13 +1721,30 @@ def gupshup_webhook():
             elif es_menu(texto):
                 reset_estado(telefono)
                 respuesta = mensaje_bienvenida()
-            elif estado.get("paso") != "inicio":
+            elif pregunta_horarios(texto):
+                respuesta = mensaje_horarios()
+            elif negocio_es_comercial() and (
+                estado.get("paso", "inicio").startswith("comercial_")
+                or intencion_interes_comercial(texto)
+            ):
+                respuesta = procesar_comercial(estado, texto)
+            elif negocio_usa_reservas() and estado.get("paso") != "inicio":
                 respuesta = procesar_agenda(estado, texto)
             elif pregunta_servicios(texto):
                 respuesta = mostrar_servicios()
-            elif detectar_servicio(texto) or corte_ambiguo(texto) or intencion_agendar(texto) or texto_menciona_fecha(texto):
+            elif negocio_usa_reservas() and (
+                detectar_servicio(texto)
+                or corte_ambiguo(texto)
+                or intencion_agendar(texto)
+                or texto_menciona_fecha(texto)
+            ):
                 estado["paso"] = "inicio"
                 respuesta = procesar_agenda(estado, texto)
+            elif negocio_es_comercial() and detectar_servicio(texto):
+                respuesta = (
+                    "Sí 😊 Ese servicio está disponible. "
+                    "Si te interesa contratarlo, escribe *ME INTERESA* y te hago unas preguntas breves."
+                )
             else:
                 respuesta = respuesta_general(texto)
 
@@ -1705,11 +1955,18 @@ def procesar_texto_instagram(cliente_id, texto, username=None):
     elif es_menu(texto):
         reset_estado(session_id)
         respuesta = mensaje_bienvenida()
-    elif estado.get("paso") != "inicio":
+    elif pregunta_horarios(texto):
+        respuesta = mensaje_horarios()
+    elif negocio_es_comercial() and (
+        estado.get("paso", "inicio").startswith("comercial_")
+        or intencion_interes_comercial(texto)
+    ):
+        respuesta = procesar_comercial(estado, texto)
+    elif negocio_usa_reservas() and estado.get("paso") != "inicio":
         respuesta = procesar_agenda(estado, texto)
     elif pregunta_servicios(texto):
         respuesta = mostrar_servicios()
-    elif (
+    elif negocio_usa_reservas() and (
         detectar_servicio(texto)
         or corte_ambiguo(texto)
         or intencion_agendar(texto)
@@ -1717,6 +1974,11 @@ def procesar_texto_instagram(cliente_id, texto, username=None):
     ):
         estado["paso"] = "inicio"
         respuesta = procesar_agenda(estado, texto)
+    elif negocio_es_comercial() and detectar_servicio(texto):
+        respuesta = (
+            "Sí 😊 Ese servicio está disponible. "
+            "Si te interesa contratarlo, escribe *ME INTERESA* y te hago unas preguntas breves."
+        )
     else:
         respuesta = respuesta_general(texto)
 
