@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-08-V55-NEXIA-CORE-SUPERADMIN"
+APP_VERSION = "2026-09-08-V56-NEXIA-CORE-SUPERADMIN-GLOBAL-CONVERSACIONES"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2030,26 +2030,133 @@ def portal_usuario_autorizado():
     return perfil
 
 
-def obtener_conversacion_supabase(conversacion_id):
+def es_superadmin(perfil):
+    return str((perfil or {}).get("rol") or "").strip().lower() == "superadmin"
+
+
+def obtener_conversacion_supabase(conversacion_id, perfil_portal=None):
+    """
+    Obtiene una conversación respetando el alcance del usuario.
+
+    - superadmin: puede acceder a conversaciones de cualquier empresa.
+    - otros perfiles: solo a conversaciones de su propia empresa.
+    """
     headers = supabase_headers()
     if not headers:
         return None
 
+    params = {
+        "select": "id,empresa_id,telefono,nombre_contacto,canal,modo_atencion,ultimo_mensaje,ultima_fecha,created_at",
+        "id": f"eq.{conversacion_id}",
+        "limit": "1",
+    }
+
+    if not es_superadmin(perfil_portal):
+        empresa_id = str((perfil_portal or {}).get("empresa_id") or empresa_actual_id()).strip()
+        params["empresa_id"] = f"eq.{empresa_id}"
+
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/conversaciones",
         headers=headers,
-        params={
-            "select": "id,empresa_id,telefono,nombre_contacto,canal,modo_atencion",
-            "id": f"eq.{conversacion_id}",
-            "empresa_id": f"eq.{empresa_actual_id()}",
-            "limit": "1",
-        },
+        params=params,
         timeout=SUPABASE_TIMEOUT,
     )
     r.raise_for_status()
     filas = r.json() if r.content else []
     return filas[0] if filas else None
 
+
+
+@app.route("/portal/conversaciones", methods=["GET", "OPTIONS"])
+def portal_conversaciones():
+    """
+    Bandeja de conversaciones del portal.
+
+    superadmin -> todas las empresas
+    otros usuarios -> solo su propia empresa
+    """
+    if request.method == "OPTIONS":
+        from flask import make_response
+        return portal_cors_response(make_response("", 204))
+
+    perfil_portal = portal_usuario_autorizado()
+    if not perfil_portal:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+
+    headers = supabase_headers()
+    if not headers:
+        return portal_json({"ok": False, "error": "Supabase backend no configurado"}, 500)
+
+    try:
+        params = {
+            "select": "id,empresa_id,telefono,nombre_contacto,ultimo_mensaje,ultima_fecha,created_at,canal,modo_atencion,empresas(nombre)",
+            "order": "ultima_fecha.desc.nullslast,created_at.desc",
+        }
+
+        if not es_superadmin(perfil_portal):
+            params["empresa_id"] = f"eq.{perfil_portal['empresa_id']}"
+
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/conversaciones",
+            headers=headers,
+            params=params,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        filas = r.json() if r.content else []
+
+        return portal_json({
+            "ok": True,
+            "alcance": "global" if es_superadmin(perfil_portal) else "empresa",
+            "conversaciones": filas,
+        })
+
+    except Exception as e:
+        print("PORTAL CONVERSACIONES ERROR:", repr(e))
+        return portal_json({"ok": False, "error": str(e)[:300]}, 500)
+
+
+@app.route("/portal/conversacion/<conversacion_id>/mensajes", methods=["GET", "OPTIONS"])
+def portal_mensajes_conversacion(conversacion_id):
+    """
+    Historial de una conversación con validación de alcance.
+    """
+    if request.method == "OPTIONS":
+        from flask import make_response
+        return portal_cors_response(make_response("", 204))
+
+    perfil_portal = portal_usuario_autorizado()
+    if not perfil_portal:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+
+    try:
+        conv = obtener_conversacion_supabase(conversacion_id, perfil_portal)
+        if not conv:
+            return portal_json({"ok": False, "error": "Conversación no encontrada"}, 404)
+
+        headers = supabase_headers()
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/mensajes",
+            headers=headers,
+            params={
+                "select": "id,conversacion_id,direccion,mensaje,fecha,canal",
+                "conversacion_id": f"eq.{conversacion_id}",
+                "order": "fecha.asc",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        filas = r.json() if r.content else []
+
+        return portal_json({
+            "ok": True,
+            "empresa_id": conv.get("empresa_id"),
+            "mensajes": filas,
+        })
+
+    except Exception as e:
+        print("PORTAL MENSAJES ERROR:", repr(e))
+        return portal_json({"ok": False, "error": str(e)[:300]}, 500)
 
 
 @app.route("/portal/modo-atencion", methods=["POST", "OPTIONS"])
@@ -2062,7 +2169,6 @@ def portal_modo_atencion():
     if not perfil_portal:
         return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
 
-    activar_por_empresa(perfil_portal["empresa_id"])
     data = request.get_json(silent=True) or {}
     conversacion_id = str(data.get("conversacion_id") or "").strip()
     modo = str(data.get("modo") or "").strip().lower()
@@ -2071,10 +2177,11 @@ def portal_modo_atencion():
         return portal_json({"ok": False, "error": "Datos inválidos"}, 400)
 
     try:
-        conv = obtener_conversacion_supabase(conversacion_id)
+        conv = obtener_conversacion_supabase(conversacion_id, perfil_portal)
         if not conv:
             return portal_json({"ok": False, "error": "Conversación no encontrada"}, 404)
 
+        activar_por_empresa(conv["empresa_id"])
         establecer_modo_atencion(conversacion_id, modo)
         return portal_json({"ok": True, "modo": modo})
     except Exception as e:
@@ -2092,7 +2199,6 @@ def portal_enviar_mensaje():
     if not perfil_portal:
         return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
 
-    activar_por_empresa(perfil_portal["empresa_id"])
     data = request.get_json(silent=True) or {}
     conversacion_id = str(data.get("conversacion_id") or "").strip()
     mensaje = str(data.get("mensaje") or "").strip()
@@ -2104,10 +2210,11 @@ def portal_enviar_mensaje():
         return portal_json({"ok": False, "error": "Mensaje demasiado largo"}, 400)
 
     try:
-        conv = obtener_conversacion_supabase(conversacion_id)
+        conv = obtener_conversacion_supabase(conversacion_id, perfil_portal)
         if not conv:
             return portal_json({"ok": False, "error": "Conversación no encontrada"}, 404)
 
+        empresa_conv_id = str(conv.get("empresa_id") or "").strip()
         canal = str(conv.get("canal") or "whatsapp").lower()
         destino = str(conv.get("telefono") or "").strip()
 
@@ -2115,13 +2222,13 @@ def portal_enviar_mensaje():
         provider = "meta" if canal == "instagram" else "twilio"
         hb = backend_headers()
         if hb:
-            rc = requests.get(f"{SUPABASE_URL}/rest/v1/canales_empresa", headers=hb, params={"select":"*","empresa_id":f"eq.{perfil_portal['empresa_id']}","canal":f"eq.{canal}","activo":"eq.true","es_principal":"eq.true","limit":"1"}, timeout=SUPABASE_TIMEOUT)
+            rc = requests.get(f"{SUPABASE_URL}/rest/v1/canales_empresa", headers=hb, params={"select":"*","empresa_id":f"eq.{empresa_conv_id}","canal":f"eq.{canal}","activo":"eq.true","es_principal":"eq.true","limit":"1"}, timeout=SUPABASE_TIMEOUT)
             if rc.ok:
                 rows = rc.json() if rc.content else []
                 if rows:
                     canal_cfg = rows[0]
                     provider = str(canal_cfg.get("provider") or provider)
-        activar_por_empresa(perfil_portal["empresa_id"], canal=canal, provider=provider, canal_config=canal_cfg)
+        activar_por_empresa(empresa_conv_id, canal=canal, provider=provider, canal_config=canal_cfg)
 
         # En cuanto un ejecutivo responde desde el portal, el bot deja de intervenir
         # en esta conversación hasta que se reactive manualmente.
