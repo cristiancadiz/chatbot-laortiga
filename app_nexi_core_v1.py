@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.3-ROUTER-WHATSAPP-INTERACTIVO"
+APP_VERSION = "2026-09-10-NEXI-V2.3.1-AGENDA-LISTAS-INTERACTIVAS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1083,6 +1083,192 @@ def enviar_twilio_menu_interactivo(destino, pagina=0):
         print("NEXI ROUTER LISTA TWILIO ERROR:", repr(e))
         return False
 
+
+
+# V2.3.1: listas interactivas reutilizables para servicios y horas de agenda.
+AGENDA_TWILIO_CONTENT_CACHE = {}
+AGENDA_TWILIO_CONTENT_CACHE_LOCK = Lock()
+AGENDA_LIST_PAGE_SIZE = 9  # 9 opciones + "Ver más" cuando corresponda.
+
+
+def _agenda_twilio_content_sid(tipo, cantidad):
+    """Crea/reutiliza un list-picker Twilio para servicios u horas."""
+    tipo = str(tipo or "").strip().lower()
+    if tipo not in {"servicios", "horas"}:
+        raise ValueError("Tipo de lista de agenda no soportado")
+    cantidad = max(1, min(10, int(cantidad)))
+    cache_key = (tipo, cantidad)
+    with AGENDA_TWILIO_CONTENT_CACHE_LOCK:
+        sid_cache = AGENDA_TWILIO_CONTENT_CACHE.get(cache_key)
+        if sid_cache:
+            return sid_cache
+
+    account_sid, auth_token, _ = _router_twilio_credenciales()
+    variables = {}
+    items = []
+    for i in range(1, cantidad + 1):
+        variables[f"i{i}"] = f"Opción {i}"
+        variables[f"id{i}"] = f"agenda-opcion-{i}"
+        variables[f"d{i}"] = "Seleccionar"
+        items.append({
+            "item": f"{{{{i{i}}}}}",
+            "id": f"{{{{id{i}}}}}",
+            "description": f"{{{{d{i}}}}}",
+        })
+
+    if tipo == "servicios":
+        body = "Claro 😊 ¿Qué servicio quieres agendar?"
+        button = "Ver servicios"
+        friendly = f"nexia_agenda_servicios_{cantidad}"
+    else:
+        body = "Tengo estas horas disponibles 👇 Selecciona la que prefieras."
+        button = "Ver horas"
+        friendly = f"nexia_agenda_horas_{cantidad}"
+
+    payload = {
+        "friendly_name": friendly,
+        "language": "es",
+        "variables": variables,
+        "types": {
+            "twilio/list-picker": {
+                "body": body,
+                "button": button,
+                "items": items,
+            }
+        },
+    }
+    r = requests.post(
+        "https://content.twilio.com/v1/Content",
+        auth=(account_sid, auth_token),
+        json=payload,
+        timeout=20,
+    )
+    r.raise_for_status()
+    data = r.json() if r.content else {}
+    content_sid = str(data.get("sid") or "").strip()
+    if not content_sid:
+        raise RuntimeError("Twilio no devolvió ContentSid para agenda")
+    with AGENDA_TWILIO_CONTENT_CACHE_LOCK:
+        AGENDA_TWILIO_CONTENT_CACHE[cache_key] = content_sid
+    return content_sid
+
+
+def _agenda_enviar_lista_twilio(destino, tipo, opciones):
+    """Envía una lista interactiva de agenda; cada opción lleva item/id/description."""
+    if not opciones:
+        return False
+    try:
+        account_sid, auth_token, from_value = _router_twilio_credenciales()
+        content_sid = _agenda_twilio_content_sid(tipo, len(opciones))
+        variables = {}
+        for i, op in enumerate(opciones, 1):
+            variables[f"i{i}"] = str(op.get("item") or f"Opción {i}")[:24]
+            variables[f"id{i}"] = str(op.get("id") or f"agenda:opcion:{i}")[:200]
+            variables[f"d{i}"] = str(op.get("description") or "Seleccionar")[:72]
+        to_digits = _router_identificador(destino)
+        r = requests.post(
+            f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+            auth=(account_sid, auth_token),
+            data={
+                "To": f"whatsapp:+{to_digits}",
+                "From": from_value,
+                "ContentSid": content_sid,
+                "ContentVariables": json.dumps(variables, ensure_ascii=False),
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+        print("NEXI AGENDA LISTA TWILIO OK:", tipo, len(opciones), data.get("sid"))
+        return True
+    except Exception as e:
+        print("NEXI AGENDA LISTA TWILIO ERROR:", tipo, repr(e))
+        return False
+
+
+def _agenda_servicios_opciones(pagina=0):
+    servicios = sorted(
+        servicios_actuales().items(),
+        key=lambda kv: (int(kv[1].get("numero") or 9999), str(kv[1].get("nombre") or "")),
+    )
+    pagina = max(0, int(pagina or 0))
+    inicio = pagina * AGENDA_LIST_PAGE_SIZE
+    chunk = servicios[inicio: inicio + AGENDA_LIST_PAGE_SIZE]
+    opciones = []
+    for codigo, s in chunk:
+        numero = int(s.get("numero") or (inicio + len(opciones) + 1))
+        nombre = str(s.get("nombre") or codigo)
+        precio = str(s.get("precio_texto") or "Valor por confirmar")
+        opciones.append({
+            "item": nombre,
+            "id": f"agenda:servicio_num:{numero}",
+            "description": precio,
+        })
+    if inicio + AGENDA_LIST_PAGE_SIZE < len(servicios):
+        opciones.append({
+            "item": "Ver más servicios",
+            "id": f"agenda:servicios_pagina:{pagina + 1}",
+            "description": "Mostrar más opciones",
+        })
+    elif pagina > 0:
+        opciones.append({
+            "item": "Volver al inicio",
+            "id": "agenda:servicios_pagina:0",
+            "description": "Ver primeros servicios",
+        })
+    return opciones[:10]
+
+
+def _agenda_horas_opciones(estado, pagina=0):
+    ofrecidas = list((estado or {}).get("horas_ofrecidas") or [])
+    pagina = max(0, int(pagina or 0))
+    inicio = pagina * AGENDA_LIST_PAGE_SIZE
+    chunk = ofrecidas[inicio: inicio + AGENDA_LIST_PAGE_SIZE]
+    opciones = []
+    for offset, iso in enumerate(chunk):
+        idx_global = inicio + offset + 1
+        try:
+            slot = datetime.fromisoformat(iso)
+            titulo = slot.astimezone(zona_local()).strftime("%H:%M")
+            descripcion = formatear_fecha(slot)
+        except Exception:
+            titulo = f"Hora {idx_global}"
+            descripcion = str(iso)
+        opciones.append({
+            "item": titulo,
+            "id": f"agenda:hora_num:{idx_global}",
+            "description": descripcion,
+        })
+    if inicio + AGENDA_LIST_PAGE_SIZE < len(ofrecidas):
+        opciones.append({
+            "item": "Ver más horas",
+            "id": f"agenda:horas_pagina:{pagina + 1}",
+            "description": "Mostrar más horarios",
+        })
+    elif pagina > 0:
+        opciones.append({
+            "item": "Volver al inicio",
+            "id": "agenda:horas_pagina:0",
+            "description": "Ver primeras horas",
+        })
+    return opciones[:10]
+
+
+def enviar_twilio_agenda_interactiva(destino, estado, pagina_servicios=0, pagina_horas=0):
+    """Según el paso actual, reemplaza el listado textual por un list-picker clickeable."""
+    paso = str((estado or {}).get("paso") or "inicio")
+    if paso == "servicio":
+        return _agenda_enviar_lista_twilio(destino, "servicios", _agenda_servicios_opciones(pagina_servicios))
+    if paso == "seleccionar_hora":
+        return _agenda_enviar_lista_twilio(destino, "horas", _agenda_horas_opciones(estado, pagina_horas))
+    return False
+
+
+def agenda_payload_a_texto(payload):
+    """Convierte una selección interactiva en el número que ya entiende procesar_agenda()."""
+    raw = str(payload or "").strip().lower()
+    m = re.fullmatch(r"agenda:(?:servicio_num|hora_num):(\d{1,3})", raw)
+    return m.group(1) if m else str(payload or "")
 
 def router_payload_interactivo(request_form):
     """Extrae el id de quick-reply/list-picker que Twilio envía al webhook."""
@@ -4688,7 +4874,7 @@ def whatsapp_webhook():
         telefono = (request.form.get("From") or "").strip()
         texto = (request.form.get("Body") or "").strip()
         interactive_payload = router_payload_interactivo(request.form)
-        texto_router = interactive_payload or texto
+        texto_router = agenda_payload_a_texto(interactive_payload) if interactive_payload else texto
         message_id = (request.form.get("MessageSid") or "").strip()
 
         print("=" * 60)
@@ -4729,6 +4915,27 @@ def whatsapp_webhook():
 
         router_activar_ruta(route, "twilio")
 
+        # V2.3.1: paginación de listas interactivas de agenda.
+        if interactive_payload and interactive_payload.lower().startswith("agenda:"):
+            raw_agenda = interactive_payload.lower()
+            m_serv = re.fullmatch(r"agenda:servicios_pagina:(\d+)", raw_agenda)
+            m_hora = re.fullmatch(r"agenda:horas_pagina:(\d+)", raw_agenda)
+            if m_serv or m_hora:
+                if str(route.get("motor") or "core").lower() == "legacy":
+                    estado_lista = get_estado(telefono)
+                else:
+                    empresa_lista = str(route.get("empresa_id") or empresa_actual_id() or "").strip()
+                    key_lista = f"core:{empresa_lista}:{_normalizar_identificador_demo(telefono, 'whatsapp')}"
+                    estado_lista = get_estado(key_lista)
+                pagina_lista = int((m_serv or m_hora).group(1))
+                enviado = (
+                    enviar_twilio_agenda_interactiva(telefono, estado_lista, pagina_servicios=pagina_lista)
+                    if m_serv
+                    else enviar_twilio_agenda_interactiva(telefono, estado_lista, pagina_horas=pagina_lista)
+                )
+                if enviado:
+                    return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
         if route.get("accion") == "seleccionado":
             twiml.message(router_bienvenida_contexto(route))
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
@@ -4744,6 +4951,11 @@ def whatsapp_webhook():
             else:
                 respuesta = router_bienvenida_contexto({**route, "telefono": telefono})
             if respuesta:
+                empresa_core = str(route.get("empresa_id") or empresa_actual_id() or "").strip()
+                key_core = f"core:{empresa_core}:{_normalizar_identificador_demo(telefono, 'whatsapp')}"
+                estado_core = get_estado(key_core)
+                if enviar_twilio_agenda_interactiva(telefono, estado_core):
+                    return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
                 twiml.message(respuesta)
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
@@ -4818,6 +5030,8 @@ def whatsapp_webhook():
                 estado=get_estado(telefono),
                 motivo=texto,
             )
+        if telefono and enviar_twilio_agenda_interactiva(telefono, get_estado(telefono)):
+            return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
         twiml.message(respuesta)
         return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
