@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.2.2-AGENDA-ESTADO-PERSISTENTE"
+APP_VERSION = "2026-09-10-NEXI-V2.3-ROUTER-WHATSAPP-INTERACTIVO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -673,7 +673,13 @@ ROUTER_MENU_COMMANDS = {
     "cambiar de negocio", "cambiar empresa", "recepcion", "recepción",
 }
 ROUTER_DIEGO_COMMANDS = {"diego", "diego estilista", "hablar con diego"}
-ROUTER_DEMO_COMMANDS = {"mi demo", "demo", "probar mi demo", "probar demo"}
+ROUTER_DEMO_COMMANDS = {"mi demo", "demo", "mi prueba", "prueba", "probar mi demo", "probar demo", "probar mi prueba"}
+
+# V2.3: el menú de recepción de WhatsApp se construye dinámicamente con
+# empresas pagadas/activas. Twilio permite hasta 10 elementos por list-picker.
+ROUTER_LIST_PAGE_SIZE = 9
+ROUTER_TWILIO_CONTENT_CACHE = {}
+ROUTER_TWILIO_CONTENT_CACHE_LOCK = Lock()
 
 
 def _router_identificador(valor):
@@ -695,7 +701,11 @@ def _router_tabla_no_disponible(resp):
 
 
 def router_demo_access_sin_activar(telefono):
-    """Busca la demo activa del usuario sin cambiar todavía el tenant global."""
+    """Busca una PRUEBA realmente activa del usuario sin cambiar el tenant global.
+
+    Una empresa que ya se convirtió a plan pagado deja de aparecer como "Mi prueba"
+    aunque su antigua fila en demo_accesos siga existiendo.
+    """
     headers = _router_headers()
     ident = _router_identificador(telefono)
     if not headers or not ident:
@@ -721,6 +731,12 @@ def router_demo_access_sin_activar(telefono):
         row = dict(rows[0])
         fin = _parse_iso(row.get("fin"))
         if fin and datetime.now(pytz.UTC) >= fin.astimezone(pytz.UTC):
+            return None
+
+        plan = estado_suscripcion_empresa(row.get("empresa_id"))
+        if str(plan.get("tipo_plan") or "").strip().lower() != "demo":
+            return None
+        if str(plan.get("estado") or "").strip().lower() != "activo":
             return None
         return row
     except Exception as e:
@@ -856,22 +872,235 @@ def router_codigo_desde_texto(texto):
     return m.group(1).upper() if m else None
 
 
-def router_menu_superior(telefono):
+def router_empresas_pagadas_activas():
+    """Devuelve empresas pagadas y activas visibles en recepción. Diego se agrega aparte."""
+    headers = _router_headers()
+    if not headers:
+        return []
+    try:
+        rp = requests.get(
+            f"{SUPABASE_URL}/rest/v1/suscripciones_empresa",
+            headers=headers,
+            params={
+                "select": "empresa_id,tipo_plan,estado,updated_at",
+                "estado": "eq.activo",
+                "tipo_plan": "in.(nexia_500,nexia_1000)",
+                "order": "updated_at.asc",
+                "limit": "500",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        rp.raise_for_status()
+        planes = rp.json() if rp.content else []
+        ids = []
+        for p in planes:
+            eid = str(p.get("empresa_id") or "").strip()
+            if eid and eid != str(DIEGO_EMPRESA_ID or "").strip() and eid not in ids:
+                ids.append(eid)
+        if not ids:
+            return []
+
+        re_ = requests.get(
+            f"{SUPABASE_URL}/rest/v1/empresas",
+            headers=headers,
+            params={
+                "select": "id,nombre,activo",
+                "id": f"in.({','.join(ids)})",
+                "activo": "eq.true",
+                "limit": "500",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        re_.raise_for_status()
+        empresas = re_.json() if re_.content else []
+        por_id = {str(e.get("id") or ""): e for e in empresas}
+        out = []
+        for eid in ids:
+            e = por_id.get(eid)
+            if not e:
+                continue
+            nombre = str(e.get("nombre") or "Negocio Nexia").strip() or "Negocio Nexia"
+            out.append({"empresa_id": eid, "nombre": nombre, "motor": "core", "origen": "pagado"})
+        return out
+    except Exception as e:
+        print("NEXI ROUTER EMPRESAS PAGADAS ERROR:", repr(e))
+        return []
+
+
+def router_opciones_menu(telefono, pagina=0):
+    """Genera una página de opciones clickeables. La prueba propia queda al final."""
+    pagadas = router_empresas_pagadas_activas()
     demo = router_demo_access_sin_activar(telefono)
-    lineas = [
-        "Hola 👋 Bienvenido a Nexia.",
-        "¿Con quién quieres hablar?",
-        "",
-        "1. Diego Estilista",
-    ]
+    pagina = max(0, int(pagina or 0))
+
+    todas = [{
+        "id": "nexi:diego",
+        "item": "Diego Estilista",
+        "description": "Hablar con el asistente de Diego",
+        "empresa_id": str(DIEGO_EMPRESA_ID or ""),
+        "motor": "legacy",
+        "origen": "diego",
+    }]
+
+    for e in pagadas:
+        nombre = str(e.get("nombre") or "Negocio Nexia").strip()
+        todas.append({
+            "id": f"nexi:empresa:{e['empresa_id']}",
+            "item": nombre[:24],
+            "description": f"Conversar con {nombre}"[:72],
+            "empresa_id": e["empresa_id"],
+            "motor": "core",
+            "origen": "pagado",
+        })
+
     if demo:
-        lineas.append("2. Mi asistente Nexia")
-    lineas += [
-        "",
-        "Si llegaste desde otro negocio, usa el botón o enlace que ese negocio te compartió.",
-        "En cualquier momento escribe *MENU* para cambiar de negocio.",
-    ]
+        # Solo la prueba del mismo WhatsApp, siempre como última opción global.
+        todas.append({
+            "id": f"nexi:prueba:{demo.get('empresa_id')}",
+            "item": "Mi prueba Nexia",
+            "description": "Abrir mi prueba gratuita",
+            "empresa_id": str(demo.get("empresa_id") or ""),
+            "motor": "core",
+            "origen": "demo",
+            "demo_access": demo,
+        })
+
+    # Página: 9 opciones + "Ver más" cuando aún quedan; última página hasta 10.
+    inicio = pagina * ROUTER_LIST_PAGE_SIZE
+    if inicio >= len(todas) and pagina > 0:
+        pagina = 0
+        inicio = 0
+    restantes = todas[inicio:]
+    if len(restantes) > 10:
+        opciones = restantes[:ROUTER_LIST_PAGE_SIZE]
+        opciones.append({
+            "id": f"nexi:pagina:{pagina + 1}",
+            "item": "Ver más negocios",
+            "description": "Mostrar más empresas activas",
+            "pagina": pagina + 1,
+            "origen": "pagina",
+        })
+        return opciones
+    return restantes[:10]
+
+
+def router_menu_superior(telefono, pagina=0):
+    """Fallback textual del menú. Twilio usa list-picker cuando puede."""
+    opciones = router_opciones_menu(telefono, pagina=pagina)
+    lineas = ["Hola 👋 Bienvenido a Nexia.", "¿Con quién quieres hablar?", ""]
+    for i, op in enumerate(opciones, 1):
+        lineas.append(f"{i}. {op.get('item') or 'Opción'}")
+    lineas += ["", "Toca una opción del menú. También puedes escribir *MENU* cuando quieras cambiar de negocio."]
     return "\n".join(lineas)
+
+
+def _router_twilio_credenciales():
+    sid = str(TWILIO_ACCOUNT_SID or "").strip()
+    token = str(TWILIO_AUTH_TOKEN or "").strip()
+    sender = str(TWILIO_WHATSAPP_FROM or "").strip()
+    if not sid or not token or not sender:
+        raise RuntimeError("Falta configuración Twilio para el menú interactivo")
+    from_value = sender if sender.startswith("whatsapp:") else f"whatsapp:{sender}"
+    return sid, token, from_value
+
+
+def _router_twilio_content_sid(cantidad):
+    """Crea/reutiliza una plantilla list-picker genérica para N elementos."""
+    cantidad = max(1, min(10, int(cantidad)))
+    with ROUTER_TWILIO_CONTENT_CACHE_LOCK:
+        sid_cache = ROUTER_TWILIO_CONTENT_CACHE.get(cantidad)
+        if sid_cache:
+            return sid_cache
+
+    account_sid, auth_token, _ = _router_twilio_credenciales()
+    variables = {}
+    items = []
+    for i in range(1, cantidad + 1):
+        variables[f"i{i}"] = f"Opción {i}"
+        variables[f"id{i}"] = f"opcion-{i}"
+        variables[f"d{i}"] = "Seleccionar esta opción"
+        items.append({"item": f"{{{{i{i}}}}}", "id": f"{{{{id{i}}}}}", "description": f"{{{{d{i}}}}}"})
+
+    payload = {
+        "friendly_name": f"nexia_router_lista_{cantidad}",
+        "language": "es",
+        "variables": variables,
+        "types": {
+            "twilio/list-picker": {
+                "body": "Hola 👋 Bienvenido a Nexia. Selecciona con quién quieres hablar:",
+                "button": "Ver opciones",
+                "items": items,
+            }
+        },
+    }
+    r = requests.post(
+        "https://content.twilio.com/v1/Content",
+        auth=(account_sid, auth_token),
+        json=payload,
+        timeout=20,
+    )
+    r.raise_for_status()
+    data = r.json() if r.content else {}
+    content_sid = str(data.get("sid") or "").strip()
+    if not content_sid:
+        raise RuntimeError("Twilio no devolvió ContentSid para el menú")
+    with ROUTER_TWILIO_CONTENT_CACHE_LOCK:
+        ROUTER_TWILIO_CONTENT_CACHE[cantidad] = content_sid
+    return content_sid
+
+
+def enviar_twilio_menu_interactivo(destino, pagina=0):
+    """Envía la recepción Nexia como lista clickeable de WhatsApp."""
+    opciones = router_opciones_menu(destino, pagina=pagina)
+    if not opciones:
+        return False
+    try:
+        account_sid, auth_token, from_value = _router_twilio_credenciales()
+        content_sid = _router_twilio_content_sid(len(opciones))
+        variables = {}
+        for i, op in enumerate(opciones, 1):
+            variables[f"i{i}"] = str(op.get("item") or f"Opción {i}")[:24]
+            variables[f"id{i}"] = str(op.get("id") or f"nexi:opcion:{i}")[:200]
+            variables[f"d{i}"] = str(op.get("description") or "Seleccionar")[:72]
+        to_digits = _router_identificador(destino)
+        to_value = f"whatsapp:+{to_digits}"
+        r = requests.post(
+            f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+            auth=(account_sid, auth_token),
+            data={
+                "To": to_value,
+                "From": from_value,
+                "ContentSid": content_sid,
+                "ContentVariables": json.dumps(variables, ensure_ascii=False),
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+        print("NEXI ROUTER LISTA TWILIO OK:", pagina, len(opciones), data.get("sid"))
+        return True
+    except Exception as e:
+        print("NEXI ROUTER LISTA TWILIO ERROR:", repr(e))
+        return False
+
+
+def router_payload_interactivo(request_form):
+    """Extrae el id de quick-reply/list-picker que Twilio envía al webhook."""
+    payload = str(request_form.get("ButtonPayload") or "").strip()
+    if payload:
+        return payload
+    # Compatibilidad futura con respuestas ricas normalizadas.
+    interactive = str(request_form.get("InteractiveData") or "").strip()
+    if interactive:
+        try:
+            data = json.loads(interactive)
+            for key in ("id", "payload", "button_payload", "buttonPayload"):
+                val = data.get(key) if isinstance(data, dict) else None
+                if val:
+                    return str(val)
+        except Exception:
+            pass
+    return ""
 
 
 def router_bienvenida_contexto(route):
@@ -900,10 +1129,48 @@ def router_superior_resolver(telefono, texto):
             return {"accion": "ruta", "empresa_id": demo.get("empresa_id"), "motor": "core", "origen": "demo", "demo_access": demo}
         return {"accion": "ruta", "empresa_id": DIEGO_EMPRESA_ID, "motor": "legacy", "origen": "legacy"}
 
-    t = normalizar_texto(texto)
+    raw_texto = str(texto or "").strip()
+    t = normalizar_texto(raw_texto)
+
+    # Selecciones del list-picker de WhatsApp. No dependen del texto visible.
+    if raw_texto.lower().startswith("nexi:pagina:"):
+        try:
+            pagina = int(raw_texto.rsplit(":", 1)[1])
+        except Exception:
+            pagina = 0
+        router_contexto_borrar(telefono)
+        return {"accion": "menu", "pagina": pagina}
+
+    if raw_texto.lower() == "nexi:diego":
+        row = router_contexto_guardar(telefono, DIEGO_EMPRESA_ID, motor="legacy", origen="diego") or {}
+        row.update({"accion": "seleccionado", "empresa_id": DIEGO_EMPRESA_ID, "motor": "legacy", "telefono": telefono})
+        return row
+
+    m_empresa = re.fullmatch(r"(?i)nexi:empresa:([0-9a-f-]{36})", raw_texto)
+    if m_empresa:
+        empresa_id = m_empresa.group(1)
+        # Seguridad: una empresa seleccionada desde el menú debe seguir pagada y activa.
+        visibles = {e["empresa_id"]: e for e in router_empresas_pagadas_activas()}
+        destino = visibles.get(empresa_id)
+        if not destino:
+            return {"accion": "menu", "respuesta": "Ese negocio ya no está disponible.\n\n" + router_menu_superior(telefono)}
+        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="pagado") or {}
+        row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": "core", "telefono": telefono})
+        return row
+
+    m_prueba = re.fullmatch(r"(?i)nexi:prueba:([0-9a-f-]{36})", raw_texto)
+    if m_prueba:
+        demo = router_demo_access_sin_activar(telefono)
+        empresa_id = m_prueba.group(1)
+        if not demo or str(demo.get("empresa_id") or "") != empresa_id:
+            return {"accion": "menu", "respuesta": "No encontré una prueba activa asociada a este WhatsApp.\n\n" + router_menu_superior(telefono)}
+        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="demo") or {}
+        row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": "core", "demo_access": demo, "telefono": telefono})
+        return row
+
     if t in {normalizar_texto(x) for x in ROUTER_MENU_COMMANDS}:
         router_contexto_borrar(telefono)
-        return {"accion": "menu", "respuesta": router_menu_superior(telefono)}
+        return {"accion": "menu", "pagina": 0}
 
     actual = router_contexto_obtener(telefono)
     if actual:
@@ -913,16 +1180,16 @@ def router_superior_resolver(telefono, texto):
             actual["demo_access"] = router_demo_access_sin_activar(telefono)
             if not actual.get("demo_access"):
                 router_contexto_borrar(telefono)
-                return {"accion": "menu", "respuesta": router_menu_superior(telefono)}
+                return {"accion": "menu", "pagina": 0}
         return actual
 
-    # Sin contexto activo, estas palabras son selecciones de recepción.
+    # Compatibilidad textual: Diego por nombre/1 y prueba por palabras explícitas.
     if t == "1" or t in {normalizar_texto(x) for x in ROUTER_DIEGO_COMMANDS}:
         row = router_contexto_guardar(telefono, DIEGO_EMPRESA_ID, motor="legacy", origen="diego") or {}
         row.update({"accion": "seleccionado", "empresa_id": DIEGO_EMPRESA_ID, "motor": "legacy", "telefono": telefono})
         return row
 
-    if t == "2" or t in {normalizar_texto(x) for x in ROUTER_DEMO_COMMANDS}:
+    if t in {normalizar_texto(x) for x in ROUTER_DEMO_COMMANDS}:
         demo = router_demo_access_sin_activar(telefono)
         if not demo:
             return {
@@ -933,6 +1200,14 @@ def router_superior_resolver(telefono, texto):
         row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="demo") or {}
         row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": "core", "demo_access": demo, "telefono": telefono})
         return row
+
+    # Fallback por número si el cliente escribe en vez de tocar: usa el orden de la primera página.
+    if re.fullmatch(r"\d{1,2}", t):
+        idx = int(t) - 1
+        opciones = router_opciones_menu(telefono, pagina=0)
+        if 0 <= idx < len(opciones):
+            op = opciones[idx]
+            return router_superior_resolver(telefono, op.get("id") or "")
 
     codigo = router_codigo_desde_texto(texto)
     if codigo:
@@ -946,7 +1221,7 @@ def router_superior_resolver(telefono, texto):
         return row
 
     # Primera entrada sin contexto: recepción. "Hola" no queda amarrado a Diego.
-    return {"accion": "menu", "respuesta": router_menu_superior(telefono)}
+    return {"accion": "menu", "pagina": 0}
 
 
 def router_activar_ruta(route, provider):
@@ -4412,12 +4687,16 @@ def whatsapp_webhook():
         activar_por_canal("whatsapp", "twilio", to_numero)
         telefono = (request.form.get("From") or "").strip()
         texto = (request.form.get("Body") or "").strip()
+        interactive_payload = router_payload_interactivo(request.form)
+        texto_router = interactive_payload or texto
         message_id = (request.form.get("MessageSid") or "").strip()
 
         print("=" * 60)
         print("TWILIO WEBHOOK")
         print("From:", telefono)
         print("Body:", texto)
+        if interactive_payload:
+            print("ButtonPayload:", interactive_payload)
         print("MessageSid:", message_id)
         print("=" * 60)
 
@@ -4437,9 +4716,15 @@ def whatsapp_webhook():
 
         # V1.8: capa superior. El mismo número puede atender Diego, una demo o
         # cualquier nuevo negocio registrado en nexi_router_destinos.
-        route = router_superior_resolver(telefono, texto)
+        route = router_superior_resolver(telefono, texto_router)
         if route.get("accion") == "menu":
-            twiml.message(route.get("respuesta") or router_menu_superior(telefono))
+            pagina = int(route.get("pagina") or 0)
+            # Como MENU acaba de llegar desde el usuario, estamos dentro de la ventana de 24 h
+            # y Twilio permite list-picker sin aprobación de plantilla.
+            if enviar_twilio_menu_interactivo(telefono, pagina=pagina):
+                return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+            # Fallback seguro si Content API no está disponible.
+            twiml.message(route.get("respuesta") or router_menu_superior(telefono, pagina=pagina))
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
         router_activar_ruta(route, "twilio")
