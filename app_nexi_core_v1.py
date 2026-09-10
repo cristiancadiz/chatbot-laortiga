@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.5.1-AGENDA-PAYLOAD-ESCAPE-FIX"
+APP_VERSION = "2026-09-10-NEXI-V2.5.2-AGENDA-LEGACY-INTERACTIVO-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -5227,6 +5227,9 @@ def whatsapp_webhook():
         )
         message_id = (request.form.get("MessageSid") or "").strip()
 
+        if interactive_payload and payload_logico.startswith("agenda:"):
+            print("NEXI AGENDA PAYLOAD NORMALIZADO:", interactive_payload, "=>", texto_procesado)
+
         print("=" * 60)
         print("TWILIO WEBHOOK")
         print("From:", telefono)
@@ -5380,7 +5383,7 @@ def whatsapp_webhook():
                 if estado.get("paso") == "comercial_completo" and paso_antes != "comercial_completo":
                     debe_derivar = True
             elif negocio_usa_reservas() and estado.get("paso") != "inicio":
-                respuesta = procesar_agenda(estado, texto)
+                respuesta = procesar_agenda(estado, texto_procesado)
             elif pregunta_servicios(texto_procesado):
                 respuesta = mostrar_servicios()
             elif negocio_usa_reservas() and (
@@ -5390,7 +5393,7 @@ def whatsapp_webhook():
                 or texto_menciona_fecha(texto_procesado)
             ):
                 estado["paso"] = "inicio"
-                respuesta = procesar_agenda(estado, texto)
+                respuesta = procesar_agenda(estado, texto_procesado)
             elif negocio_es_comercial() and detectar_servicio(texto_procesado):
                 respuesta = (
                     f"Sí 😊 Ese servicio está disponible. "
