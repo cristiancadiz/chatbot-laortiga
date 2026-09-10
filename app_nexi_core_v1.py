@@ -8,7 +8,7 @@ import base64
 from datetime import datetime, timedelta
 from threading import Lock
 from contextvars import ContextVar
-from urllib.parse import urljoin, urlparse, urldefrag, urlencode
+from urllib.parse import urljoin, urlparse, urldefrag, urlencode, quote
 from html.parser import HTMLParser
 
 import pytz
@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.4.3-LISTID-PAGO-FIX"
+APP_VERSION = "2026-09-10-NEXI-V2.5-PRODUCCION-ACCESO-PORTAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8199,9 +8199,14 @@ GOOGLE_OAUTH_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 
-def _google_state_encode(empresa_id):
+def _google_state_encode(empresa_id, demo_token=None):
+    """State OAuth firmado. Conserva el acceso temporal de prueba sin exponerlo sin firma."""
     issued = int(datetime.now(pytz.UTC).timestamp())
-    payload = json.dumps({"empresa_id": str(empresa_id), "iat": issued}, separators=(",", ":"))
+    data = {"empresa_id": str(empresa_id), "iat": issued}
+    demo_token = str(demo_token or "").strip()
+    if demo_token:
+        data["demo_token"] = demo_token
+    payload = json.dumps(data, separators=(",", ":"))
     raw = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
     sig = hmac.new(str(app.secret_key).encode(), raw.encode(), hashlib.sha256).hexdigest()
     return f"{raw}.{sig}"
@@ -8272,7 +8277,10 @@ def portal_google_calendar_iniciar():
     try:
         body = request.get_json(silent=True) or {}
         empresa_id = _portal_empresa_para_integracion(perfil, body.get("empresa_id"))
-        state = _google_state_encode(empresa_id)
+        # Si es una prueba, el token viaja dentro del state firmado y vuelve al callback.
+        # Así Google OAuth no obliga al usuario a iniciar sesión con contraseña.
+        demo_token_oauth = str(perfil.get("demo_token") or "").strip() if perfil.get("demo") else ""
+        state = _google_state_encode(empresa_id, demo_token_oauth)
         params = {
             "client_id": GOOGLE_CLIENT_ID,
             "redirect_uri": GOOGLE_CALENDAR_REDIRECT_URI,
@@ -8298,6 +8306,7 @@ def oauth_google_calendar_callback():
     if not code or not state or not state.get("empresa_id"):
         return redirect(f"{PORTAL_ORIGIN}/portal.html?calendar=error")
     empresa_id = str(state["empresa_id"])
+    demo_token_oauth = str(state.get("demo_token") or "").strip()
     try:
         tr = requests.post(
             GOOGLE_OAUTH_TOKEN_URL,
@@ -8369,10 +8378,16 @@ def oauth_google_calendar_callback():
         r.raise_for_status()
         with TENANT_CACHE_LOCK:
             TENANT_CACHE.pop(f"empresa:{empresa_id}", None)
-        return redirect(f"{PORTAL_ORIGIN}/portal.html?calendar=connected")
+        qs = "calendar=connected"
+        if demo_token_oauth:
+            qs += "&demo_token=" + quote(demo_token_oauth, safe="")
+        return redirect(f"{PORTAL_ORIGIN}/portal.html?{qs}")
     except Exception as e:
         print("GOOGLE CALENDAR OAUTH CALLBACK ERROR:", repr(e))
-        return redirect(f"{PORTAL_ORIGIN}/portal.html?calendar=error")
+        qs = "calendar=error"
+        if demo_token_oauth:
+            qs += "&demo_token=" + quote(demo_token_oauth, safe="")
+        return redirect(f"{PORTAL_ORIGIN}/portal.html?{qs}")
 
 
 @app.route("/portal/integraciones/google-calendar/desconectar", methods=["POST", "OPTIONS"])
