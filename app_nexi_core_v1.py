@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.9-PORTAL-OPERACIONES"
+APP_VERSION = "2026-09-10-NEXI-V1.9.1-DEMOS-PORTAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -5892,6 +5892,139 @@ def portal_consumo():
     except Exception as e:
         return portal_json({"ok": False, "error": str(e)[:300]}, 500)
 
+
+
+# ============================================================
+# PORTAL NEXIA - CENTRO DE DEMOS V1.9.1
+# ============================================================
+
+@app.route("/portal/demos", methods=["GET", "OPTIONS"])
+def portal_demos():
+    """Listado de demos visible al superadmin y, si corresponde, a la propia empresa."""
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    headers = backend_headers()
+    if not headers:
+        return portal_json({"ok": False, "error": "Supabase backend no configurado"}, 500)
+    try:
+        params = {"select": "*", "tipo_plan": "eq.demo", "order": "updated_at.desc", "limit": "500"}
+        if not es_superadmin(perfil):
+            params["empresa_id"] = f"eq.{perfil.get('empresa_id')}"
+        rp = requests.get(f"{SUPABASE_URL}/rest/v1/suscripciones_empresa", headers=headers, params=params, timeout=SUPABASE_TIMEOUT)
+        rp.raise_for_status()
+        planes = rp.json() if rp.content else []
+        ids = [str(x.get("empresa_id") or "").strip() for x in planes if x.get("empresa_id")]
+        if not ids:
+            return portal_json({"ok": True, "demos": []})
+
+        # Empresas
+        empresas = {}
+        re_ = requests.get(f"{SUPABASE_URL}/rest/v1/empresas", headers=headers, params={"select":"id,nombre,activo,created_at", "id": f"in.({','.join(ids)})", "limit":"500"}, timeout=SUPABASE_TIMEOUT)
+        if re_.ok:
+            empresas = {str(x.get("id")): x for x in (re_.json() if re_.content else [])}
+
+        # Accesos demo (WhatsApp/otros canales)
+        accesos = {}
+        ra = requests.get(f"{SUPABASE_URL}/rest/v1/demo_accesos", headers=headers, params={"select":"empresa_id,canal,identificador_cliente,activo,inicio,fin,updated_at", "empresa_id": f"in.({','.join(ids)})", "order":"updated_at.desc", "limit":"1000"}, timeout=SUPABASE_TIMEOUT)
+        if ra.ok:
+            for x in (ra.json() if ra.content else []):
+                eid=str(x.get("empresa_id") or "")
+                accesos.setdefault(eid, x)
+
+        # Onboarding / datos del creador
+        onboarding = {}
+        ro = requests.get(f"{SUPABASE_URL}/rest/v1/nexi_core_onboarding", headers=headers, params={"select":"empresa_id,token,datos,created_at,updated_at,completado", "empresa_id": f"in.({','.join(ids)})", "order":"updated_at.desc", "limit":"1000"}, timeout=SUPABASE_TIMEOUT)
+        if ro.ok:
+            for x in (ro.json() if ro.content else []):
+                eid=str(x.get("empresa_id") or "")
+                onboarding.setdefault(eid, x)
+
+        ahora = datetime.now(pytz.UTC)
+        salida=[]
+        for p in planes:
+            eid=str(p.get("empresa_id") or "")
+            emp=empresas.get(eid,{})
+            acc=accesos.get(eid,{})
+            onb=onboarding.get(eid,{})
+            datos=dict(onb.get("datos") or {})
+            usados=int(p.get("mensajes_usados") or p.get("respuestas_usadas") or 0)
+            limite=int(p.get("limite_mensajes") or p.get("limite_respuestas") or DEMO_LIMITE_MENSAJES_DEFAULT)
+            fin=_parse_iso(p.get("demo_fin"))
+            estado=str(p.get("estado") or "activo").lower()
+            if estado == "activo" and fin and ahora > fin:
+                estado_visual="vencida"
+            elif estado == "activo" and limite and usados >= limite:
+                estado_visual="agotada"
+            else:
+                estado_visual=estado
+            salida.append({
+                "empresa_id": eid,
+                "empresa_nombre": emp.get("nombre") or datos.get("nombre_negocio") or "Empresa demo",
+                "contacto": datos.get("nombre_contacto"),
+                "email": datos.get("email_contacto"),
+                "rubro": datos.get("rubro"),
+                "asistente": datos.get("nombre_asistente"),
+                "canal": acc.get("canal"),
+                "identificador_cliente": acc.get("identificador_cliente"),
+                "acceso_activo": bool(acc.get("activo")) if acc else False,
+                "estado": estado_visual,
+                "mensajes_usados": usados,
+                "limite_mensajes": limite,
+                "mensajes_restantes": max(0, limite-usados),
+                "demo_inicio": p.get("demo_inicio"),
+                "demo_fin": p.get("demo_fin"),
+                "onboarding_token": onb.get("token"),
+                "created_at": onb.get("created_at") or emp.get("created_at"),
+            })
+        return portal_json({"ok": True, "demos": salida})
+    except Exception as e:
+        print("PORTAL DEMOS ERROR:", repr(e))
+        return portal_json({"ok": False, "error": str(e)[:300]}, 500)
+
+
+@app.route("/portal/admin/demo/<empresa_id>/reactivar", methods=["POST", "OPTIONS"])
+def portal_admin_reactivar_demo(empresa_id):
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    if not portal_admin_autorizado():
+        return portal_json({"ok": False, "error": "Administrador Nexia no autorizado"}, 403)
+    try:
+        headers=backend_headers()
+        identificador=None; canal="whatsapp"
+        r=requests.get(f"{SUPABASE_URL}/rest/v1/demo_accesos", headers=headers, params={"select":"identificador_cliente,canal", "empresa_id":f"eq.{empresa_id}", "order":"updated_at.desc", "limit":"1"}, timeout=SUPABASE_TIMEOUT)
+        if r.ok:
+            rows=r.json() if r.content else []
+            if rows:
+                identificador=rows[0].get("identificador_cliente")
+                canal=rows[0].get("canal") or "whatsapp"
+        demo=activar_demo_empresa(empresa_id, identificador, canal)
+        return portal_json({"ok":True,"demo":demo})
+    except Exception as e:
+        print("PORTAL REACTIVAR DEMO ERROR:",repr(e))
+        return portal_json({"ok":False,"error":str(e)[:300]},500)
+
+
+@app.route("/portal/admin/demo/<empresa_id>/desactivar", methods=["POST", "OPTIONS"])
+def portal_admin_desactivar_demo(empresa_id):
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    if not portal_admin_autorizado():
+        return portal_json({"ok": False, "error": "Administrador Nexia no autorizado"}, 403)
+    try:
+        headers=backend_headers()
+        ahora=datetime.now(pytz.UTC).isoformat()
+        rp=requests.patch(f"{SUPABASE_URL}/rest/v1/suscripciones_empresa", headers={**headers,"Prefer":"return=minimal"}, params={"empresa_id":f"eq.{empresa_id}"}, json={"estado":"finalizado","demo_fin":ahora,"updated_at":ahora}, timeout=SUPABASE_TIMEOUT)
+        rp.raise_for_status()
+        ra=requests.patch(f"{SUPABASE_URL}/rest/v1/demo_accesos", headers={**headers,"Prefer":"return=minimal"}, params={"empresa_id":f"eq.{empresa_id}"}, json={"activo":False,"fin":ahora,"updated_at":ahora}, timeout=SUPABASE_TIMEOUT)
+        if not ra.ok:
+            print("PORTAL DESACTIVAR DEMO ACCESO WARN:",ra.status_code,ra.text[:300])
+        return portal_json({"ok":True,"empresa_id":empresa_id,"estado":"finalizado"})
+    except Exception as e:
+        print("PORTAL DESACTIVAR DEMO ERROR:",repr(e))
+        return portal_json({"ok":False,"error":str(e)[:300]},500)
 
 @app.route("/portal/estadisticas", methods=["GET", "OPTIONS"])
 def portal_estadisticas():
