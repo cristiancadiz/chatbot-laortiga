@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.1.1-CALENDAR-AISLAMIENTO-DIEGO"
+APP_VERSION = "2026-09-10-NEXI-V2.1.2-GOOGLE-OAUTH-SCOPES-LIMPIOS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -7250,7 +7250,10 @@ def portal_google_calendar_iniciar():
             "scope": " ".join(GOOGLE_SCOPES + ["openid", "email"]),
             "access_type": "offline",
             "prompt": "consent",
-            "include_granted_scopes": "true",
+            # No reutilizar permisos históricos concedidos a este mismo OAuth Client.
+            # El flujo multiempresa de Nexia solicita únicamente Calendar + identidad
+            # básica (openid/email). Esto evita arrastrar scopes antiguos como Sheets.
+            "include_granted_scopes": "false",
             "state": state,
         }
         return portal_json({"ok": True, "url": GOOGLE_OAUTH_AUTH_URL + "?" + urlencode(params)})
