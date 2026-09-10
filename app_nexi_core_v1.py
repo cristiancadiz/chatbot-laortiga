@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.5.3-WEB-KNOWLEDGE-FIX"
+APP_VERSION = "2026-09-10-NEXI-V1.5.5-CHANNELS-NAME"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2099,6 +2099,7 @@ CORE_WEB_USER_AGENT = os.getenv(
 CORE_COMMON_FIELDS = [
     "nombre_contacto",
     "nombre_negocio",
+    "nombre_asistente",
     "rubro",
     "productos_servicios",
     "objetivo",
@@ -2117,6 +2118,12 @@ CORE_QUESTIONS = {
         "text": "¿Cómo se llama tu negocio, marca o actividad?",
         "kind": "text",
         "placeholder": "Ej: Veterinaria Luna, Diego Estilista, Estudio Pérez",
+    },
+    "nombre_asistente": {
+        "text": "¿Qué nombre quieres darle a tu asistente?",
+        "kind": "text",
+        "placeholder": "Ej: Luna, Sofía, Max, Asistente Virtual",
+        "help": "Este será el nombre con el que se presentará frente a tus clientes.",
     },
     "rubro": {
         "text": "Cuéntame brevemente, ¿a qué se dedica tu negocio o actividad?",
@@ -2147,16 +2154,13 @@ CORE_QUESTIONS = {
     "canales_actuales": {
         "text": "¿Por qué medios te contactan hoy tus clientes?",
         "kind": "multi_choice",
-        "options": [
-            "WhatsApp", "Instagram", "Facebook/Messenger", "Sitio web",
-            "Chat web", "Correo", "Teléfono", "Presencial", "Otro"
-        ],
+        "options": ["WhatsApp", "Instagram"],
         "help": "Esto nos ayuda a entender dónde ocurre hoy la atención.",
     },
     "canales_deseados": {
         "text": "¿Dónde quieres que Nexi atienda a tus clientes?",
         "kind": "multi_choice",
-        "options": ["WhatsApp", "Instagram", "Facebook/Messenger", "Sitio web / Chat web", "Otro"],
+        "options": ["WhatsApp", "Instagram"],
     },
     "presencia_digital": {
         "text": "Agrega tu sitio web y redes sociales públicas.",
@@ -2757,7 +2761,7 @@ def _core_create_company_from_session(session):
     redes={k:v for k,v in presencia.items() if k != "web" and str(v or "").strip()}
 
     prompt_extra=(
-        f"NEXI CORE V1.5. Negocio: {empresa_nombre}. "
+        f"NEXI CORE V1.5. Negocio: {empresa_nombre}. Asistente: {datos.get('nombre_asistente','Nexi')}. "
         f"Rubro: {datos.get('rubro','')}. Objetivos: {objetivos}. "
         f"Productos/servicios declarados: {datos.get('productos_servicios','')}. "
         f"Canales actuales: {datos.get('canales_actuales','')}. "
@@ -2771,7 +2775,7 @@ def _core_create_company_from_session(session):
         "empresa_id":empresa_id,
         "tipo_negocio":"reservas" if usa_reservas else "comercial",
         "descripcion_empresa":descripcion,
-        "asistente_nombre":"Nexi",
+        "asistente_nombre":str(datos.get("nombre_asistente") or "Nexi").strip(),
         "correo_ejecutivo":str(datos.get("email_contacto") or "").strip(),
         "timezone":TIMEZONE,
         "hora_apertura":DEFAULT_HORA_APERTURA,
