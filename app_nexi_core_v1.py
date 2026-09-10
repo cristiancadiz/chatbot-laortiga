@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.3.2-AGENDA-PAYLOAD-INTERACTIVO-FIX"
+APP_VERSION = "2026-09-10-NEXI-V2.4-PAGO-WHATSAPP-INTERACTIVO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1288,6 +1288,249 @@ def router_payload_interactivo(request_form):
             pass
     return ""
 
+
+
+# ============================================================
+# V2.4 - PAGO INTERACTIVO EN WHATSAPP
+# ============================================================
+
+PAGO_TWILIO_CONTENT_CACHE = {}
+PAGO_TWILIO_CONTENT_CACHE_LOCK = Lock()
+
+
+def _pago_twilio_content_sid(cantidad):
+    cantidad = max(1, min(10, int(cantidad)))
+    with PAGO_TWILIO_CONTENT_CACHE_LOCK:
+        sid_cache = PAGO_TWILIO_CONTENT_CACHE.get(cantidad)
+        if sid_cache:
+            return sid_cache
+
+    account_sid, auth_token, _ = _router_twilio_credenciales()
+    variables = {}
+    items = []
+    for i in range(1, cantidad + 1):
+        variables[f"i{i}"] = f"Plan {i}"
+        variables[f"id{i}"] = f"pago:opcion:{i}"
+        variables[f"d{i}"] = "Seleccionar plan"
+        items.append({
+            "item": f"{{{{i{i}}}}}",
+            "id": f"{{{{id{i}}}}}",
+            "description": f"{{{{d{i}}}}}",
+        })
+
+    payload = {
+        "friendly_name": f"nexia_pago_planes_{cantidad}",
+        "language": "es",
+        "variables": variables,
+        "types": {
+            "twilio/list-picker": {
+                "body": "Tu prueba o bolsa de mensajes finalizó. Elige un plan para seguir usando Nexia 👇",
+                "button": "Ver planes",
+                "items": items,
+            }
+        },
+    }
+    r = requests.post(
+        "https://content.twilio.com/v1/Content",
+        auth=(account_sid, auth_token),
+        json=payload,
+        timeout=20,
+    )
+    r.raise_for_status()
+    data = r.json() if r.content else {}
+    content_sid = str(data.get("sid") or "").strip()
+    if not content_sid:
+        raise RuntimeError("Twilio no devolvió ContentSid para planes")
+    with PAGO_TWILIO_CONTENT_CACHE_LOCK:
+        PAGO_TWILIO_CONTENT_CACHE[cantidad] = content_sid
+    return content_sid
+
+
+def _pago_opciones_whatsapp(empresa_id):
+    empresa_id = str(empresa_id or "").strip()
+    opciones = []
+    for codigo in ("nexia_500", "nexia_1000"):
+        plan = NEXIA_PLANES.get(codigo)
+        if not plan:
+            continue
+        precio = f"${int(plan['precio']):,}".replace(",", ".")
+        opciones.append({
+            "item": f"{plan['nombre']} · {precio}",
+            "id": f"pago:plan:{codigo}:{empresa_id}",
+            "description": f"{int(plan['mensajes'])} mensajes · pago único",
+        })
+    return opciones
+
+
+def enviar_twilio_pago_interactivo(destino, empresa_id):
+    opciones = _pago_opciones_whatsapp(empresa_id)
+    if not opciones:
+        return False
+    try:
+        account_sid, auth_token, from_value = _router_twilio_credenciales()
+        content_sid = _pago_twilio_content_sid(len(opciones))
+        variables = {}
+        for i, op in enumerate(opciones, 1):
+            variables[f"i{i}"] = str(op["item"])[:24]
+            variables[f"id{i}"] = str(op["id"])[:200]
+            variables[f"d{i}"] = str(op["description"])[:72]
+        to_digits = _router_identificador(destino)
+        r = requests.post(
+            f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+            auth=(account_sid, auth_token),
+            data={
+                "To": f"whatsapp:+{to_digits}",
+                "From": from_value,
+                "ContentSid": content_sid,
+                "ContentVariables": json.dumps(variables, ensure_ascii=False),
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+        print("NEXI PAGO LISTA TWILIO OK:", empresa_id, data.get("sid"))
+        return True
+    except Exception as e:
+        print("NEXI PAGO LISTA TWILIO ERROR:", empresa_id, repr(e))
+        return False
+
+
+def _pago_empresa_autorizada_whatsapp(telefono, empresa_id):
+    empresa_id = str(empresa_id or "").strip()
+    if not empresa_id:
+        return False
+    try:
+        actual = router_contexto_obtener(telefono) or {}
+        if str(actual.get("empresa_id") or "").strip() == empresa_id:
+            return True
+    except Exception:
+        pass
+    try:
+        ident = _normalizar_identificador_demo(telefono, "whatsapp")
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/demo_accesos",
+            headers=backend_headers(),
+            params={
+                "select": "empresa_id",
+                "empresa_id": f"eq.{empresa_id}",
+                "canal": "eq.whatsapp",
+                "identificador_cliente": f"eq.{ident}",
+                "limit": "1",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if r.ok and (r.json() if r.content else []):
+            return True
+    except Exception as e:
+        print("NEXI PAGO AUTH DEMO WARN:", repr(e))
+    return False
+
+
+def _crear_checkout_whatsapp(empresa_id, codigo):
+    empresa_id = str(empresa_id or "").strip()
+    codigo = str(codigo or "").strip().lower()
+    plan = NEXIA_PLANES.get(codigo)
+    if not empresa_id or not plan:
+        raise RuntimeError("Empresa o plan inválido")
+    headers_mp = _mp_headers()
+    if not headers_mp:
+        raise RuntimeError("Mercado Pago no está configurado")
+
+    perfil = _core_profile(empresa_id) or {}
+    datos = perfil.get("datos") or {}
+    email = str(datos.get("email_contacto") or "").strip().lower()
+    demo_token = str(_core_token_por_empresa(empresa_id) or "").strip()
+
+    external_reference = f"NEXIA:{empresa_id}:{codigo}:{uuid.uuid4().hex[:12]}"
+    suffix = f"&demo_token={demo_token}" if demo_token else ""
+
+    payload = {
+        "items": [{
+            "id": codigo,
+            "title": f"{plan['nombre']} - {plan['mensajes']} mensajes",
+            "quantity": 1,
+            "currency_id": plan["moneda"],
+            "unit_price": int(plan["precio"]),
+        }],
+        "external_reference": external_reference,
+        "metadata": {
+            "empresa_id": empresa_id,
+            "plan_codigo": codigo,
+            "mensajes": int(plan["mensajes"]),
+            "origen": "whatsapp",
+        },
+        "back_urls": {
+            "success": f"{PORTAL_ORIGIN}/portal.html?pago=success{suffix}",
+            "pending": f"{PORTAL_ORIGIN}/portal.html?pago=pending{suffix}",
+            "failure": f"{PORTAL_ORIGIN}/portal.html?pago=failure{suffix}",
+        },
+        "auto_return": "approved",
+        "notification_url": MERCADOPAGO_WEBHOOK_URL,
+        "statement_descriptor": "NEXIA",
+    }
+    if email:
+        payload["payer"] = {"email": email}
+
+    r = requests.post(
+        f"{MERCADOPAGO_API_BASE}/checkout/preferences",
+        headers=headers_mp,
+        json=payload,
+        timeout=20,
+    )
+    if not r.ok:
+        print("MERCADOPAGO WHATSAPP PREFERENCE ERROR:", r.status_code, r.text[:1200])
+        raise RuntimeError("No fue posible iniciar el pago")
+    pref = r.json() if r.content else {}
+    checkout_url = str(pref.get("init_point") or pref.get("sandbox_init_point") or "").strip()
+    if not checkout_url:
+        raise RuntimeError("Mercado Pago no devolvió URL de pago")
+
+    registro = {
+        "empresa_id": empresa_id,
+        "plan_codigo": codigo,
+        "plan_nombre": plan["nombre"],
+        "mensajes": int(plan["mensajes"]),
+        "monto": int(plan["precio"]),
+        "moneda": plan["moneda"],
+        "preference_id": str(pref.get("id") or ""),
+        "external_reference": external_reference,
+        "status": "created",
+        "email_cliente": email or None,
+        "metadata": {"origen": "whatsapp"},
+        "updated_at": datetime.now(pytz.UTC).isoformat(),
+    }
+    rr = requests.post(
+        f"{SUPABASE_URL}/rest/v1/nexi_pagos",
+        headers={**backend_headers(), "Prefer": "return=representation"},
+        json=registro,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    rr.raise_for_status()
+
+    return {"checkout_url": checkout_url, "plan": plan, "external_reference": external_reference}
+
+
+def _mensaje_checkout_whatsapp(checkout):
+    plan = checkout["plan"]
+    precio = f"${int(plan['precio']):,}".replace(",", ".")
+    return (
+        f"💳 *{plan['nombre']}*\n"
+        f"• {int(plan['mensajes'])} mensajes\n"
+        f"• {precio} CLP\n\n"
+        "Paga de forma segura en Mercado Pago desde este enlace:\n"
+        f"{checkout['checkout_url']}\n\n"
+        "Cuando Mercado Pago confirme el pago, Nexia activará el plan automáticamente."
+    )
+
+
+def _es_fin_plan_para_pago(respuesta):
+    t = normalizar_texto(respuesta)
+    return (
+        "prueba gratuita de nexia ya finalizo" in t
+        or "periodo de prueba de 24 horas ya finalizo" in t
+        or "mensajes gratuitos incluidas en tu prueba" in t
+        or "utilizado todos los mensajes disponibles de tu plan nexia" in t
+    )
 
 def router_bienvenida_contexto(route):
     empresa_id = str((route or {}).get("empresa_id") or "").strip()
@@ -4909,6 +5152,29 @@ def whatsapp_webhook():
         if not telefono:
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
+        # V2.4: selección de plan desde lista interactiva.
+        if interactive_payload and interactive_payload.lower().startswith("pago:plan:"):
+            m_pago = re.fullmatch(
+                r"pago:plan:(nexia_500|nexia_1000):([0-9a-fA-F-]{36})",
+                interactive_payload.strip(),
+            )
+            if not m_pago:
+                twiml.message("No pude reconocer ese plan. Escribe *MENU* e inténtalo nuevamente.")
+                return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+            codigo_pago, empresa_pago = m_pago.group(1).lower(), m_pago.group(2)
+            if not _pago_empresa_autorizada_whatsapp(telefono, empresa_pago):
+                twiml.message("Por seguridad no pude asociar ese pago a tu empresa. Entra a Portal Nexia para continuar.")
+                return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+            try:
+                checkout = _crear_checkout_whatsapp(empresa_pago, codigo_pago)
+                twiml.message(_mensaje_checkout_whatsapp(checkout))
+            except Exception as e:
+                print("NEXI PAGO WHATSAPP ERROR:", repr(e))
+                twiml.message("No pude iniciar Mercado Pago en este momento. Intenta nuevamente o realiza el pago desde Portal Nexia.")
+            return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
         # V1.8: capa superior. El mismo número puede atender Diego, una demo o
         # cualquier nuevo negocio registrado en nexi_router_destinos.
         route = router_superior_resolver(telefono, texto_router)
@@ -4963,6 +5229,12 @@ def whatsapp_webhook():
                 empresa_core = str(route.get("empresa_id") or empresa_actual_id() or "").strip()
                 key_core = f"core:{empresa_core}:{_normalizar_identificador_demo(telefono, 'whatsapp')}"
                 estado_core = get_estado(key_core)
+
+                if _es_fin_plan_para_pago(respuesta):
+                    twiml.message(respuesta)
+                    enviar_twilio_pago_interactivo(telefono, empresa_core)
+                    return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
                 if enviar_twilio_agenda_interactiva(telefono, estado_core):
                     return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
                 twiml.message(respuesta)
@@ -5041,6 +5313,11 @@ def whatsapp_webhook():
                 estado=get_estado(telefono),
                 motivo=texto,
             )
+        if _es_fin_plan_para_pago(respuesta):
+            twiml.message(respuesta)
+            enviar_twilio_pago_interactivo(telefono, empresa_actual_id())
+            return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
         if telefono and enviar_twilio_agenda_interactiva(telefono, get_estado(telefono)):
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
         twiml.message(respuesta)
