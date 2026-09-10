@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.5.5-CHANNELS-NAME"
+APP_VERSION = "2026-09-10-NEXI-V1.5.6-WEB-HANDOFF-PRIVACY"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2938,6 +2938,141 @@ def _core_respuesta_no_verificable(texto):
     return any(p in t for p in patrones)
 
 
+
+def _core_responder_demo_web(token, empresa_id, texto):
+    """Simulador web con handoff persistente."""
+    perfil = _core_profile(empresa_id) or {}
+    datos_perfil = perfil.get("datos") or {}
+    identificador = f"web:{token}"
+
+    _core_log_message(token, empresa_id, "entrante", texto)
+
+    hs = _core_handoff_lookup(empresa_id, identificador, "web")
+    estado_handoff = str((hs or {}).get("estado") or "").strip().lower()
+
+    if estado_handoff == "derivado":
+        if not _core_handoff_expirado(hs):
+            return ""
+        _core_handoff_upsert(
+            empresa_id,
+            identificador,
+            "web",
+            {
+                "estado": "cerrado",
+                "datos": {
+                    **(hs.get("datos") or {}),
+                    "cierre": "timeout",
+                    "timeout_minutos": CORE_HANDOFF_TIMEOUT_MINUTOS,
+                },
+                "started_at": hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+            },
+        )
+        return (
+            f"No hemos podido conectarte con una persona dentro de los "
+            f"{CORE_HANDOFF_TIMEOUT_MINUTOS} minutos estimados. "
+            "Puedo seguir ayudándote por aquí mientras tanto.\n\n"
+            + _core_demo_answer(empresa_id, texto)
+        )
+
+    if estado_handoff == "recolectando":
+        detalles = _core_parse_handoff_details("empresa", texto)
+        nombre = str(detalles.get("nombre") or "").strip()
+        empresa_contacto = str(detalles.get("empresa") or "").strip()
+        motivo = str(detalles.get("motivo") or "").strip()
+
+        if not nombre or not empresa_contacto or not motivo:
+            return _core_handoff_prompt("empresa")
+
+        _core_handoff_request(empresa_id, identificador, "web", detalles, motivo)
+        _core_handoff_upsert(
+            empresa_id,
+            identificador,
+            "web",
+            {
+                "estado": "derivado",
+                "datos": detalles,
+                "started_at": hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+            },
+        )
+        return (
+            f"Gracias, {nombre} 🙌\n\n"
+            "Ya registré tu solicitud y la envié a la persona encargada. "
+            f"El tiempo estimado de atención es de hasta {CORE_HANDOFF_TIMEOUT_MINUTOS} minutos. "
+            "Puedes seguir escribiendo; tus mensajes quedarán guardados mientras esperas."
+        )
+
+    if estado_handoff == "ofrecido":
+        if _core_es_confirmacion(texto):
+            _core_handoff_upsert(
+                empresa_id,
+                identificador,
+                "web",
+                {
+                    "estado": "recolectando",
+                    "datos": {},
+                    "started_at": hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+                },
+            )
+            return _core_handoff_prompt("empresa")
+
+        if _core_es_rechazo(texto):
+            _core_handoff_upsert(
+                empresa_id,
+                identificador,
+                "web",
+                {
+                    "estado": "cerrado",
+                    "datos": hs.get("datos") or {},
+                    "started_at": hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+                },
+            )
+            return "Perfecto. Seguimos por aquí 😊 ¿En qué más te puedo ayudar?"
+
+        return (
+            "Tengo pendiente tu solicitud de hablar con una persona. "
+            "Si quieres continuar, responde sí; si prefieres seguir con el asistente, responde no."
+        )
+
+    if _core_es_handoff(texto) and _core_si(datos_perfil.get("handoff")):
+        _core_handoff_upsert(
+            empresa_id,
+            identificador,
+            "web",
+            {
+                "estado": "recolectando",
+                "datos": {"solicitud_original": str(texto or "")},
+                "started_at": datetime.now(pytz.UTC).isoformat(),
+            },
+        )
+        return _core_handoff_prompt("empresa")
+
+    respuesta = _core_demo_answer(empresa_id, texto)
+
+    nr = normalizar_texto(respuesta)
+    if _core_si(datos_perfil.get("handoff")) and any(
+        x in nr
+        for x in (
+            "puedo derivarte",
+            "quieres que te derive",
+            "puedo ponerte en contacto",
+            "quieres hablar con una persona",
+            "derivarte internamente",
+        )
+    ):
+        _core_handoff_upsert(
+            empresa_id,
+            identificador,
+            "web",
+            {
+                "estado": "ofrecido",
+                "datos": {"respuesta_oferta": respuesta},
+                "started_at": datetime.now(pytz.UTC).isoformat(),
+            },
+        )
+
+    return respuesta
+
+
 def _core_responder_demo_whatsapp(demo_access, telefono, texto):
     """Procesa demo real por WhatsApp con handoff contextual y privacidad estricta."""
     empresa_id=str((demo_access or {}).get("empresa_id") or empresa_actual_id() or "").strip()
@@ -3058,7 +3193,14 @@ def _core_demo_answer(empresa_id, texto):
     empresa=cfg("empresa_nombre","Demo Nexia")
     asistente=cfg("asistente_nombre","Nexi")
 
-    contexto=json.dumps(datos,ensure_ascii=False)[:9000]
+    datos_publicos=dict(datos)
+    for privado in (
+        "nombre_contacto","email_contacto","whatsapp_demo",
+        "correo_ejecutivo","telefono_ejecutivo","web_knowledge"
+    ):
+        datos_publicos.pop(privado,None)
+
+    contexto=json.dumps(datos_publicos,ensure_ascii=False)[:9000]
     conocimiento_web=_core_conocimiento_web(empresa_id,texto)
 
     if not openai_client:
@@ -3068,8 +3210,10 @@ def _core_demo_answer(empresa_id, texto):
 Eres {asistente}, asistente virtual de {empresa}.
 Responde únicamente con información del perfil o de las fuentes web entregadas abajo.
 No inventes datos, precios, políticas, ubicaciones ni capacidades.
-El correo de derivación y el WhatsApp de prueba son datos privados: jamás los muestres.
+El nombre, correo, teléfono u otros datos del creador o ejecutivo son privados: jamás los muestres ni los menciones.
+No inventes nombres de personas encargadas.
 Las redes sociales y sitio web ingresados como públicos sí pueden compartirse cuando el usuario los consulte.
+No enumeres capacidades o servicios en el saludo inicial salvo que el usuario los pregunte.
 Si la fuente web y el perfil se contradicen, prioriza la información explícita más específica y evita afirmar algo dudoso.
 Si no encuentras la respuesta, dilo claramente y ofrece derivación solo si está habilitada.
 Sé breve, natural y útil.
@@ -3179,30 +3323,46 @@ def core_onboarding_answer(token):
 
 @app.route("/core/demo/<token>/message",methods=["POST","OPTIONS"])
 def core_demo_message(token):
-    if request.method=="OPTIONS":return core_json({"ok":True},204)
+    if request.method=="OPTIONS":
+        return core_json({"ok":True},204)
     try:
         s=_core_get_session(token)
-        if not s or not s.get("empresa_id"):return core_json({"ok":False,"error":"La demo todavía no está creada"},409)
-        empresa_id=str(s["empresa_id"]); activar_por_empresa(empresa_id,canal="web",provider="nexi_core")
-        body=request.get_json(silent=True) or {}; texto=str(body.get("message") or "").strip()
-        if not texto:return core_json({"ok":False,"error":"Falta message"},400)
-        # La rama Core usa un historial aislado para no depender de restricciones
-        # de canales existentes en las tablas productivas de Diego.
-        _core_log_message(token,empresa_id,"entrante",texto)
+        if not s or not s.get("empresa_id"):
+            return core_json({"ok":False,"error":"La demo todavía no está creada"},409)
+
+        empresa_id=str(s["empresa_id"])
+        activar_por_empresa(empresa_id,canal="web",provider="nexi_core")
+
+        body=request.get_json(silent=True) or {}
+        texto=str(body.get("message") or "").strip()
+        if not texto:
+            return core_json({"ok":False,"error":"Falta message"},400)
+
         if _core_respuesta_no_verificable(texto):
+            _core_log_message(token,empresa_id,"entrante",texto)
             respuesta=(
                 "No tengo una fuente en tiempo real que me permita confirmar el estado actual "
                 "de esa persona, así que no sería correcto inventarlo."
             )
         else:
-            respuesta=_core_demo_answer(empresa_id,texto)
+            respuesta=_core_responder_demo_web(token,empresa_id,texto)
+
         respuesta=proteger_respuesta_publica_core(respuesta)
         respuesta=aplicar_plan_a_respuesta(respuesta)
-        _core_log_message(token,empresa_id,"saliente",respuesta)
+
+        if respuesta:
+            _core_log_message(token,empresa_id,"saliente",respuesta)
+
         plan=estado_suscripcion_empresa(empresa_id)
-        return core_json({"ok":True,"reply":respuesta,"plan":plan})
+        return core_json({
+            "ok":True,
+            "reply":respuesta,
+            "plan":plan,
+            "handoff_waiting": not bool(respuesta),
+        })
     except Exception as e:
-        print("CORE DEMO MESSAGE ERROR:",repr(e));return core_json({"ok":False,"error":str(e)[:300]},500)
+        print("CORE DEMO MESSAGE ERROR:",repr(e))
+        return core_json({"ok":False,"error":str(e)[:300]},500)
 
 
 @app.route("/core/demo/<token>/status",methods=["GET","OPTIONS"])
