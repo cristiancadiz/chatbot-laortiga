@@ -7,6 +7,8 @@ import hashlib
 from datetime import datetime, timedelta
 from threading import Lock
 from contextvars import ContextVar
+from urllib.parse import urljoin, urlparse, urldefrag
+from html.parser import HTMLParser
 
 import pytz
 import requests
@@ -20,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-CORE-V1.2-ORCHESTRATOR-HANDOFF-MAIL"
+APP_VERSION = "2026-09-10-NEXI-CORE-V1.5-BUSINESS-WEB-50"
 load_dotenv()
 
 app = Flask(__name__)
@@ -50,6 +52,7 @@ TIMEZONE = os.getenv("TIMEZONE", "America/Santiago")
 CONVERSACION_ONLINE_MINUTOS = int(os.getenv("CONVERSACION_ONLINE_MINUTOS", "15"))
 CONVERSACION_ESPERA_HORAS = int(os.getenv("CONVERSACION_ESPERA_HORAS", "24"))
 MODO_EJECUTIVO_TIMEOUT_MINUTOS = int(os.getenv("MODO_EJECUTIVO_TIMEOUT_MINUTOS", "30"))
+CORE_HANDOFF_TIMEOUT_MINUTOS = int(os.getenv("CORE_HANDOFF_TIMEOUT_MINUTOS", "10"))
 # Empresa CLIENTE Nexia: protección pública de datos de contacto.
 NEXIA_CLIENTE_EMPRESA_ID = os.getenv(
     "NEXIA_CLIENTE_EMPRESA_ID",
@@ -163,12 +166,12 @@ def backend_headers():
 # NEXIA SAAS - PLANES, DEMO 100 RESPUESTAS / 24 HORAS
 # ============================================================
 # Una demo termina cuando ocurre primero:
-#   1) se consumen 100 respuestas automáticas; o
+#   1) se consumen 50 respuestas automáticas; o
 #   2) pasan 24 horas desde su activación.
 #
 # Las respuestas manuales de un ejecutivo enviadas desde Portal Nexia NO
 # consumen demo porque este control solo se ejecuta en los webhooks del bot.
-DEMO_LIMITE_RESPUESTAS_DEFAULT = int(os.getenv("DEMO_LIMITE_RESPUESTAS", "100"))
+DEMO_LIMITE_RESPUESTAS_DEFAULT = int(os.getenv("DEMO_LIMITE_RESPUESTAS", "50"))
 DEMO_DURACION_HORAS_DEFAULT = int(os.getenv("DEMO_DURACION_HORAS", "24"))
 DEMO_OVERRIDE_ACTIVO = os.getenv("DEMO_OVERRIDE_ACTIVO", "true").strip().lower() in {"1", "true", "yes", "si", "sí"}
 
@@ -305,7 +308,7 @@ def mensaje_demo_finalizada(motivo=None):
     if motivo == "tiempo":
         detalle = "Tu período de prueba de 24 horas ya finalizó."
     elif motivo == "limite":
-        detalle = "Ya utilizaste las 100 respuestas gratuitas incluidas en tu prueba."
+        detalle = "Ya utilizaste las 50 respuestas gratuitas incluidas en tu prueba."
     else:
         detalle = "Tu demostración gratuita de Nexia ya finalizó."
     return (
@@ -341,7 +344,7 @@ def aplicar_plan_a_respuesta(respuesta):
 
 
 def activar_demo_empresa(empresa_id, identificador_cliente=None, canal="whatsapp"):
-    """Activa/reinicia una demo por 24h y 100 respuestas para una empresa."""
+    """Activa/reinicia una demo por 24h y 50 respuestas para una empresa."""
     headers = backend_headers()
     empresa_id = str(empresa_id or "").strip()
     if not headers or not empresa_id:
@@ -2082,171 +2085,152 @@ def procesar_agenda(estado, texto):
 
 import uuid
 
-CORE_ONBOARDING_VERSION = "nexi-core-v1.2"
+CORE_ONBOARDING_VERSION = "nexi-core-v1.5"
 CORE_DEMO_CHANNEL = "web"
 
+CORE_WEB_MAX_PAGES = int(os.getenv("CORE_WEB_MAX_PAGES", "6"))
+CORE_WEB_MAX_CHARS_PAGE = int(os.getenv("CORE_WEB_MAX_CHARS_PAGE", "18000"))
+CORE_WEB_TIMEOUT = int(os.getenv("CORE_WEB_TIMEOUT", "8"))
+CORE_WEB_USER_AGENT = os.getenv(
+    "CORE_WEB_USER_AGENT",
+    "NexiCoreBot/1.0 (+https://nexia-tech.com)"
+).strip()
+
 CORE_COMMON_FIELDS = [
-    "tipo_cliente", "nombre_contacto", "email_contacto", "nombre_asistente",
-    "objetivo", "canales_actuales", "canales_deseados", "presencia_digital",
+    "nombre_contacto",
+    "nombre_negocio",
+    "rubro",
+    "productos_servicios",
+    "objetivo",
+    "canales_actuales",
+    "canales_deseados",
+    "presencia_digital",
+    "personas_atencion",
 ]
 
 CORE_QUESTIONS = {
-    "tipo_cliente": {
-        "text": "¿Para quién quieres crear Nexia?",
-        "kind": "choice",
-        "options": ["Personal", "Profesional independiente", "Empresa/emprendimiento"],
-        "help": "Esto adapta el resto de la configuración para no hacerte preguntas innecesarias.",
-    },
     "nombre_contacto": {
-        "text": "¿Cuál es tu nombre?",
+        "text": "Para comenzar, ¿cuál es tu nombre?",
         "kind": "text",
     },
-    "email_contacto": {
-        "text": "¿A qué correo quieres recibir avisos cuando alguien pida hablar con una persona?",
-        "kind": "email",
-        "help": "Este correo queda como canal privado de notificación de la demo y nunca se muestra a tus clientes.",
-    },
-    "nombre_asistente": {
-        "text": "¿Cómo quieres que se llame tu asistente?",
+    "nombre_negocio": {
+        "text": "¿Cómo se llama tu negocio, marca o actividad?",
         "kind": "text",
-        "placeholder": "Ej: Luna, Sofía, Asistente Virtual",
+        "placeholder": "Ej: Veterinaria Luna, Diego Estilista, Estudio Pérez",
+    },
+    "rubro": {
+        "text": "Cuéntame brevemente, ¿a qué se dedica tu negocio o actividad?",
+        "kind": "long_text",
+    },
+    "productos_servicios": {
+        "text": "¿Qué productos o servicios ofreces?",
+        "kind": "long_text",
+        "help": "Puedes incluir precios o valores referenciales. Si tu web ya contiene esta información, también puedes permitir que Nexi la aprenda.",
     },
     "objetivo": {
-        "text": "¿Qué quieres que haga Nexia por ti?",
+        "text": "¿Qué quieres que Nexi haga por tu negocio?",
         "kind": "multi_choice",
         "options": [
             "Responder consultas",
             "Atender clientes",
             "Vender productos o servicios",
             "Informar precios",
-            "Captar interesados",
+            "Guardar datos de personas interesadas",
             "Agendar o reservar",
             "Hacer seguimiento",
             "Derivar a una persona",
-            "Soporte / preguntas frecuentes",
+            "Resolver preguntas frecuentes",
             "Automatizar otro proceso",
         ],
         "help": "Puedes elegir más de una opción.",
     },
     "canales_actuales": {
-        "text": "¿Por dónde hablan hoy contigo o con tu negocio?",
+        "text": "¿Por qué medios te contactan hoy tus clientes?",
         "kind": "multi_choice",
-        "options": ["WhatsApp", "Instagram", "Facebook/Messenger", "Sitio web", "Chat web", "Correo", "Teléfono", "Presencial", "Otro"],
+        "options": [
+            "WhatsApp", "Instagram", "Facebook/Messenger", "Sitio web",
+            "Chat web", "Correo", "Teléfono", "Presencial", "Otro"
+        ],
+        "help": "Esto nos ayuda a entender dónde ocurre hoy la atención.",
     },
     "canales_deseados": {
-        "text": "¿Dónde te gustaría que Nexia pudiera atender?",
+        "text": "¿Dónde quieres que Nexi atienda a tus clientes?",
         "kind": "multi_choice",
         "options": ["WhatsApp", "Instagram", "Facebook/Messenger", "Sitio web / Chat web", "Otro"],
     },
     "presencia_digital": {
-        "text": "Agrega tu web y redes sociales.",
+        "text": "Agrega tu sitio web y redes sociales públicas.",
         "kind": "digital_presence",
-        "help": "Puedes dejar en blanco lo que no uses. Esto queda guardado de forma estructurada para que luego Nexia pueda usarlo como fuente de conocimiento.",
+        "help": "La web puede usarse como fuente de conocimiento si lo autorizas. Las redes sociales se guardan como canales públicos para responder cuando un cliente las consulte.",
+    },
+    "personas_atencion": {
+        "text": "¿Cuántas personas atienden actualmente consultas o clientes?",
+        "kind": "choice",
+        "options": ["Solo yo", "2 a 3 personas", "4 a 10 personas", "Más de 10"],
+        "help": "Esto nos ayuda a preparar la derivación y el trabajo del equipo.",
+    },
+    "aprende_web": {
+        "text": "¿Quieres que Nexi use la información de tu sitio web para responder consultas?",
+        "kind": "choice",
+        "options": ["Sí, aprender de mi web", "No, solo guardar el enlace"],
+        "help": "Si eliges Sí, Nexi leerá páginas públicas relevantes de tu sitio y guardará una versión resumida de su contenido.",
     },
     "whatsapp_demo": {
         "text": "¿Cuál es el número de WhatsApp desde el que probarás tu asistente?",
         "kind": "phone",
         "placeholder": "+56912345678",
     },
-
-    # Personal
-    "personal_audiencia": {
-        "text": "¿Quiénes hablarían con tu asistente y qué tipo de ayuda deberían recibir?",
-        "kind": "long_text",
-    },
-    "personal_info": {
-        "text": "¿Qué información debería conocer Nexia para responder correctamente?",
-        "kind": "long_text",
-    },
-
-    # Profesional
-    "profesion": {
-        "text": "¿A qué te dedicas o qué profesión/actividad realizas?",
-        "kind": "text",
-    },
-    "servicios_profesional": {
-        "text": "¿Qué servicios ofreces?",
-        "kind": "long_text",
-        "help": "Incluye precios o valores referenciales si los tienes.",
-    },
-    "modalidad": {
-        "text": "¿Cómo atiendes?",
-        "kind": "multi_choice",
-        "options": ["Presencial", "Online", "A domicilio", "Mixto"],
-    },
-    "ubicacion": {
-        "text": "¿Hay una ubicación o zona de atención que tus clientes deban conocer?",
-        "kind": "text_or_no",
-    },
-
-    # Empresa
-    "empresa_nombre": {
-        "text": "¿Cómo se llama tu empresa, pyme o emprendimiento?",
-        "kind": "text",
-    },
-    "rubro": {
-        "text": "¿A qué se dedica la empresa?",
-        "kind": "text",
-    },
-    "productos_servicios": {
-        "text": "¿Qué productos o servicios ofrece?",
-        "kind": "long_text",
-        "help": "Puedes incluir precios, planes o valores referenciales.",
-    },
-    "equipo_atencion": {
-        "text": "¿Cuántas personas atienden hoy consultas de clientes aproximadamente?",
-        "kind": "text",
-    },
-    "captura_leads": {
-        "text": "¿Quieres que Nexia capture datos de personas interesadas para seguimiento comercial?",
-        "kind": "choice",
-        "options": ["Sí", "No", "Sí, pero solo nombre y contacto", "Sí, quiero definir los datos"],
-    },
-
-    # Agenda condicional
     "agenda_que": {
         "text": "Veo que necesitas agenda o reservas. ¿Qué se agenda?",
         "kind": "text",
-        "placeholder": "Ej: cita, servicio, reunión, evaluación",
     },
     "agenda_duracion": {
         "text": "¿Cuánto dura normalmente cada atención o reserva?",
         "kind": "text",
-        "placeholder": "Ej: 60 minutos",
     },
     "agenda_dias": {
         "text": "¿Qué días se puede reservar?",
         "kind": "text",
-        "placeholder": "Ej: lunes a sábado",
     },
     "agenda_horario": {
         "text": "¿En qué horario se puede agendar?",
         "kind": "text",
-        "placeholder": "Ej: 10:00 a 19:00",
     },
     "agenda_buffer": {
         "text": "¿Necesitas tiempo entre una atención y otra?",
         "kind": "text_or_no",
-        "placeholder": "Ej: 15 minutos",
     },
-
-    # Comportamiento
+    "guardar_interesados": {
+        "text": "¿Quieres que Nexi guarde los datos de personas interesadas para poder contactarlas después?",
+        "kind": "choice",
+        "options": [
+            "Sí",
+            "No",
+            "Sí, solo nombre y contacto",
+            "Sí, quiero elegir qué datos guardar",
+        ],
+    },
     "handoff": {
-        "text": "¿Nexia debe poder derivar la conversación a una persona cuando sea necesario?",
+        "text": "¿Quieres que Nexi pueda derivar conversaciones a una persona?",
         "kind": "yes_no",
     },
+    "email_contacto": {
+        "text": "¿A qué correo deben llegar las derivaciones?",
+        "kind": "email",
+        "help": "Este correo es privado y nunca se mostrará a tus clientes.",
+    },
     "tono": {
-        "text": "¿Cómo quieres que se comunique tu asistente?",
+        "text": "¿Cómo quieres que se comunique Nexi?",
         "kind": "multi_choice",
         "options": ["Cercano", "Profesional", "Formal", "Amigable", "Directo y breve", "Puede usar emojis", "Sin emojis"],
     },
     "desconocido": {
-        "text": "Si Nexia no sabe una respuesta, ¿qué debe hacer?",
+        "text": "Si Nexi no sabe una respuesta, ¿qué debe hacer?",
         "kind": "choice",
         "options": ["Decir que no cuenta con esa información", "Pedir más detalles", "Derivar a una persona"],
     },
     "restricciones": {
-        "text": "¿Hay algo que Nexia nunca debería responder, prometer o informar?",
+        "text": "¿Hay algo que Nexi nunca debería responder, prometer o informar?",
         "kind": "long_text",
         "placeholder": "Si no hay restricciones adicionales, escribe No.",
     },
@@ -2258,11 +2242,12 @@ def _core_norm(v):
 
 
 def _core_tipo(v):
+    # V1.5 se centra en trabajo/negocio. Se mantiene compatibilidad con demos antiguas.
     t=_core_norm(v)
-    if any(x in t for x in ("empresa","emprend","pyme","negocio","compania")): return "empresa"
-    if any(x in t for x in ("profesional","independiente","freelance","por mi cuenta")): return "profesional"
-    if any(x in t for x in ("personal","para mi","persona")): return "personal"
-    return None
+    if any(x in t for x in ("personal","para mi","persona")):
+        return "personal"
+    return "empresa"
+
 
 
 def _core_si(v):
@@ -2271,8 +2256,9 @@ def _core_si(v):
 
 
 def _core_necesita_agenda(datos):
-    t=" ".join(_core_norm(datos.get(k)) for k in ("objetivo","productos_servicios","servicios_profesional"))
+    t=" ".join(_core_norm(datos.get(k)) for k in ("objetivo","productos_servicios"))
     return any(x in t for x in ("agenda","agendar","reserva","reservar","cita","hora","reunion","turno"))
+
 
 
 def _core_canales_texto(datos):
@@ -2297,12 +2283,47 @@ def _core_email_valido(value):
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value))
 
 def _core_es_handoff(texto):
+    """
+    Detecta solicitudes explícitas de contacto humano, incluso cuando
+    el usuario pide hablar con una persona por su nombre.
+    """
     t = _core_norm(texto)
-    return any(x in t for x in (
-        "derivar", "hablar con una persona", "hablar con persona", "hablar con alguien",
-        "hablar con ejecutivo", "hablar con un ejecutivo", "persona real", "humano",
-        "asesor", "ejecutivo", "contactar a alguien", "quiero contacto",
-    ))
+
+    directas = (
+        "derivar", "derivame", "derívame",
+        "hablar con una persona", "hablar con persona", "hablar con alguien",
+        "hablar con ejecutivo", "hablar con un ejecutivo",
+        "persona real", "humano", "asesor", "ejecutivo",
+        "contactar a alguien", "quiero contacto",
+        "contactar por correo", "contacto por correo",
+        "quiero que me contacten", "que me contacten",
+    )
+    if any(x in t for x in directas):
+        return True
+
+    # "quiero hablar con Cristian", "puedo hablar con María", etc.
+    if re.search(r"\b(?:quiero|quisiera|necesito|puedo|podria|podría)?\s*hablar\s+con\s+[a-záéíóúñü]{2,}(?:\s+[a-záéíóúñü]{2,})?", t):
+        return True
+
+    if re.search(r"\bcontactar\s+(?:a|con)\s+[a-záéíóúñü]{2,}", t):
+        return True
+
+    return False
+
+
+def _core_es_confirmacion(texto):
+    t = _core_norm(texto)
+    return t in {
+        "si", "sí", "ok", "okay", "dale", "claro", "bueno",
+        "por favor", "quiero", "de acuerdo", "ya", "perfecto"
+    }
+
+
+def _core_es_rechazo(texto):
+    t = _core_norm(texto)
+    return t in {"no", "nop", "no gracias", "ahora no", "mejor no"}
+
+
 
 def _core_handoff_lookup(empresa_id, identificador, canal):
     ident = _normalizar_identificador_demo(identificador, canal)
@@ -2341,6 +2362,22 @@ def _core_handoff_upsert(empresa_id, identificador, canal, payload):
     r.raise_for_status()
     rows = r.json() if r.content else []
     return rows[0] if rows else row
+
+def _core_handoff_elapsed_minutes(handoff):
+    raw=str((handoff or {}).get("started_at") or "").strip()
+    if not raw:
+        return None
+    try:
+        inicio=datetime.fromisoformat(raw.replace("Z","+00:00"))
+        if inicio.tzinfo is None:
+            inicio=pytz.UTC.localize(inicio)
+        return max(0.0,(datetime.now(pytz.UTC)-inicio.astimezone(pytz.UTC)).total_seconds()/60.0)
+    except Exception:
+        return None
+
+def _core_handoff_expirado(handoff):
+    mins=_core_handoff_elapsed_minutes(handoff)
+    return mins is not None and CORE_HANDOFF_TIMEOUT_MINUTOS > 0 and mins >= CORE_HANDOFF_TIMEOUT_MINUTOS
 
 def _core_handoff_request(empresa_id, identificador, canal, datos, motivo):
     perfil = _core_profile(empresa_id) or {}
@@ -2424,25 +2461,29 @@ def _core_parse_handoff_details(tipo, texto):
 
 
 def _core_secuencia(datos):
-    tipo=_core_tipo(datos.get("tipo_cliente")) or datos.get("tipo_cliente")
     seq=list(CORE_COMMON_FIELDS)
-    canales=_core_canales_texto(datos)
 
-    # WhatsApp demo solo si se usa o se desea usar WhatsApp.
+    presencia=_core_presencia(datos)
+    sitio=str(presencia.get("web") or "").strip()
+    if sitio:
+        seq.append("aprende_web")
+
+    canales=_core_canales_texto(datos)
     if "whatsapp" in canales:
         seq.append("whatsapp_demo")
-
-    if tipo == "personal":
-        seq += ["personal_audiencia","personal_info"]
-    elif tipo == "profesional":
-        seq += ["profesion","servicios_profesional","modalidad","ubicacion"]
-    elif tipo == "empresa":
-        seq += ["empresa_nombre","rubro","productos_servicios","equipo_atencion","captura_leads"]
 
     if _core_necesita_agenda(datos):
         seq += ["agenda_que","agenda_duracion","agenda_dias","agenda_horario","agenda_buffer"]
 
-    seq += ["handoff","tono","desconocido","restricciones"]
+    objetivo=_core_norm(datos.get("objetivo"))
+    if any(x in objetivo for x in ("personas interesadas","interesad","seguimiento","vender")):
+        seq.append("guardar_interesados")
+
+    seq.append("handoff")
+    if _core_si(datos.get("handoff")):
+        seq.append("email_contacto")
+
+    seq += ["tono","desconocido","restricciones"]
 
     out=[]
     for k in seq:
@@ -2480,39 +2521,309 @@ def _core_save_session(token, payload):
     return rows[0] if rows else payload
 
 
+
+class _CoreHTMLTextParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.skip=0
+        self.parts=[]
+        self.links=[]
+    def handle_starttag(self, tag, attrs):
+        tag=(tag or "").lower()
+        if tag in {"script","style","noscript","svg"}:
+            self.skip += 1
+        if tag == "a":
+            href=dict(attrs).get("href")
+            if href:
+                self.links.append(href)
+    def handle_endtag(self, tag):
+        if (tag or "").lower() in {"script","style","noscript","svg"} and self.skip:
+            self.skip -= 1
+    def handle_data(self, data):
+        if not self.skip:
+            txt=re.sub(r"\s+"," ",str(data or "")).strip()
+            if txt:
+                self.parts.append(txt)
+
+
+def _core_normalizar_url_web(url):
+    raw=str(url or "").strip()
+    if not raw:
+        return ""
+    if not re.match(r"^https?://", raw, re.I):
+        raw="https://" + raw
+    p=urlparse(raw)
+    if p.scheme not in {"http","https"} or not p.netloc:
+        return ""
+    return raw.rstrip("/")
+
+
+def _core_fetch_web_page(url):
+    r=requests.get(
+        url,
+        headers={"User-Agent": CORE_WEB_USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+        timeout=CORE_WEB_TIMEOUT,
+        allow_redirects=True,
+    )
+    r.raise_for_status()
+    ctype=str(r.headers.get("content-type") or "").lower()
+    if "text/html" not in ctype:
+        return None
+    parser=_CoreHTMLTextParser()
+    parser.feed(r.text[:500000])
+    texto="\n".join(parser.parts)
+    texto=re.sub(r"\n{3,}","\n\n",texto).strip()
+    return {
+        "url": r.url,
+        "texto": texto[:CORE_WEB_MAX_CHARS_PAGE],
+        "links": parser.links[:250],
+    }
+
+
+def _core_crawl_web(url):
+    inicio=_core_normalizar_url_web(url)
+    if not inicio:
+        return []
+    host=urlparse(inicio).netloc.lower()
+    cola=[inicio]
+    vistos=set()
+    paginas=[]
+
+    while cola and len(paginas) < CORE_WEB_MAX_PAGES:
+        actual, cola = cola[0], cola[1:]
+        actual=urldefrag(actual)[0].rstrip("/")
+        if not actual or actual in vistos:
+            continue
+        vistos.add(actual)
+        try:
+            data=_core_fetch_web_page(actual)
+        except Exception as e:
+            print("CORE WEB FETCH ERROR:", actual, repr(e))
+            continue
+        if not data or len(data.get("texto") or "") < 80:
+            continue
+        paginas.append({"url":data["url"],"texto":data["texto"]})
+        for href in data.get("links") or []:
+            try:
+                u=urldefrag(urljoin(data["url"],href))[0]
+                p=urlparse(u)
+                if p.scheme in {"http","https"} and p.netloc.lower()==host:
+                    if not re.search(r"\.(?:jpg|jpeg|png|gif|webp|svg|pdf|zip|mp4|mp3)(?:$|\?)",u,re.I):
+                        cola.append(u)
+            except Exception:
+                pass
+    return paginas
+
+
+def _core_resumir_web(paginas):
+    if not paginas:
+        return ""
+    contenido=[]
+    for p in paginas:
+        contenido.append(f"URL: {p['url']}\n{p['texto']}")
+    bruto="\n\n---\n\n".join(contenido)[:50000]
+
+    if not openai_client:
+        return bruto[:12000]
+
+    system=(
+        "Extrae conocimiento empresarial útil desde el contenido público de un sitio web. "
+        "No inventes nada. Resume solo información explícita: descripción, productos, servicios, "
+        "precios si aparecen, horarios, ubicaciones, preguntas frecuentes, políticas y contacto público. "
+        "Devuelve texto claro y compacto en español."
+    )
+    try:
+        r=openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role":"system","content":system},
+                {"role":"user","content":bruto},
+            ],
+        )
+        return (r.choices[0].message.content or "").strip()[:18000]
+    except Exception as e:
+        print("CORE WEB SUMMARY ERROR:",repr(e))
+        return bruto[:12000]
+
+
+def _core_guardar_conocimiento_web(empresa_id, url):
+    paginas=_core_crawl_web(url)
+    resumen=_core_resumir_web(paginas)
+    if not resumen:
+        return {"ok":False,"pages":0,"summary":""}
+
+    rows=[]
+    for i,p in enumerate(paginas,1):
+        rows.append({
+            "empresa_id":empresa_id,
+            "fuente":"web",
+            "url":p["url"],
+            "titulo":f"Página web {i}",
+            "contenido":p["texto"],
+            "resumen":resumen if i==1 else None,
+            "activo":True,
+            "updated_at":datetime.now(pytz.UTC).isoformat(),
+        })
+    r=requests.post(
+        f"{SUPABASE_URL}/rest/v1/nexi_core_conocimiento",
+        headers=_core_headers("return=minimal"),
+        json=rows,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    print("NEXI CORE WEB KNOWLEDGE OK:",empresa_id,len(rows),url)
+    return {"ok":True,"pages":len(rows),"summary":resumen}
+
+
+def _core_conocimiento_web(empresa_id, consulta):
+    try:
+        r=requests.get(
+            f"{SUPABASE_URL}/rest/v1/nexi_core_conocimiento",
+            headers=_core_headers(),
+            params={
+                "select":"url,titulo,contenido,resumen",
+                "empresa_id":f"eq.{empresa_id}",
+                "activo":"eq.true",
+                "fuente":"eq.web",
+                "limit":"12",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows=r.json() if r.content else []
+    except Exception as e:
+        print("CORE WEB KNOWLEDGE READ ERROR:",repr(e))
+        return ""
+
+    if not rows:
+        return ""
+
+    palabras=[x for x in re.findall(r"[a-záéíóúñ0-9]{4,}",_core_norm(consulta)) if len(x)>=4]
+    scored=[]
+    for row in rows:
+        text=" ".join(str(row.get(k) or "") for k in ("titulo","contenido","resumen"))
+        norm=_core_norm(text)
+        score=sum(norm.count(p) for p in palabras)
+        scored.append((score,row))
+    scored.sort(key=lambda x:x[0],reverse=True)
+    elegidos=[r for s,r in scored[:3] if s>0] or [r for _,r in scored[:2]]
+    piezas=[]
+    for row in elegidos:
+        contenido=str(row.get("contenido") or "")
+        resumen=str(row.get("resumen") or "")
+        piezas.append(f"Fuente: {row.get('url')}\n{resumen or contenido[:3500]}")
+    return "\n\n".join(piezas)[:9000]
+
+
 def _core_create_company_from_session(session):
     datos=dict(session.get("datos") or {})
     token=session["token"]
     if session.get("empresa_id"):
         return str(session["empresa_id"])
-    tipo=_core_tipo(datos.get("tipo_cliente")) or "empresa"
-    empresa_nombre=(datos.get("empresa_nombre") or datos.get("profesion") or datos.get("nombre_contacto") or "Demo Nexia").strip()
+
+    tipo="empresa"
+    empresa_nombre=(datos.get("nombre_negocio") or datos.get("nombre_contacto") or "Demo Nexia").strip()
     now=datetime.now(pytz.UTC).isoformat()
-    er=requests.post(f"{SUPABASE_URL}/rest/v1/empresas",headers=_core_headers("return=representation"),json={"nombre":f"{empresa_nombre} · Demo","activo":True},timeout=SUPABASE_TIMEOUT)
-    er.raise_for_status(); empresa=(er.json() or [None])[0]
-    if not empresa: raise RuntimeError("No se pudo crear empresa demo")
+
+    er=requests.post(
+        f"{SUPABASE_URL}/rest/v1/empresas",
+        headers=_core_headers("return=representation"),
+        json={"nombre":f"{empresa_nombre} · Demo","activo":True},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    er.raise_for_status()
+    empresa=(er.json() or [None])[0]
+    if not empresa:
+        raise RuntimeError("No se pudo crear empresa demo")
     empresa_id=str(empresa["id"])
+
     objetivos=str(datos.get("objetivo") or "")
     usa_reservas=_core_necesita_agenda(datos)
-    tipo_negocio="reservas" if usa_reservas else ("personal" if tipo=="personal" else "comercial")
-    descripcion=" | ".join(x for x in [str(datos.get("rubro") or ""),str(datos.get("profesion") or ""),str(datos.get("productos_servicios") or datos.get("servicios_profesional") or datos.get("personal_info") or "")] if x.strip())
-    modulos={"ia":True,"reservas":usa_reservas,"handoff_humano":_core_si(datos.get("handoff")),"whatsapp":"whatsapp" in _core_canales_texto(datos),"instagram":"instagram" in _core_canales_texto(datos),"web":True}
+    descripcion=" | ".join(
+        x for x in [
+            str(datos.get("rubro") or ""),
+            str(datos.get("productos_servicios") or ""),
+        ] if x.strip()
+    )
+
+    modulos={
+        "ia":True,
+        "reservas":usa_reservas,
+        "handoff_humano":_core_si(datos.get("handoff")),
+        "whatsapp":"whatsapp" in _core_canales_texto(datos),
+        "instagram":"instagram" in _core_canales_texto(datos),
+        "web":True,
+    }
+
     presencia=_core_presencia(datos)
     sitio_web=str(presencia.get("web") or "").strip()
     redes={k:v for k,v in presencia.items() if k != "web" and str(v or "").strip()}
+
     prompt_extra=(
-        f"NEXI CORE V1.2. Perfil: {tipo}. Objetivo: {objetivos}. "
-        f"Canales actuales: {datos.get('canales_actuales','')}. Canales deseados: {datos.get('canales_deseados','')}. "
-        f"Sitio web: {sitio_web}. Redes sociales: {json.dumps(redes,ensure_ascii=False)}. "
+        f"NEXI CORE V1.5. Negocio: {empresa_nombre}. "
+        f"Rubro: {datos.get('rubro','')}. Objetivos: {objetivos}. "
+        f"Productos/servicios declarados: {datos.get('productos_servicios','')}. "
+        f"Canales actuales: {datos.get('canales_actuales','')}. "
+        f"Canales deseados: {datos.get('canales_deseados','')}. "
+        f"Personas que atienden clientes: {datos.get('personas_atencion','')}. "
+        f"Sitio web público: {sitio_web}. Redes sociales públicas: {json.dumps(redes,ensure_ascii=False)}. "
         f"Tono: {datos.get('tono','')}. Si no sabe: {datos.get('desconocido','')}. "
         f"Restricciones: {datos.get('restricciones','')}. "
-        "REGLA DE PRIVACIDAD: nunca muestres teléfonos privados, correos internos ni datos personales del ejecutivo. "
-        "Si el usuario pide una persona, la derivación es interna y continúa por el mismo canal."
+        "Nunca muestres teléfonos privados, correos internos ni datos personales del ejecutivo."
     )
-    cfg_payload={"empresa_id":empresa_id,"tipo_negocio":tipo_negocio,"descripcion_empresa":descripcion,"asistente_nombre":str(datos.get("nombre_asistente") or "Nexia"),"correo_ejecutivo":str(datos.get("email_contacto") or "").strip(),"timezone":TIMEZONE,"hora_apertura":DEFAULT_HORA_APERTURA,"hora_cierre":DEFAULT_HORA_CIERRE,"duracion_reserva":DEFAULT_DURACION_RESERVA,"dias_atencion":[0,1,2,3,4,5],"prompt_extra":prompt_extra,"modulos":modulos}
-    cr=requests.post(f"{SUPABASE_URL}/rest/v1/configuracion_bot",headers=_core_headers("return=representation"),json=cfg_payload,timeout=SUPABASE_TIMEOUT); cr.raise_for_status()
-    profile={"empresa_id":empresa_id,"onboarding_token":token,"version":CORE_ONBOARDING_VERSION,"tipo_cliente":tipo,"datos":datos,"canales_actuales":str(datos.get("canales_actuales") or ""),"canales_deseados":str(datos.get("canales_deseados") or ""),"sitio_web":sitio_web,"redes_sociales":json.dumps(redes,ensure_ascii=False),"objetivo":objetivos,"created_at":now,"updated_at":now}
-    pr=requests.post(f"{SUPABASE_URL}/rest/v1/nexi_core_perfiles",headers=_core_headers("return=representation"),json=profile,timeout=SUPABASE_TIMEOUT); pr.raise_for_status()
+
+    cfg_payload={
+        "empresa_id":empresa_id,
+        "tipo_negocio":"reservas" if usa_reservas else "comercial",
+        "descripcion_empresa":descripcion,
+        "asistente_nombre":"Nexi",
+        "correo_ejecutivo":str(datos.get("email_contacto") or "").strip(),
+        "timezone":TIMEZONE,
+        "hora_apertura":DEFAULT_HORA_APERTURA,
+        "hora_cierre":DEFAULT_HORA_CIERRE,
+        "duracion_reserva":DEFAULT_DURACION_RESERVA,
+        "dias_atencion":[0,1,2,3,4,5],
+        "prompt_extra":prompt_extra,
+        "modulos":modulos,
+    }
+    cr=requests.post(
+        f"{SUPABASE_URL}/rest/v1/configuracion_bot",
+        headers=_core_headers("return=representation"),
+        json=cfg_payload,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    cr.raise_for_status()
+
+    profile={
+        "empresa_id":empresa_id,
+        "onboarding_token":token,
+        "version":CORE_ONBOARDING_VERSION,
+        "tipo_cliente":"empresa",
+        "datos":datos,
+        "canales_actuales":str(datos.get("canales_actuales") or ""),
+        "canales_deseados":str(datos.get("canales_deseados") or ""),
+        "sitio_web":sitio_web,
+        "redes_sociales":json.dumps(redes,ensure_ascii=False),
+        "objetivo":objetivos,
+        "created_at":now,
+        "updated_at":now,
+    }
+    pr=requests.post(
+        f"{SUPABASE_URL}/rest/v1/nexi_core_perfiles",
+        headers=_core_headers("return=representation"),
+        json=profile,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    pr.raise_for_status()
+
+    if sitio_web and _core_si(datos.get("aprende_web")):
+        try:
+            resultado_web=_core_guardar_conocimiento_web(empresa_id,sitio_web)
+            _core_save_session(token,{"web_knowledge":resultado_web})
+        except Exception as e:
+            print("CORE WEB KNOWLEDGE CREATE ERROR:",repr(e))
+            _core_save_session(token,{"web_knowledge":{"ok":False,"error":str(e)[:250]}})
+
     whatsapp_demo=str(datos.get("whatsapp_demo") or "").strip()
     activar_demo_empresa(empresa_id, whatsapp_demo if whatsapp_demo else None, "whatsapp")
     _core_save_session(token,{"empresa_id":empresa_id,"estado":"demo_activa","completado":True})
@@ -2556,8 +2867,74 @@ def _core_whatsapp_info(empresa_id=None):
     }
 
 
+
+def proteger_respuesta_publica_core(texto):
+    """
+    Filtro FINAL obligatorio para cualquier respuesta de demo.
+    Los datos privados de configuración jamás se publican.
+    """
+    original = str(texto or "")
+    if not original:
+        return original
+
+    salida = original
+
+    # Exactos privados: se eliminan sin depender del contexto.
+    internos = {
+        str(cfg("telefono_ejecutivo", "") or "").strip(),
+        str(cfg("correo_ejecutivo", "") or "").strip(),
+        str(DEFAULT_TELEFONO_EJECUTIVO or "").strip(),
+        str(EJECUTIVO_EMAIL or "").strip(),
+    }
+    perfil = None
+    try:
+        perfil = _core_profile(empresa_actual_id()) or {}
+    except Exception:
+        perfil = {}
+    pd = (perfil or {}).get("datos") or {}
+    internos.add(str(pd.get("email_contacto") or "").strip())
+    internos.add(str(pd.get("whatsapp_demo") or "").strip())
+
+    for valor in internos:
+        if valor:
+            salida = re.sub(re.escape(valor), "[dato privado]", salida, flags=re.IGNORECASE)
+
+    patron_tel = re.compile(r"(?<!\d)(?:\+?56[ .-]*)?9(?:[ .-]*\d){8}(?!\d)")
+    patron_email = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
+
+    lineas = []
+    for linea in salida.splitlines():
+        normal = normalizar_texto(linea)
+        contexto_contacto = any(k in normal for k in (
+            "correo", "email", "e-mail", "telefono", "teléfono", "whatsapp",
+            "contacto", "contactar", "escribeme", "escríbeme", "llama", "llamar",
+            "puedes contact", "por correo", "por whatsapp",
+        ))
+        if contexto_contacto:
+            linea = patron_tel.sub("[dato privado]", linea)
+            linea = patron_email.sub("[dato privado]", linea)
+        lineas.append(linea)
+
+    return "\n".join(lineas).strip()
+
+
+
+def _core_respuesta_no_verificable(texto):
+    """
+    Detecta preguntas sobre estado actual de una persona que la demo no puede
+    conocer sin una integración/fuente en tiempo real.
+    """
+    t = _core_norm(texto)
+    patrones = (
+        "como esta", "cómo está", "como se encuentra", "cómo se encuentra",
+        "donde esta", "dónde está", "que esta haciendo", "qué está haciendo",
+        "esta bien", "está bien", "como sigue", "cómo sigue",
+    )
+    return any(p in t for p in patrones)
+
+
 def _core_responder_demo_whatsapp(demo_access, telefono, texto):
-    """Procesa una demo real por WhatsApp con handoff persistente y correo."""
+    """Procesa demo real por WhatsApp con handoff contextual y privacidad estricta."""
     empresa_id=str((demo_access or {}).get("empresa_id") or empresa_actual_id() or "").strip()
     if not empresa_id:
         raise RuntimeError("Demo sin empresa_id")
@@ -2572,14 +2949,27 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
         _core_log_message(token,empresa_id,"entrante",texto)
 
     hs=_core_handoff_lookup(empresa_id,telefono,"whatsapp")
+    estado_handoff=str((hs or {}).get("estado") or "").strip().lower()
 
-    # Si ya fue derivado, el bot no vuelve a intervenir.
-    if hs and str(hs.get("estado") or "") == "derivado":
-        print("NEXI CORE HANDOFF ACTIVO:",empresa_id,_normalizar_identificador_demo(telefono,"whatsapp"))
-        return ""
+    if estado_handoff == "derivado":
+        if not _core_handoff_expirado(hs):
+            print("NEXI CORE HANDOFF ACTIVO:",empresa_id,_normalizar_identificador_demo(telefono,"whatsapp"))
+            return ""
+        _core_handoff_upsert(
+            empresa_id,telefono,"whatsapp",
+            {
+                "estado":"cerrado",
+                "datos":{**(hs.get("datos") or {}),"cierre":"timeout","timeout_minutos":CORE_HANDOFF_TIMEOUT_MINUTOS},
+                "started_at":hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+            }
+        )
+        respuesta=(
+            f"No hemos podido conectarte con una persona dentro de los {CORE_HANDOFF_TIMEOUT_MINUTOS} minutos estimados. "
+            "Puedo seguir ayudándote por aquí mientras tanto.\n\n"
+            + _core_demo_answer(empresa_id,texto)
+        )
 
-    # Recolección de datos posterior a "derivar".
-    if hs and str(hs.get("estado") or "") == "recolectando":
+    if estado_handoff == "recolectando":
         detalles=_core_parse_handoff_details(tipo,texto)
         motivo=str(detalles.get("motivo") or "").strip()
         nombre=str(detalles.get("nombre") or "").strip()
@@ -2593,22 +2983,60 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
                 {"estado":"derivado","datos":detalles,"started_at":hs.get("started_at") or datetime.now(pytz.UTC).isoformat()}
             )
             respuesta=(
-                f"Gracias, {nombre} 🙌\\n\\n"
+                f"Gracias, {nombre} 🙌\n\n"
                 "Ya registré tu solicitud y la envié al equipo. "
-                "Una persona podrá continuar la atención por este mismo canal. "
-                "No necesitas compartir ningún otro dato de contacto."
+                f"El tiempo estimado de atención es de hasta {CORE_HANDOFF_TIMEOUT_MINUTOS} minutos. "
+                "Puedes seguir escribiendo por aquí mientras esperas."
             )
+
+    elif estado_handoff == "ofrecido":
+        if _core_es_confirmacion(texto):
+            _core_handoff_upsert(
+                empresa_id,telefono,"whatsapp",
+                {"estado":"recolectando","datos":{},"started_at":hs.get("started_at") or datetime.now(pytz.UTC).isoformat()}
+            )
+            respuesta=_core_handoff_prompt(tipo)
+        elif _core_es_rechazo(texto):
+            _core_handoff_upsert(
+                empresa_id,telefono,"whatsapp",
+                {"estado":"cerrado","datos":hs.get("datos") or {},"started_at":hs.get("started_at") or datetime.now(pytz.UTC).isoformat()}
+            )
+            respuesta="Perfecto. Seguimos por aquí 😊 ¿En qué más te puedo ayudar?"
+        else:
+            respuesta=(
+                "Tengo pendiente tu solicitud de hablar con una persona. "
+                "Si quieres continuar, responde *sí*; si prefieres seguir con el asistente, responde *no*."
+            )
+
     elif _core_es_handoff(texto) and _core_si(datos_perfil.get("handoff")):
+        # Solicitud explícita: no hacemos una segunda confirmación innecesaria.
         _core_handoff_upsert(
             empresa_id,telefono,"whatsapp",
-            {"estado":"recolectando","datos":{},"started_at":datetime.now(pytz.UTC).isoformat()}
+            {"estado":"recolectando","datos":{"solicitud_original":str(texto or "")},"started_at":datetime.now(pytz.UTC).isoformat()}
         )
         respuesta=_core_handoff_prompt(tipo)
+
+    elif _core_respuesta_no_verificable(texto):
+        respuesta=(
+            "No tengo una fuente en tiempo real que me permita confirmar el estado actual "
+            "de esa persona. Si esa información fue compartida anteriormente, puedo referirme "
+            "a ella como información previa, pero no como una confirmación actual."
+        )
     else:
         respuesta=_core_demo_answer(empresa_id,texto)
 
-    # Nunca exponer números/correos internos en respuestas demo.
-    respuesta=proteger_respuesta_publica_nexia(respuesta)
+        # Si la IA termina ofreciendo handoff, dejamos contexto pendiente para que "sí" tenga sentido.
+        nr=normalizar_texto(respuesta)
+        if _core_si(datos_perfil.get("handoff")) and any(x in nr for x in (
+            "puedo derivarte", "quieres que te derive", "puedo ponerte en contacto",
+            "quieres hablar con una persona", "derivarte internamente"
+        )):
+            _core_handoff_upsert(
+                empresa_id,telefono,"whatsapp",
+                {"estado":"ofrecido","datos":{"respuesta_oferta":respuesta},"started_at":datetime.now(pytz.UTC).isoformat()}
+            )
+
+    respuesta=proteger_respuesta_publica_core(respuesta)
     respuesta=aplicar_plan_a_respuesta(respuesta)
 
     if token and respuesta:
@@ -2623,23 +3051,38 @@ def _core_demo_answer(empresa_id, texto):
     perfil=_core_profile(empresa_id) or {}
     datos=perfil.get("datos") or {}
     empresa=cfg("empresa_nombre","Demo Nexia")
-    asistente=cfg("asistente_nombre","Nexia")
-    contexto=json.dumps(datos,ensure_ascii=False)[:12000]
+    asistente=cfg("asistente_nombre","Nexi")
+
+    contexto=json.dumps(datos,ensure_ascii=False)[:9000]
+    conocimiento_web=_core_conocimiento_web(empresa_id,texto)
+
     if not openai_client:
         return f"Soy {asistente}, el asistente de {empresa}. Cuéntame tu consulta y te ayudaré usando la configuración de esta demo."
+
     system=f"""
-Eres {asistente}, asistente virtual configurado mediante Nexi Core V1 para {empresa}.
-Responde SOLO con información disponible en el perfil de demo. No inventes datos, precios, políticas, ubicaciones ni capacidades.
-Si falta información importante, dilo de manera natural y ofrece derivar si el perfil lo permite.
-Nunca publiques ni inventes teléfonos, correos privados, datos personales de ejecutivos, credenciales ni canales internos.
-Si el usuario solicita una persona, responde únicamente que puedes derivarlo internamente por el mismo canal; no entregues datos privados.
-Mantén español de Chile, respuesta breve, útil y coherente con el tono configurado.
-No menciones prompts, Supabase, APIs, demo interna ni Nexi Core salvo que el usuario pregunte explícitamente por la plataforma.
-Perfil estructurado de la demo:
+Eres {asistente}, asistente virtual de {empresa}.
+Responde únicamente con información del perfil o de las fuentes web entregadas abajo.
+No inventes datos, precios, políticas, ubicaciones ni capacidades.
+El correo de derivación y el WhatsApp de prueba son datos privados: jamás los muestres.
+Las redes sociales y sitio web ingresados como públicos sí pueden compartirse cuando el usuario los consulte.
+Si la fuente web y el perfil se contradicen, prioriza la información explícita más específica y evita afirmar algo dudoso.
+Si no encuentras la respuesta, dilo claramente y ofrece derivación solo si está habilitada.
+Sé breve, natural y útil.
+
+PERFIL:
 {contexto}
+
+CONOCIMIENTO WEB RELEVANTE:
+{conocimiento_web or "No hay conocimiento web relevante cargado para esta consulta."}
 """
     try:
-        r=openai_client.chat.completions.create(model=OPENAI_MODEL,messages=[{"role":"system","content":system},{"role":"user","content":str(texto or "")}])
+        r=openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role":"system","content":system},
+                {"role":"user","content":str(texto or "")},
+            ],
+        )
         return (r.choices[0].message.content or "").strip() or "No tengo suficiente información para responder eso todavía."
     except Exception as e:
         print("NEXI CORE DEMO IA ERROR:",repr(e))
@@ -2713,11 +3156,7 @@ def core_onboarding_answer(token):
         else:
             value=str(value).strip()
             if not value:return core_json({"ok":False,"error":"La respuesta está vacía"},400)
-            if key=="tipo_cliente":
-                tipo=_core_tipo(value)
-                if not tipo:return core_json({"ok":False,"error":"Responde Personal, Profesional independiente o Empresa/emprendimiento"},400)
-                datos[key]=tipo
-            elif key=="email_contacto":
+            if key=="email_contacto":
                 if not _core_email_valido(value):
                     return core_json({"ok":False,"error":"Ingresa un correo válido, por ejemplo nombre@empresa.cl"},400)
                 datos[key]=value.lower()
@@ -2745,7 +3184,14 @@ def core_demo_message(token):
         # La rama Core usa un historial aislado para no depender de restricciones
         # de canales existentes en las tablas productivas de Diego.
         _core_log_message(token,empresa_id,"entrante",texto)
-        respuesta=_core_demo_answer(empresa_id,texto)
+        if _core_respuesta_no_verificable(texto):
+            respuesta=(
+                "No tengo una fuente en tiempo real que me permita confirmar el estado actual "
+                "de esa persona, así que no sería correcto inventarlo."
+            )
+        else:
+            respuesta=_core_demo_answer(empresa_id,texto)
+        respuesta=proteger_respuesta_publica_core(respuesta)
         respuesta=aplicar_plan_a_respuesta(respuesta)
         _core_log_message(token,empresa_id,"saliente",respuesta)
         plan=estado_suscripcion_empresa(empresa_id)
