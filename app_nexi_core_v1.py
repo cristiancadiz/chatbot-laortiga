@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.6.1-50-TOTAL-MESSAGES"
+APP_VERSION = "2026-09-10-NEXI-V1.6.2-RECURSION-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -346,11 +346,6 @@ def mensaje_demo_finalizada(motivo=None):
         "Gracias por probar Nexia 💙. Si quieres seguir usando tu asistente, "
         "puedes activar un plan desde tu Portal Nexia o solicitar ayuda a un ejecutivo."
     )
-
-
-def preparar_mensaje_saliente_demo(respuesta):
-    """Compatibilidad: prepara y contabiliza un mensaje saliente de la demo."""
-    return preparar_mensaje_saliente_demo(respuesta)
 
 
 def activar_demo_empresa(empresa_id, identificador_cliente=None, canal="whatsapp"):
@@ -3229,7 +3224,11 @@ def _core_log_orchestration(empresa_id, token, canal, texto, agente):
         )
         r.raise_for_status()
     except Exception as e:
-        print("NEXI ORCHESTRATION LOG SKIP:", repr(e))
+        # La auditoría del orquestador es opcional y nunca debe botar la conversación.
+        if "404" in str(e):
+            print("NEXI ORCHESTRATION LOG: tabla nexi_core_orquestacion no instalada; se omite auditoría.")
+        else:
+            print("NEXI ORCHESTRATION LOG SKIP:", repr(e))
 
 
 def _core_orchestrate(empresa_id, texto, token=None, canal="web"):
