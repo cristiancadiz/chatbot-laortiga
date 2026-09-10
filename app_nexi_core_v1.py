@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.6.3-HANDOFF-CANCEL"
+APP_VERSION = "2026-09-10-NEXI-V1.8-ROUTER-SUPERIOR"
 load_dotenv()
 
 app = Flask(__name__)
@@ -104,6 +104,11 @@ INSTAGRAM_API_BASE = os.getenv("INSTAGRAM_API_BASE", "https://graph.instagram.co
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://nappdpkjtdzwtiuvrrhk.supabase.co").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 DEFAULT_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "97be347a-51d6-467d-be49-839a254a4ad0")
+# Router superior WhatsApp: permite que un solo número atienda Diego, demos y nuevos negocios.
+DIEGO_EMPRESA_ID = os.getenv("DIEGO_EMPRESA_ID", DEFAULT_EMPRESA_ID).strip()
+NEXIA_ROUTER_SUPERIOR_ACTIVO = os.getenv("NEXIA_ROUTER_SUPERIOR_ACTIVO", "true").strip().lower() in {"1", "true", "yes", "si", "sí"}
+NEXIA_ROUTER_CONTEXTO_HORAS = int(os.getenv("NEXIA_ROUTER_CONTEXTO_HORAS", "24"))
+NEXIA_DEMO_URL = os.getenv("NEXIA_DEMO_URL", "https://nexia-tech.com").strip()
 # Empresa administrativa/superadmin histórica. Se mantiene separada del cliente Nexia.
 ADMIN_EMPRESA_ID = os.getenv(
     "ADMIN_EMPRESA_ID",
@@ -592,6 +597,302 @@ def proteger_respuesta_publica_nexia(texto):
 def normalizar_telefono(valor):
     valor = (valor or "").strip()
     return valor[len("whatsapp:"):] if valor.startswith("whatsapp:") else valor
+
+
+# ============================================================
+# NEXI V1.8 - ROUTER SUPERIOR DE CONVERSACIONES WHATSAPP
+# ============================================================
+# El teléfono identifica a la persona; este router guarda con qué negocio está
+# hablando en ese momento. Así un mismo número receptor puede servir a Diego,
+# demos y clientes Nexia sin mezclar contexto, datos ni herramientas.
+
+ROUTER_MENU_COMMANDS = {
+    "menu", "menu principal", "inicio nexia", "cambiar negocio",
+    "cambiar de negocio", "cambiar empresa", "recepcion", "recepción",
+}
+ROUTER_DIEGO_COMMANDS = {"diego", "diego estilista", "hablar con diego"}
+ROUTER_DEMO_COMMANDS = {"mi demo", "demo", "probar mi demo", "probar demo"}
+
+
+def _router_identificador(valor):
+    return re.sub(r"\D", "", normalizar_telefono(str(valor or "")))
+
+
+def _router_headers(prefer=None):
+    h = backend_headers()
+    if not h:
+        return None
+    h = dict(h)
+    if prefer:
+        h["Prefer"] = prefer
+    return h
+
+
+def _router_tabla_no_disponible(resp):
+    return bool(resp is not None and getattr(resp, "status_code", None) in {404})
+
+
+def router_demo_access_sin_activar(telefono):
+    """Busca la demo activa del usuario sin cambiar todavía el tenant global."""
+    headers = _router_headers()
+    ident = _router_identificador(telefono)
+    if not headers or not ident:
+        return None
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/demo_accesos",
+            headers=headers,
+            params={
+                "select": "empresa_id,canal,identificador_cliente,activo,inicio,fin",
+                "canal": "eq.whatsapp",
+                "identificador_cliente": f"eq.{ident}",
+                "activo": "eq.true",
+                "order": "created_at.desc",
+                "limit": "1",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows = r.json() if r.content else []
+        if not rows:
+            return None
+        row = dict(rows[0])
+        fin = _parse_iso(row.get("fin"))
+        if fin and datetime.now(pytz.UTC) >= fin.astimezone(pytz.UTC):
+            return None
+        return row
+    except Exception as e:
+        print("NEXI ROUTER DEMO LOOKUP ERROR:", repr(e))
+        return None
+
+
+def router_contexto_obtener(telefono):
+    headers = _router_headers()
+    ident = _router_identificador(telefono)
+    if not headers or not ident:
+        return None
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/nexi_router_sesiones",
+            headers=headers,
+            params={
+                "select": "*",
+                "canal": "eq.whatsapp",
+                "identificador_cliente": f"eq.{ident}",
+                "activo": "eq.true",
+                "limit": "1",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if _router_tabla_no_disponible(r):
+            return None
+        r.raise_for_status()
+        rows = r.json() if r.content else []
+        if not rows:
+            return None
+        row = dict(rows[0])
+        updated = _parse_iso(row.get("updated_at"))
+        if updated and NEXIA_ROUTER_CONTEXTO_HORAS > 0:
+            edad_horas = (datetime.now(pytz.UTC) - updated.astimezone(pytz.UTC)).total_seconds() / 3600
+            if edad_horas >= NEXIA_ROUTER_CONTEXTO_HORAS:
+                router_contexto_borrar(telefono)
+                return None
+        return row
+    except Exception as e:
+        print("NEXI ROUTER CONTEXTO GET ERROR:", repr(e))
+        return None
+
+
+def router_contexto_guardar(telefono, empresa_id, motor="core", origen="menu", codigo=None):
+    headers = _router_headers("resolution=merge-duplicates,return=representation")
+    ident = _router_identificador(telefono)
+    empresa_id = str(empresa_id or "").strip()
+    if not headers or not ident or not empresa_id:
+        return None
+    ahora = datetime.now(pytz.UTC).isoformat()
+    payload = {
+        "canal": "whatsapp",
+        "identificador_cliente": ident,
+        "empresa_id": empresa_id,
+        "motor": str(motor or "core").lower(),
+        "origen": str(origen or "menu"),
+        "codigo": str(codigo or "").strip() or None,
+        "activo": True,
+        "updated_at": ahora,
+    }
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/nexi_router_sesiones",
+            headers=headers,
+            params={"on_conflict": "canal,identificador_cliente"},
+            json=payload,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if _router_tabla_no_disponible(r):
+            return payload
+        r.raise_for_status()
+        rows = r.json() if r.content else []
+        return rows[0] if rows else payload
+    except Exception as e:
+        print("NEXI ROUTER CONTEXTO SAVE ERROR:", repr(e))
+        return payload
+
+
+def router_contexto_borrar(telefono):
+    headers = _router_headers("return=minimal")
+    ident = _router_identificador(telefono)
+    if not headers or not ident:
+        return False
+    try:
+        r = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/nexi_router_sesiones",
+            headers=headers,
+            params={"canal": "eq.whatsapp", "identificador_cliente": f"eq.{ident}"},
+            json={"activo": False, "updated_at": datetime.now(pytz.UTC).isoformat()},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if _router_tabla_no_disponible(r):
+            return False
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        print("NEXI ROUTER CONTEXTO CLEAR ERROR:", repr(e))
+        return False
+
+
+def router_destino_por_codigo(codigo):
+    """Resuelve links/botones de clientes: wa.me/...?...text=NEXI%20CODIGO."""
+    headers = _router_headers()
+    codigo = re.sub(r"[^A-Z0-9_-]", "", str(codigo or "").upper())
+    if not headers or not codigo:
+        return None
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/nexi_router_destinos",
+            headers=headers,
+            params={
+                "select": "empresa_id,codigo,nombre_publico,motor,activo",
+                "codigo": f"eq.{codigo}",
+                "activo": "eq.true",
+                "limit": "1",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if _router_tabla_no_disponible(r):
+            return None
+        r.raise_for_status()
+        rows = r.json() if r.content else []
+        return dict(rows[0]) if rows else None
+    except Exception as e:
+        print("NEXI ROUTER DESTINO ERROR:", repr(e))
+        return None
+
+
+def router_codigo_desde_texto(texto):
+    raw = str(texto or "").strip()
+    m = re.fullmatch(r"(?i)(?:NEXI|NEGOCIO)\s+([A-Z0-9_-]{3,40})", raw)
+    return m.group(1).upper() if m else None
+
+
+def router_menu_superior(telefono):
+    demo = router_demo_access_sin_activar(telefono)
+    lineas = [
+        "Hola 👋 Bienvenido a Nexia.",
+        "¿Con quién quieres hablar?",
+        "",
+        "1. Diego Estilista",
+    ]
+    if demo:
+        lineas.append("2. Mi demo de Nexia")
+    lineas += [
+        "",
+        "Si llegaste desde otro negocio, usa el botón o enlace que ese negocio te compartió.",
+        "En cualquier momento escribe *MENU* para cambiar de negocio.",
+    ]
+    return "\n".join(lineas)
+
+
+def router_bienvenida_contexto(route):
+    empresa_id = str((route or {}).get("empresa_id") or "").strip()
+    motor = str((route or {}).get("motor") or "core").lower()
+    if not empresa_id:
+        return router_menu_superior("")
+    activar_por_empresa(empresa_id, canal="whatsapp", provider="router")
+    if motor == "legacy":
+        reset_estado(str((route or {}).get("telefono") or ""))
+        return mensaje_bienvenida()
+    empresa = str(cfg("empresa_nombre", "este negocio") or "este negocio").strip()
+    asistente = str(cfg("asistente_nombre", "asistente virtual") or "asistente virtual").strip()
+    return (
+        f"Listo 🙌 Estás conversando con {empresa}.\n"
+        f"Soy {asistente}, su asistente virtual. ¿En qué te puedo ayudar?\n\n"
+        "Escribe *MENU* cuando quieras cambiar de negocio."
+    )
+
+
+def router_superior_resolver(telefono, texto):
+    """Devuelve accion=menu|seleccionado|ruta y la empresa/motor cuando corresponda."""
+    if not NEXIA_ROUTER_SUPERIOR_ACTIVO:
+        demo = router_demo_access_sin_activar(telefono)
+        if demo:
+            return {"accion": "ruta", "empresa_id": demo.get("empresa_id"), "motor": "core", "origen": "demo", "demo_access": demo}
+        return {"accion": "ruta", "empresa_id": DIEGO_EMPRESA_ID, "motor": "legacy", "origen": "legacy"}
+
+    t = normalizar_texto(texto)
+    if t in {normalizar_texto(x) for x in ROUTER_MENU_COMMANDS}:
+        router_contexto_borrar(telefono)
+        return {"accion": "menu", "respuesta": router_menu_superior(telefono)}
+
+    actual = router_contexto_obtener(telefono)
+    if actual:
+        actual = dict(actual)
+        actual["accion"] = "ruta"
+        if str(actual.get("origen") or "") == "demo":
+            actual["demo_access"] = router_demo_access_sin_activar(telefono)
+            if not actual.get("demo_access"):
+                router_contexto_borrar(telefono)
+                return {"accion": "menu", "respuesta": router_menu_superior(telefono)}
+        return actual
+
+    # Sin contexto activo, estas palabras son selecciones de recepción.
+    if t == "1" or t in {normalizar_texto(x) for x in ROUTER_DIEGO_COMMANDS}:
+        row = router_contexto_guardar(telefono, DIEGO_EMPRESA_ID, motor="legacy", origen="diego") or {}
+        row.update({"accion": "seleccionado", "empresa_id": DIEGO_EMPRESA_ID, "motor": "legacy", "telefono": telefono})
+        return row
+
+    if t == "2" or t in {normalizar_texto(x) for x in ROUTER_DEMO_COMMANDS}:
+        demo = router_demo_access_sin_activar(telefono)
+        if not demo:
+            return {
+                "accion": "menu",
+                "respuesta": "No encontré una demo activa asociada a este WhatsApp.\n\n" + router_menu_superior(telefono),
+            }
+        empresa_id = str(demo.get("empresa_id") or "")
+        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="demo") or {}
+        row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": "core", "demo_access": demo, "telefono": telefono})
+        return row
+
+    codigo = router_codigo_desde_texto(texto)
+    if codigo:
+        destino = router_destino_por_codigo(codigo)
+        if not destino:
+            return {"accion": "menu", "respuesta": "Ese acceso no está disponible o ya no es válido.\n\n" + router_menu_superior(telefono)}
+        empresa_id = str(destino.get("empresa_id") or "")
+        motor = str(destino.get("motor") or "core").lower()
+        row = router_contexto_guardar(telefono, empresa_id, motor=motor, origen="codigo", codigo=codigo) or {}
+        row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": motor, "codigo": codigo, "telefono": telefono})
+        return row
+
+    # Primera entrada sin contexto: recepción. "Hola" no queda amarrado a Diego.
+    return {"accion": "menu", "respuesta": router_menu_superior(telefono)}
+
+
+def router_activar_ruta(route, provider):
+    empresa_id = str((route or {}).get("empresa_id") or "").strip()
+    if not empresa_id:
+        raise RuntimeError("Router sin empresa_id")
+    activar_por_empresa(empresa_id, canal="whatsapp", provider=provider)
+    return empresa_id
 
 
 # ============================================================
@@ -3731,9 +4032,10 @@ def whatsapp_webhook():
     twiml = MessagingResponse()
     try:
         to_numero = re.sub(r"\D", "", str(request.form.get("To") or TWILIO_WHATSAPP_FROM))
+        # Conserva la resolución por número receptor como fallback, pero el router
+        # superior decide el tenant activo de esta conversación.
         activar_por_canal("whatsapp", "twilio", to_numero)
         telefono = (request.form.get("From") or "").strip()
-        demo_access = activar_demo_por_contacto(telefono, "whatsapp")
         texto = (request.form.get("Body") or "").strip()
         message_id = (request.form.get("MessageSid") or "").strip()
 
@@ -3758,9 +4060,21 @@ def whatsapp_webhook():
         if not telefono:
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
-        # Nexi Core V1.1: si este teléfono está asociado a una demo,
-        # usa SU perfil y SU contador; no entra al flujo legacy de Diego.
-        if demo_access:
+        # V1.8: capa superior. El mismo número puede atender Diego, una demo o
+        # cualquier nuevo negocio registrado en nexi_router_destinos.
+        route = router_superior_resolver(telefono, texto)
+        if route.get("accion") == "menu":
+            twiml.message(route.get("respuesta") or router_menu_superior(telefono))
+            return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+        router_activar_ruta(route, "twilio")
+
+        if route.get("accion") == "seleccionado":
+            twiml.message(router_bienvenida_contexto(route))
+            return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+        if str(route.get("motor") or "core").lower() != "legacy":
+            demo_access = route.get("demo_access") or {"empresa_id": route.get("empresa_id")}
             if texto:
                 control_entrada = consumir_mensaje_entrante_demo()
                 if not bool(control_entrada.get("permitido", True)):
@@ -3768,7 +4082,7 @@ def whatsapp_webhook():
                 else:
                     respuesta = _core_responder_demo_whatsapp(demo_access, telefono, texto)
             else:
-                respuesta = "¡Hola! 👋 Tu demo de Nexia está activa. Escríbeme una consulta para probar tu asistente."
+                respuesta = router_bienvenida_contexto({**route, "telefono": telefono})
             if respuesta:
                 twiml.message(respuesta)
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
@@ -3950,7 +4264,6 @@ def gupshup_webhook():
         payload = data.get("payload") or {}
         message_id = (payload.get("id") or "").strip()
         telefono = str(payload.get("source") or (payload.get("sender") or {}).get("phone") or "").strip()
-        demo_access = activar_demo_por_contacto(telefono, "whatsapp")
         tipo = (payload.get("type") or "").strip().lower()
         contenido = payload.get("payload") or {}
 
@@ -3978,16 +4291,37 @@ def gupshup_webhook():
         if not telefono:
             return "OK", 200
 
-        # Nexi Core V1.1: las demos vinculadas por teléfono usan el Core y
-        # quedan totalmente separadas del flujo productivo/legacy.
-        if demo_access and tipo == "text" and texto:
-            respuesta = _core_responder_demo_whatsapp(demo_access, telefono, texto)
-            enviar_gupshup_texto(telefono, respuesta)
-            return "OK", 200
+        # V1.8: recepción superior compartida para Diego, demos y nuevos negocios.
+        if tipo == "text":
+            route = router_superior_resolver(telefono, texto)
+            if route.get("accion") == "menu":
+                enviar_gupshup_texto(telefono, route.get("respuesta") or router_menu_superior(telefono))
+                return "OK", 200
 
-        # Por ahora el bot conversa por texto. Si llega imagen/audio/documento,
-        # respondemos indicando que escriba el mensaje para mantener el flujo estable.
+            router_activar_ruta(route, "gupshup")
+
+            if route.get("accion") == "seleccionado":
+                enviar_gupshup_texto(telefono, router_bienvenida_contexto(route))
+                return "OK", 200
+
+            if str(route.get("motor") or "core").lower() != "legacy":
+                demo_access = route.get("demo_access") or {"empresa_id": route.get("empresa_id")}
+                control_entrada = consumir_mensaje_entrante_demo()
+                if not bool(control_entrada.get("permitido", True)):
+                    respuesta = mensaje_demo_finalizada(control_entrada.get("motivo"))
+                else:
+                    respuesta = _core_responder_demo_whatsapp(demo_access, telefono, texto)
+                enviar_gupshup_texto(telefono, respuesta)
+                return "OK", 200
+
+        # Para multimedia conservamos el tenant activo del router. Si todavía no
+        # hay contexto, mostramos recepción en lugar de caer accidentalmente en Diego.
         if tipo != "text":
+            route = router_superior_resolver(telefono, "")
+            if route.get("accion") == "menu":
+                enviar_gupshup_texto(telefono, route.get("respuesta") or router_menu_superior(telefono))
+                return "OK", 200
+            router_activar_ruta(route, "gupshup")
             respuesta = (
                 "Por ahora puedo ayudarte por texto 😊. "
                 + ("Escríbeme tu consulta, servicio o la fecha en que quieres agendar."
