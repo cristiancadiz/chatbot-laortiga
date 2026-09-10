@@ -4,16 +4,17 @@ import html
 import json
 import hmac
 import hashlib
+import base64
 from datetime import datetime, timedelta
 from threading import Lock
 from contextvars import ContextVar
-from urllib.parse import urljoin, urlparse, urldefrag
+from urllib.parse import urljoin, urlparse, urldefrag, urlencode
 from html.parser import HTMLParser
 
 import pytz
 import requests
 from dotenv import load_dotenv
-from flask import Flask, request
+from flask import Flask, request, redirect
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from openai import OpenAI
@@ -22,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.0-PLANES-MERCADOPAGO"
+APP_VERSION = "2026-09-10-NEXI-V2.1-CALENDAR-MULTIEMPRESA"
 load_dotenv()
 
 app = Flask(__name__)
@@ -369,11 +370,11 @@ def preparar_mensaje_saliente_demo(mensaje):
         aviso = None
         if tipo == "demo":
             if restantes == 20:
-                aviso = "\n\nℹ️ Tu demo de Nexia tiene 20 mensajes disponibles."
+                aviso = "\n\nℹ️ Tu prueba de Nexia tiene 20 mensajes disponibles."
             elif restantes == 5:
-                aviso = "\n\n⚠️ Te quedan 5 mensajes en tu demo de Nexia."
+                aviso = "\n\n⚠️ Te quedan 5 mensajes en tu prueba de Nexia."
             elif restantes == 1:
-                aviso = "\n\n⚠️ Te queda 1 mensaje en tu demo de Nexia."
+                aviso = "\n\n⚠️ Te queda 1 mensaje en tu prueba de Nexia."
         elif tipo in {"nexia_500", "nexia_1000"}:
             if restantes == 50:
                 aviso = "\n\nℹ️ Tu plan Nexia tiene 50 mensajes disponibles."
@@ -406,7 +407,7 @@ def mensaje_demo_finalizada(motivo=None):
     elif motivo == "limite":
         detalle = "Ya utilizaste las 50 mensajes gratuitos incluidas en tu prueba."
     else:
-        detalle = "Tu demostración gratuita de Nexia ya finalizó."
+        detalle = "Tu prueba gratuita de Nexia ya finalizó."
     return (
         f"{detalle}\n\n"
         "Gracias por probar Nexia 💙. Si quieres seguir usando tu asistente, "
@@ -864,7 +865,7 @@ def router_menu_superior(telefono):
         "1. Diego Estilista",
     ]
     if demo:
-        lineas.append("2. Mi demo de Nexia")
+        lineas.append("2. Mi asistente Nexia")
     lineas += [
         "",
         "Si llegaste desde otro negocio, usa el botón o enlace que ese negocio te compartió.",
@@ -926,7 +927,7 @@ def router_superior_resolver(telefono, texto):
         if not demo:
             return {
                 "accion": "menu",
-                "respuesta": "No encontré una demo activa asociada a este WhatsApp.\n\n" + router_menu_superior(telefono),
+                "respuesta": "No encontré una prueba activa asociada a este WhatsApp.\n\n" + router_menu_superior(telefono),
             }
         empresa_id = str(demo.get("empresa_id") or "")
         row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="demo") or {}
@@ -1113,9 +1114,56 @@ GOOGLE_SCOPES = [
 ]
 
 
+def google_calendar_conexion(empresa_id=None):
+    """Obtiene la conexión privada de Google Calendar para la empresa actual.
+
+    La tabla solo se consulta desde backend con SERVICE_ROLE. Los refresh tokens
+    nunca se devuelven al Portal.
+    """
+    empresa_id = str(empresa_id or empresa_actual_id() or "").strip()
+    headers = backend_headers()
+    if not empresa_id or not headers:
+        return None
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/google_calendar_conexiones",
+            headers=headers,
+            params={
+                "select": "empresa_id,google_email,calendar_id,calendar_nombre,refresh_token,access_token,token_expiry,activo,updated_at",
+                "empresa_id": f"eq.{empresa_id}",
+                "activo": "eq.true",
+                "limit": "1",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        rows = r.json() if r.content else []
+        return rows[0] if rows else None
+    except Exception as e:
+        print("GOOGLE CALENDAR CONNECTION ERROR:", repr(e))
+        return None
+
+
 def google_credentials():
+    # 1) Cliente/empresa con OAuth propio.
+    conn = google_calendar_conexion()
+    if conn and conn.get("refresh_token"):
+        if not all([GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET]):
+            raise RuntimeError("Faltan GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET en Render")
+        return Credentials(
+            token=conn.get("access_token") or None,
+            refresh_token=conn.get("refresh_token"),
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=GOOGLE_CLIENT_ID,
+            client_secret=GOOGLE_CLIENT_SECRET,
+            scopes=GOOGLE_SCOPES,
+        )
+
+    # 2) Compatibilidad con Diego/legacy: conserva el refresh token global actual.
     if not all([GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN]):
-        raise RuntimeError("Faltan credenciales de Google Calendar en Render")
+        raise RuntimeError("Google Calendar no está conectado para esta empresa")
     return Credentials(
         token=None,
         refresh_token=GOOGLE_REFRESH_TOKEN,
@@ -1126,8 +1174,23 @@ def google_credentials():
     )
 
 
+def google_calendar_id_actual():
+    conn = google_calendar_conexion()
+    if conn and conn.get("calendar_id"):
+        return str(conn.get("calendar_id"))
+    return str(cfg("calendar_id", DEFAULT_CALENDAR_ID) or DEFAULT_CALENDAR_ID)
+
+
 def calendar_service():
     return build("calendar", "v3", credentials=google_credentials(), cache_discovery=False)
+
+
+def negocio_tiene_calendar_real():
+    """True si el tenant tiene OAuth propio o es legacy con Calendar global configurado."""
+    if google_calendar_conexion():
+        return True
+    # Compatibilidad solo para el tenant productivo que ya usaba las credenciales globales.
+    return bool(GOOGLE_REFRESH_TOKEN and str(empresa_actual_id()) == str(DEFAULT_EMPRESA_ID))
 
 
 def es_dia_atencion(fecha):
@@ -1137,7 +1200,7 @@ def es_dia_atencion(fecha):
 def eventos_ocupados(inicio_rango, fin_rango):
     service = calendar_service()
     data = service.events().list(
-        calendarId=cfg("calendar_id", DEFAULT_CALENDAR_ID),
+        calendarId=google_calendar_id_actual(),
         timeMin=inicio_rango.isoformat(),
         timeMax=fin_rango.isoformat(),
         singleEvents=True,
@@ -1259,7 +1322,7 @@ def crear_evento(inicio, servicio_codigo, nombre, telefono, correo):
     }
     try:
         resultado = calendar_service().events().insert(
-            calendarId=cfg("calendar_id", DEFAULT_CALENDAR_ID),
+            calendarId=google_calendar_id_actual(),
             body=body,
             sendUpdates="all",
         ).execute()
@@ -2294,7 +2357,7 @@ def procesar_agenda(estado, texto):
     if es_cancelar(texto):
         telefono = estado["telefono"]
         reset_estado(telefono)
-        return "No hay problema 😊. Cuando quieras agendar una hora con Diego, escríbeme nuevamente."
+        return "No hay problema 😊. Cuando quieras agendar una hora, escríbeme nuevamente."
 
     # 1) SERVICIO
     if estado["paso"] in {"inicio", "servicio"}:
@@ -2606,7 +2669,7 @@ CORE_QUESTIONS = {
     "email_contacto": {
         "text": "¿Qué correo quieres usar para tu acceso al Portal Nexia?",
         "kind": "email",
-        "help": "Usaremos este correo para asociar tu acceso al Portal Nexia y también para enviarte avisos de derivación durante la demo. Este dato es privado y nunca se mostrará a tus clientes.",
+        "help": "Usaremos este correo para asociar tu acceso al Portal Nexia y también para enviarte avisos durante tu prueba gratuita. Este dato es privado y nunca se mostrará a tus clientes.",
     },
     "tono": {
         "text": "¿Cómo quieres que se comunique Nexi?",
@@ -2865,7 +2928,7 @@ def _core_handoff_request(empresa_id, identificador, canal, datos, motivo):
           <p style="margin:24px 0 8px">
             <a href="{html.escape(portal_url)}" style="display:inline-block;background:#111827;color:white;text-decoration:none;padding:13px 20px;border-radius:10px;font-weight:700">Abrir conversación</a>
           </p>
-          <p style="font-size:12px;color:#6b7280">{"Acceso temporal de demo: este enlace abre el Portal sin contraseña." if demo_portal_token else "Por seguridad, el acceso de clientes permanentes requiere iniciar sesión."} La conversación se toma manualmente dentro del portal.</p>
+          <p style="font-size:12px;color:#6b7280">{"Acceso temporal: este enlace abre el Portal sin contraseña durante tu prueba gratuita." if demo_portal_token else "Por seguridad, el acceso de clientes permanentes requiere iniciar sesión."} La conversación se toma manualmente dentro del portal.</p>
         </div>
         """
         enviar_correo_resend(correo, asunto, texto=texto_mail, html_body=html_mail)
@@ -3171,19 +3234,19 @@ def _core_create_company_from_session(session):
         return str(session["empresa_id"])
 
     tipo="empresa"
-    empresa_nombre=(datos.get("nombre_negocio") or datos.get("nombre_contacto") or "Demo Nexia").strip()
+    empresa_nombre=(datos.get("nombre_negocio") or datos.get("nombre_contacto") or "Nexia").strip()
     now=datetime.now(pytz.UTC).isoformat()
 
     er=requests.post(
         f"{SUPABASE_URL}/rest/v1/empresas",
         headers=_core_headers("return=representation"),
-        json={"nombre":f"{empresa_nombre} · Demo","activo":True},
+        json={"nombre":f"{empresa_nombre}","activo":True},
         timeout=SUPABASE_TIMEOUT,
     )
     er.raise_for_status()
     empresa=(er.json() or [None])[0]
     if not empresa:
-        raise RuntimeError("No se pudo crear empresa demo")
+        raise RuntimeError("No se pudo crear la empresa para la prueba")
     empresa_id=str(empresa["id"])
 
     objetivos=str(datos.get("objetivo") or "")
@@ -3480,7 +3543,7 @@ def _core_route_intent(texto, datos):
 
 def _core_agent_context(empresa_id, texto):
     perfil, datos = _core_public_profile(empresa_id)
-    empresa = cfg("empresa_nombre", "Demo Nexia")
+    empresa = cfg("empresa_nombre", "Nexia")
     asistente = cfg("asistente_nombre", "Nexi")
     conocimiento_web = _core_conocimiento_web(empresa_id, texto)
     return {
@@ -3604,7 +3667,7 @@ def _core_agent_agenda(empresa_id, texto, ctx=None):
         (
             "Orienta sobre agenda o reservas usando únicamente la configuración disponible. "
             f"Configuración declarada de agenda: {agenda_txt}. "
-            "En esta demo no afirmes que una reserva quedó creada ni que una hora está disponible "
+            "Durante la prueba no afirmes que una reserva quedó creada ni que una hora está disponible "
             "si no existe una confirmación real de calendario. Puedes pedir la fecha/hora deseada "
             "como intención de reserva y explicar las condiciones conocidas."
         ),
@@ -3965,7 +4028,19 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
             "a ella como información previa, pero no como una confirmación actual."
         )
     else:
-        respuesta, agente_usado = _core_orchestrate(empresa_id, texto, token=token, canal="whatsapp")
+        # Si esta empresa conectó Google Calendar y tiene servicios reales configurados,
+        # el agente de agenda usa disponibilidad y creación de eventos reales.
+        # Sin conexión, conserva el flujo de solicitud/orientación del Core.
+        agente_previsto = _core_route_intent(texto, datos_perfil)
+        if agente_previsto == "agenda" and negocio_tiene_calendar_real() and bool(cfg("servicios")):
+            session_key = f"core:{empresa_id}:{_normalizar_identificador_demo(telefono, 'whatsapp')}"
+            estado = get_estado(session_key)
+            estado["telefono"] = telefono
+            respuesta = procesar_agenda(estado, texto)
+            agente_usado = "agenda"
+            print("NEXI CORE CALENDAR REAL:", empresa_id, google_calendar_id_actual())
+        else:
+            respuesta, agente_usado = _core_orchestrate(empresa_id, texto, token=token, canal="whatsapp")
 
         # Si el agente termina ofreciendo handoff, dejamos contexto pendiente para que "sí" tenga sentido.
         nr=normalizar_texto(respuesta)
@@ -4089,7 +4164,7 @@ def core_demo_message(token):
     try:
         s=_core_get_session(token)
         if not s or not s.get("empresa_id"):
-            return core_json({"ok":False,"error":"La demo todavía no está creada"},409)
+            return core_json({"ok":False,"error":"Tu prueba todavía no está activa"},409)
 
         empresa_id=str(s["empresa_id"])
         activar_por_empresa(empresa_id,canal="web",provider="nexi_core")
@@ -4145,7 +4220,7 @@ def core_demo_status(token):
     if request.method=="OPTIONS":return core_json({"ok":True},204)
     try:
         s=_core_get_session(token)
-        if not s:return core_json({"ok":False,"error":"Demo no encontrada"},404)
+        if not s:return core_json({"ok":False,"error":"Prueba no encontrada"},404)
         plan=estado_suscripcion_empresa(s.get("empresa_id")) if s.get("empresa_id") else None
         return core_json({"ok":True,"session":s,"plan":plan,"whatsapp":_core_whatsapp_info(s.get("empresa_id"))})
     except Exception as e:return core_json({"ok":False,"error":str(e)[:300]},500)
@@ -5012,9 +5087,9 @@ def portal_usuario_autorizado():
     """
     Valida acceso al Portal. Soporta:
     1) sesión normal Supabase Auth (correo + contraseña);
-    2) acceso temporal de demo sin contraseña mediante X-Demo-Token.
+    2) acceso temporal de prueba sin contraseña mediante X-Demo-Token.
 
-    El token demo corresponde al token aleatorio del onboarding y solo es
+    El token temporal corresponde al token aleatorio del onboarding y solo es
     válido mientras la empresa tenga una demo activa.
     """
     demo_token = str(request.headers.get("X-Demo-Token") or "").strip()
@@ -5054,21 +5129,21 @@ def portal_usuario_autorizado():
                 except Exception as e:
                     print("PORTAL CONVERSION AUTH SKIP:", repr(e))
                 if not acceso_conversion:
-                    print("PORTAL DEMO AUTH: demo no activa", empresa_id)
+                    print("PORTAL DEMO AUTH: prueba no activa", empresa_id)
                     return None
             elif estado_plan != "activo":
-                print("PORTAL DEMO AUTH: demo no activa", empresa_id)
+                print("PORTAL DEMO AUTH: prueba no activa", empresa_id)
                 return None
             if tipo_plan == "demo":
                 fin = _parse_iso(plan.get("demo_fin"))
                 if fin and datetime.now(pytz.UTC) >= fin.astimezone(pytz.UTC):
-                    print("PORTAL DEMO AUTH: demo vencida", empresa_id)
+                    print("PORTAL DEMO AUTH: prueba vencida", empresa_id)
                     return None
             datos = sesion.get("datos") or {}
             perfil = {
                 "id": f"demo:{demo_token}",
                 "empresa_id": empresa_id,
-                "nombre": str(datos.get("nombre_contacto") or datos.get("nombre_negocio") or "Usuario demo"),
+                "nombre": str(datos.get("nombre_contacto") or datos.get("nombre_negocio") or "Usuario"),
                 "email": str(datos.get("email_contacto") or ""),
                 "rol": "demo",
                 "demo": True,
@@ -5288,7 +5363,7 @@ def portal_crear_acceso_pagado():
     data = request.get_json(silent=True) or {}
     password = str(data.get("password") or "")
     if not email or "@" not in email:
-        return portal_json({"ok": False, "error": "La demo no tiene un correo válido asociado"}, 400)
+        return portal_json({"ok": False, "error": "La prueba no tiene un correo válido asociado"}, 400)
     if len(password) < 8:
         return portal_json({"ok": False, "error": "La contraseña debe tener al menos 8 caracteres"}, 400)
 
@@ -6227,7 +6302,7 @@ def health():
         "calendar": "Google Calendar",
         "payments": "Mercado Pago Checkout Pro",
         "saas": "multiempresa",
-        "demo": f"{DEMO_LIMITE_MENSAJES_DEFAULT} respuestas / {DEMO_DURACION_HORAS_DEFAULT} horas",
+        "prueba_gratuita": f"{DEMO_LIMITE_MENSAJES_DEFAULT} mensajes / {DEMO_DURACION_HORAS_DEFAULT} horas",
         "history": "Supabase",
     }, 200
 
@@ -7061,6 +7136,213 @@ def portal_admin_servicio(servicio_id):
     except Exception as e:
         print("PORTAL ADMIN SERVICIO ERROR:", repr(e))
         return admin_json_error("No se pudo modificar el servicio", 500)
+
+
+# ============================================================
+# NEXIA V2.1 - GOOGLE CALENDAR OAUTH MULTIEMPRESA
+# ============================================================
+GOOGLE_CALENDAR_REDIRECT_URI = os.getenv(
+    "GOOGLE_CALENDAR_REDIRECT_URI",
+    f"{PUBLIC_BACKEND_URL}/oauth/google/calendar/callback",
+).strip()
+GOOGLE_OAUTH_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+
+def _google_state_encode(empresa_id):
+    issued = int(datetime.now(pytz.UTC).timestamp())
+    payload = json.dumps({"empresa_id": str(empresa_id), "iat": issued}, separators=(",", ":"))
+    raw = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    sig = hmac.new(str(app.secret_key).encode(), raw.encode(), hashlib.sha256).hexdigest()
+    return f"{raw}.{sig}"
+
+
+def _google_state_decode(state):
+    try:
+        raw, sig = str(state or "").rsplit(".", 1)
+        expected = hmac.new(str(app.secret_key).encode(), raw.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        padded = raw + "=" * (-len(raw) % 4)
+        data = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+        iat = int(data.get("iat") or 0)
+        if abs(int(datetime.now(pytz.UTC).timestamp()) - iat) > 900:
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def _portal_empresa_para_integracion(perfil, requested_empresa_id=None):
+    if es_superadmin(perfil):
+        eid = str(requested_empresa_id or "").strip()
+        if not eid:
+            raise ValueError("Selecciona una empresa para conectar su Google Calendar")
+        return eid
+    eid = str((perfil or {}).get("empresa_id") or "").strip()
+    if not eid:
+        raise ValueError("Tu usuario no tiene una empresa asociada")
+    return eid
+
+
+@app.route("/portal/integraciones/google-calendar", methods=["GET", "OPTIONS"])
+def portal_google_calendar_estado():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    try:
+        empresa_id = _portal_empresa_para_integracion(perfil, request.args.get("empresa_id"))
+        conn = google_calendar_conexion(empresa_id)
+        if not conn:
+            return portal_json({"ok": True, "conectado": False, "empresa_id": empresa_id})
+        return portal_json({
+            "ok": True,
+            "conectado": True,
+            "empresa_id": empresa_id,
+            "google_email": conn.get("google_email"),
+            "calendar_id": conn.get("calendar_id") or "primary",
+            "calendar_nombre": conn.get("calendar_nombre") or "Calendario principal",
+            "updated_at": conn.get("updated_at"),
+        })
+    except Exception as e:
+        return portal_json({"ok": False, "error": str(e)[:300]}, 400)
+
+
+@app.route("/portal/integraciones/google-calendar/iniciar", methods=["POST", "OPTIONS"])
+def portal_google_calendar_iniciar():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        return portal_json({"ok": False, "error": "Google OAuth no está configurado en Render"}, 500)
+    try:
+        body = request.get_json(silent=True) or {}
+        empresa_id = _portal_empresa_para_integracion(perfil, body.get("empresa_id"))
+        state = _google_state_encode(empresa_id)
+        params = {
+            "client_id": GOOGLE_CLIENT_ID,
+            "redirect_uri": GOOGLE_CALENDAR_REDIRECT_URI,
+            "response_type": "code",
+            "scope": " ".join(GOOGLE_SCOPES + ["openid", "email"]),
+            "access_type": "offline",
+            "prompt": "consent",
+            "include_granted_scopes": "true",
+            "state": state,
+        }
+        return portal_json({"ok": True, "url": GOOGLE_OAUTH_AUTH_URL + "?" + urlencode(params)})
+    except Exception as e:
+        return portal_json({"ok": False, "error": str(e)[:300]}, 400)
+
+
+@app.route("/oauth/google/calendar/callback", methods=["GET"])
+def oauth_google_calendar_callback():
+    code = str(request.args.get("code") or "").strip()
+    state = _google_state_decode(request.args.get("state"))
+    if not code or not state or not state.get("empresa_id"):
+        return redirect(f"{PORTAL_ORIGIN}/portal.html?calendar=error")
+    empresa_id = str(state["empresa_id"])
+    try:
+        tr = requests.post(
+            GOOGLE_OAUTH_TOKEN_URL,
+            data={
+                "code": code,
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uri": GOOGLE_CALENDAR_REDIRECT_URI,
+                "grant_type": "authorization_code",
+            },
+            timeout=20,
+        )
+        tr.raise_for_status()
+        tok = tr.json()
+        refresh_token = str(tok.get("refresh_token") or "").strip()
+        access_token = str(tok.get("access_token") or "").strip()
+        if not refresh_token:
+            previous = google_calendar_conexion(empresa_id)
+            refresh_token = str((previous or {}).get("refresh_token") or "").strip()
+        if not refresh_token:
+            raise RuntimeError("Google no entregó refresh_token. Revoca el acceso anterior y vuelve a conectar.")
+
+        creds = Credentials(
+            token=access_token or None,
+            refresh_token=refresh_token,
+            token_uri=GOOGLE_OAUTH_TOKEN_URL,
+            client_id=GOOGLE_CLIENT_ID,
+            client_secret=GOOGLE_CLIENT_SECRET,
+            scopes=GOOGLE_SCOPES,
+        )
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+        cal = service.calendars().get(calendarId="primary").execute()
+        calendar_id = str(cal.get("id") or "primary")
+        calendar_nombre = str(cal.get("summary") or "Calendario principal")
+
+        google_email = ""
+        try:
+            if access_token:
+                ui = requests.get(
+                    "https://openidconnect.googleapis.com/v1/userinfo",
+                    headers={"Authorization": f"Bearer {access_token}"}, timeout=15,
+                )
+                if ui.ok:
+                    google_email = str((ui.json() or {}).get("email") or "")
+        except Exception:
+            pass
+
+        expires_in = int(tok.get("expires_in") or 3600)
+        token_expiry = (datetime.now(pytz.UTC) + timedelta(seconds=expires_in)).isoformat()
+        payload = {
+            "empresa_id": empresa_id,
+            "google_email": google_email or None,
+            "calendar_id": calendar_id,
+            "calendar_nombre": calendar_nombre,
+            "refresh_token": refresh_token,
+            "access_token": access_token or None,
+            "token_expiry": token_expiry,
+            "scopes": GOOGLE_SCOPES,
+            "activo": True,
+            "updated_at": datetime.now(pytz.UTC).isoformat(),
+        }
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/google_calendar_conexiones",
+            headers={**backend_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+            params={"on_conflict": "empresa_id"},
+            json=payload,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        with TENANT_CACHE_LOCK:
+            TENANT_CACHE.pop(f"empresa:{empresa_id}", None)
+        return redirect(f"{PORTAL_ORIGIN}/portal.html?calendar=connected")
+    except Exception as e:
+        print("GOOGLE CALENDAR OAUTH CALLBACK ERROR:", repr(e))
+        return redirect(f"{PORTAL_ORIGIN}/portal.html?calendar=error")
+
+
+@app.route("/portal/integraciones/google-calendar/desconectar", methods=["POST", "OPTIONS"])
+def portal_google_calendar_desconectar():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    try:
+        body = request.get_json(silent=True) or {}
+        empresa_id = _portal_empresa_para_integracion(perfil, body.get("empresa_id"))
+        r = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/google_calendar_conexiones",
+            headers={**backend_headers(), "Prefer": "return=minimal"},
+            params={"empresa_id": f"eq.{empresa_id}"},
+            json={"activo": False, "updated_at": datetime.now(pytz.UTC).isoformat()},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        return portal_json({"ok": True})
+    except Exception as e:
+        return portal_json({"ok": False, "error": str(e)[:300]}, 400)
 
 
 if __name__ == "__main__":
