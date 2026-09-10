@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.4.1-PAGO-SELECCION-FIX"
+APP_VERSION = "2026-09-10-NEXI-V2.4.2-PAGO-LIST-PICKER-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1415,15 +1415,20 @@ def _resolver_seleccion_pago_whatsapp(request_form, telefono):
     if m:
         return m.group(1).lower(), m.group(2)
 
-    # Fallback para list-picker/cliente WhatsApp que devuelve sólo texto visible.
+    # Fallback para clientes/list-picker que devuelven en Body el bloque completo
+    # del mensaje interactivo + la opción seleccionada, en vez de sólo el título.
     visible = normalizar_texto(button_text or body)
-    codigo = None
-    if visible.startswith("nexia 500"):
-        codigo = "nexia_500"
-    elif visible.startswith("nexia 1000"):
-        codigo = "nexia_1000"
 
-    if not codigo:
+    tiene_500 = bool(re.search(r"\bnexia\s*500\b", visible))
+    tiene_1000 = bool(re.search(r"\bnexia\s*1000\b", visible))
+
+    codigo = None
+    if tiene_500 and not tiene_1000:
+        codigo = "nexia_500"
+    elif tiene_1000 and not tiene_500:
+        codigo = "nexia_1000"
+    else:
+        # Si por algún motivo llegaron ambas opciones o ninguna, no adivinamos.
         return None, None
 
     # Primero usa el contexto activo del Router.
@@ -5190,6 +5195,12 @@ def whatsapp_webhook():
         button_text_log = str(request.form.get("ButtonText") or "").strip()
         if button_text_log:
             print("ButtonText:", button_text_log)
+        # V2.4.2 diagnóstico de interacciones: algunos clientes Twilio envían
+        # la selección en campos distintos o mezclada dentro de Body.
+        for _k in ("ButtonPayload", "ButtonText", "ListId", "ListTitle", "InteractiveData"):
+            _v = str(request.form.get(_k) or "").strip()
+            if _v and _k not in {"ButtonPayload", "ButtonText"}:
+                print(f"{_k}:", _v)
         print("MessageSid:", message_id)
         print("=" * 60)
 
