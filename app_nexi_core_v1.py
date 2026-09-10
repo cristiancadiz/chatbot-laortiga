@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.4.2-PAGO-LIST-PICKER-FIX"
+APP_VERSION = "2026-09-10-NEXI-V2.4.3-LISTID-PAGO-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1272,15 +1272,22 @@ def agenda_payload_a_texto(payload):
 
 def router_payload_interactivo(request_form):
     """Extrae el id de quick-reply/list-picker que Twilio envía al webhook."""
+    # Quick reply / botones
     payload = str(request_form.get("ButtonPayload") or "").strip()
     if payload:
         return payload
-    # Compatibilidad futura con respuestas ricas normalizadas.
+
+    # Twilio list-picker envía la selección en ListId.
+    list_id = str(request_form.get("ListId") or "").strip()
+    if list_id:
+        return list_id
+
+    # Compatibilidad con respuestas ricas normalizadas.
     interactive = str(request_form.get("InteractiveData") or "").strip()
     if interactive:
         try:
             data = json.loads(interactive)
-            for key in ("id", "payload", "button_payload", "buttonPayload"):
+            for key in ("id", "payload", "button_payload", "buttonPayload", "list_id", "listId"):
                 val = data.get(key) if isinstance(data, dict) else None
                 if val:
                     return str(val)
@@ -1402,16 +1409,36 @@ def _resolver_seleccion_pago_whatsapp(request_form, telefono):
     o solamente el texto visible en ButtonText/Body.
     Devuelve (codigo_plan, empresa_id) o (None, None).
     """
-    payload = str(request_form.get("ButtonPayload") or "").strip()
-    button_text = str(request_form.get("ButtonText") or "").strip()
+    payload = str(
+        request_form.get("ButtonPayload")
+        or request_form.get("ListId")
+        or ""
+    ).strip()
+    button_text = str(
+        request_form.get("ButtonText")
+        or request_form.get("ListTitle")
+        or ""
+    ).strip()
     body = str(request_form.get("Body") or "").strip()
 
-    # Camino ideal: payload con plan + empresa.
+    # Algunos logs/copias muestran caracteres escapados con backslash.
+    # Normalizamos sólo para reconocer el identificador interno.
+    payload_match = payload.replace("\\", "")
+    body_match = body.replace("\\", "")
+
+    # Camino ideal: payload/list-id con plan + empresa.
     m = re.fullmatch(
         r"pago:plan:(nexia_500|nexia_1000):([0-9a-fA-F-]{36})",
-        payload,
+        payload_match,
         flags=re.IGNORECASE,
     )
+    if not m:
+        # Fallback: algunos clientes reflejan el id en Body.
+        m = re.fullmatch(
+            r"pago:plan:(nexia_500|nexia_1000):([0-9a-fA-F-]{36})",
+            body_match,
+            flags=re.IGNORECASE,
+        )
     if m:
         return m.group(1).lower(), m.group(2)
 
