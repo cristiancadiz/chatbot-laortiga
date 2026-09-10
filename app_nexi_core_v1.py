@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.4-PAGO-WHATSAPP-INTERACTIVO"
+APP_VERSION = "2026-09-10-NEXI-V2.4.1-PAGO-SELECCION-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1393,6 +1393,58 @@ def enviar_twilio_pago_interactivo(destino, empresa_id):
     except Exception as e:
         print("NEXI PAGO LISTA TWILIO ERROR:", empresa_id, repr(e))
         return False
+
+
+
+def _resolver_seleccion_pago_whatsapp(request_form, telefono):
+    """
+    Reconoce la selección de plan aunque Twilio entregue el ID en ButtonPayload
+    o solamente el texto visible en ButtonText/Body.
+    Devuelve (codigo_plan, empresa_id) o (None, None).
+    """
+    payload = str(request_form.get("ButtonPayload") or "").strip()
+    button_text = str(request_form.get("ButtonText") or "").strip()
+    body = str(request_form.get("Body") or "").strip()
+
+    # Camino ideal: payload con plan + empresa.
+    m = re.fullmatch(
+        r"pago:plan:(nexia_500|nexia_1000):([0-9a-fA-F-]{36})",
+        payload,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).lower(), m.group(2)
+
+    # Fallback para list-picker/cliente WhatsApp que devuelve sólo texto visible.
+    visible = normalizar_texto(button_text or body)
+    codigo = None
+    if visible.startswith("nexia 500"):
+        codigo = "nexia_500"
+    elif visible.startswith("nexia 1000"):
+        codigo = "nexia_1000"
+
+    if not codigo:
+        return None, None
+
+    # Primero usa el contexto activo del Router.
+    try:
+        actual = router_contexto_obtener(telefono) or {}
+        empresa_id = str(actual.get("empresa_id") or "").strip()
+        if empresa_id:
+            return codigo, empresa_id
+    except Exception:
+        pass
+
+    # Si no existe contexto, intenta recuperar la prueba asociada a ese WhatsApp.
+    try:
+        demo = router_demo_access_sin_activar(telefono) or {}
+        empresa_id = str(demo.get("empresa_id") or "").strip()
+        if empresa_id:
+            return codigo, empresa_id
+    except Exception:
+        pass
+
+    return codigo, None
 
 
 def _pago_empresa_autorizada_whatsapp(telefono, empresa_id):
@@ -5135,6 +5187,9 @@ def whatsapp_webhook():
         print("Body:", texto)
         if interactive_payload:
             print("ButtonPayload:", interactive_payload)
+        button_text_log = str(request.form.get("ButtonText") or "").strip()
+        if button_text_log:
+            print("ButtonText:", button_text_log)
         print("MessageSid:", message_id)
         print("=" * 60)
 
@@ -5152,17 +5207,14 @@ def whatsapp_webhook():
         if not telefono:
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
-        # V2.4: selección de plan desde lista interactiva.
-        if interactive_payload and interactive_payload.lower().startswith("pago:plan:"):
-            m_pago = re.fullmatch(
-                r"pago:plan:(nexia_500|nexia_1000):([0-9a-fA-F-]{36})",
-                interactive_payload.strip(),
-            )
-            if not m_pago:
-                twiml.message("No pude reconocer ese plan. Escribe *MENU* e inténtalo nuevamente.")
+        # V2.4.1: selección de plan ANTES de consumir cuota.
+        # Soporta ButtonPayload y también ButtonText/Body como fallback.
+        codigo_pago, empresa_pago = _resolver_seleccion_pago_whatsapp(request.form, telefono)
+        if codigo_pago:
+            if not empresa_pago:
+                twiml.message("No pude identificar tu empresa para iniciar el pago. Escribe *MENU* y vuelve a entrar a tu prueba.")
                 return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
-            codigo_pago, empresa_pago = m_pago.group(1).lower(), m_pago.group(2)
             if not _pago_empresa_autorizada_whatsapp(telefono, empresa_pago):
                 twiml.message("Por seguridad no pude asociar ese pago a tu empresa. Entra a Portal Nexia para continuar.")
                 return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
@@ -5170,6 +5222,7 @@ def whatsapp_webhook():
             try:
                 checkout = _crear_checkout_whatsapp(empresa_pago, codigo_pago)
                 twiml.message(_mensaje_checkout_whatsapp(checkout))
+                print("NEXI PAGO WHATSAPP CHECKOUT OK:", empresa_pago, codigo_pago)
             except Exception as e:
                 print("NEXI PAGO WHATSAPP ERROR:", repr(e))
                 twiml.message("No pude iniciar Mercado Pago en este momento. Intenta nuevamente o realiza el pago desde Portal Nexia.")
