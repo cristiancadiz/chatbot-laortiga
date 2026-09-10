@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.2-AGENDA-ESTANDAR-MULTIEMPRESA"
+APP_VERSION = "2026-09-10-NEXI-V2.2.1-AGENDA-ESTADO-PERSISTENTE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -4174,12 +4174,27 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
         # el agente de agenda usa disponibilidad y creación de eventos reales.
         # Sin conexión, conserva el flujo de solicitud/orientación del Core.
         agente_previsto = _core_route_intent(texto, datos_perfil)
-        if agente_previsto == "agenda" and negocio_tiene_calendar_real():
+
+        # V2.2.1: una vez iniciado el flujo de agenda, los mensajes siguientes
+        # (por ejemplo "1", un nombre o un correo) deben seguir en el motor
+        # de agenda aunque el router aislado los clasifique como "atencion".
+        # Esto replica el comportamiento del flujo probado de Diego.
+        agenda_session_key = f"core:{empresa_id}:{_normalizar_identificador_demo(telefono, 'whatsapp')}"
+        agenda_estado = get_estado(agenda_session_key)
+        agenda_activa = str(agenda_estado.get("paso") or "inicio") != "inicio"
+
+        if negocio_tiene_calendar_real() and (agente_previsto == "agenda" or agenda_activa):
             # Agenda estándar Nexia: mismo flujo probado de Diego, pero con el
             # Calendar, horarios, duración y servicios del empresa_id actual.
             respuesta = _core_procesar_agenda_estandar(empresa_id, telefono, texto, datos_perfil)
             agente_usado = "agenda"
-            print("NEXI CORE AGENDA ESTANDAR:", empresa_id, google_calendar_id_actual())
+            print(
+                "NEXI CORE AGENDA ESTANDAR:",
+                empresa_id,
+                google_calendar_id_actual(),
+                "paso=",
+                get_estado(agenda_session_key).get("paso"),
+            )
         else:
             respuesta, agente_usado = _core_orchestrate(empresa_id, texto, token=token, canal="whatsapp")
 
