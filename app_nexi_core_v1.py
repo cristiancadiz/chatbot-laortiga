@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.5.6-WEB-HANDOFF-PRIVACY"
+APP_VERSION = "2026-09-10-NEXI-V1.5.7-HANDOFF-WAIT-MESSAGE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2952,7 +2952,7 @@ def _core_responder_demo_web(token, empresa_id, texto):
 
     if estado_handoff == "derivado":
         if not _core_handoff_expirado(hs):
-            return ""
+            return 'Seguimos en contacto con el ejecutivo. Tu solicitud ya fue enviada y tus mensajes están quedando registrados para que pueda revisarlos al continuar la atención.'
         _core_handoff_upsert(
             empresa_id,
             identificador,
@@ -2996,9 +2996,9 @@ def _core_responder_demo_web(token, empresa_id, texto):
         )
         return (
             f"Gracias, {nombre} 🙌\n\n"
-            "Ya registré tu solicitud y la envié a la persona encargada. "
+            "Ya registré tu solicitud y estamos en contacto con el ejecutivo. "
             f"El tiempo estimado de atención es de hasta {CORE_HANDOFF_TIMEOUT_MINUTOS} minutos. "
-            "Puedes seguir escribiendo; tus mensajes quedarán guardados mientras esperas."
+            "Puedes seguir escribiendo; tus mensajes quedarán registrados mientras esperas."
         )
 
     if estado_handoff == "ofrecido":
@@ -3094,7 +3094,7 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
     if estado_handoff == "derivado":
         if not _core_handoff_expirado(hs):
             print("NEXI CORE HANDOFF ACTIVO:",empresa_id,_normalizar_identificador_demo(telefono,"whatsapp"))
-            return ""
+            return 'Seguimos en contacto con el ejecutivo. Tu solicitud ya fue enviada y tus mensajes están quedando registrados para que pueda revisarlos al continuar la atención.'
         _core_handoff_upsert(
             empresa_id,telefono,"whatsapp",
             {
@@ -3124,7 +3124,7 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
             )
             respuesta=(
                 f"Gracias, {nombre} 🙌\n\n"
-                "Ya registré tu solicitud y la envié al equipo. "
+                "Ya registré tu solicitud y estamos en contacto con el ejecutivo. "
                 f"El tiempo estimado de atención es de hasta {CORE_HANDOFF_TIMEOUT_MINUTOS} minutos. "
                 "Puedes seguir escribiendo por aquí mientras esperas."
             )
@@ -3348,7 +3348,9 @@ def core_demo_message(token):
             respuesta=_core_responder_demo_web(token,empresa_id,texto)
 
         respuesta=proteger_respuesta_publica_core(respuesta)
-        respuesta=aplicar_plan_a_respuesta(respuesta)
+        es_mensaje_espera_handoff = (respuesta == 'Seguimos en contacto con el ejecutivo. Tu solicitud ya fue enviada y tus mensajes están quedando registrados para que pueda revisarlos al continuar la atención.')
+        if not es_mensaje_espera_handoff:
+            respuesta=aplicar_plan_a_respuesta(respuesta)
 
         if respuesta:
             _core_log_message(token,empresa_id,"saliente",respuesta)
