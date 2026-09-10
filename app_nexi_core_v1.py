@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.9.4-CORS-FIX"
+APP_VERSION = "2026-09-10-NEXI-V2.0-PLANES-MERCADOPAGO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -120,6 +120,45 @@ ADMIN_EMPRESA_ID = os.getenv(
 SUPABASE_TIMEOUT = int(os.getenv("SUPABASE_TIMEOUT", "15"))
 
 PORTAL_ORIGIN = os.getenv("PORTAL_ORIGIN", "https://nexia-tech.com").rstrip("/")
+
+# ============================================================
+# NEXIA V2.0 - PLANES + MERCADO PAGO
+# ============================================================
+# Acepta nombres de variables usados habitualmente en despliegues previos.
+MERCADOPAGO_ACCESS_TOKEN = (
+    os.getenv("MERCADOPAGO_ACCESS_TOKEN")
+    or os.getenv("MERCADO_PAGO_ACCESS_TOKEN")
+    or os.getenv("MP_ACCESS_TOKEN")
+    or ""
+).strip()
+MERCADOPAGO_API_BASE = os.getenv("MERCADOPAGO_API_BASE", "https://api.mercadopago.com").rstrip("/")
+PUBLIC_BACKEND_URL = (
+    os.getenv("PUBLIC_BACKEND_URL")
+    or os.getenv("RENDER_EXTERNAL_URL")
+    or "https://chatbot-laortiga-hddw.onrender.com"
+).rstrip("/")
+MERCADOPAGO_WEBHOOK_URL = os.getenv(
+    "MERCADOPAGO_WEBHOOK_URL", f"{PUBLIC_BACKEND_URL}/webhooks/mercadopago"
+).strip()
+
+NEXIA_PLANES = {
+    "nexia_500": {
+        "codigo": "nexia_500",
+        "nombre": "Nexia 500",
+        "mensajes": 500,
+        "precio": 19990,
+        "precio_antes": 29990,
+        "moneda": "CLP",
+    },
+    "nexia_1000": {
+        "codigo": "nexia_1000",
+        "nombre": "Nexia 1000",
+        "mensajes": 1000,
+        "precio": 39990,
+        "precio_antes": 49990,
+        "moneda": "CLP",
+    },
+}
 
 # ============================================================
 # RESEND - NOTIFICACIONES DE DERIVACIÓN A EJECUTIVO
@@ -318,27 +357,46 @@ def consumir_mensaje_entrante_demo():
 
 
 def preparar_mensaje_saliente_demo(mensaje):
-    """Cuenta un mensaje enviado por el bot y aplica avisos de saldo."""
+    """Cuenta un mensaje enviado por bot en demos y planes por mensajes."""
     control = consumir_mensaje_demo_atomico()
     if bool(control.get("permitido", True)):
         tipo = str(control.get("tipo_plan") or "").lower()
+        restantes = control.get("mensajes_restantes")
+        try:
+            restantes = int(restantes)
+        except Exception:
+            restantes = None
+        aviso = None
         if tipo == "demo":
-            restantes = control.get("mensajes_restantes")
-            try:
-                restantes = int(restantes)
-            except Exception:
-                restantes = None
-            aviso = None
             if restantes == 20:
                 aviso = "\n\nℹ️ Tu demo de Nexia tiene 20 mensajes disponibles."
             elif restantes == 5:
                 aviso = "\n\n⚠️ Te quedan 5 mensajes en tu demo de Nexia."
             elif restantes == 1:
                 aviso = "\n\n⚠️ Te queda 1 mensaje en tu demo de Nexia."
-            if aviso:
-                mensaje = str(mensaje or "").rstrip() + aviso
+        elif tipo in {"nexia_500", "nexia_1000"}:
+            if restantes == 50:
+                aviso = "\n\nℹ️ Tu plan Nexia tiene 50 mensajes disponibles."
+            elif restantes == 10:
+                aviso = "\n\n⚠️ Te quedan 10 mensajes en tu plan Nexia."
+            elif restantes == 1:
+                aviso = "\n\n⚠️ Te queda 1 mensaje en tu plan Nexia."
+        if aviso:
+            mensaje = str(mensaje or "").rstrip() + aviso
         return mensaje
-    return mensaje_demo_finalizada(control.get("motivo"))
+    return mensaje_plan_finalizado(control)
+
+
+def mensaje_plan_finalizado(control=None):
+    control = control or {}
+    tipo = str(control.get("tipo_plan") or "").strip().lower()
+    motivo = str(control.get("motivo") or "").strip().lower()
+    if tipo in {"nexia_500", "nexia_1000"}:
+        return (
+            "Has utilizado todos los mensajes disponibles de tu plan Nexia. "
+            "Puedes comprar una nueva bolsa desde Portal Nexia para continuar."
+        )
+    return mensaje_demo_finalizada(motivo)
 
 
 def mensaje_demo_finalizada(motivo=None):
@@ -4043,7 +4101,7 @@ def core_demo_message(token):
 
         control_entrada = consumir_mensaje_entrante_demo()
         if not bool(control_entrada.get("permitido", True)):
-            respuesta = mensaje_demo_finalizada(control_entrada.get("motivo"))
+            respuesta = mensaje_plan_finalizado(control_entrada)
             return core_json({
                 "ok": True,
                 "reply": respuesta,
@@ -4148,7 +4206,7 @@ def whatsapp_webhook():
             if texto:
                 control_entrada = consumir_mensaje_entrante_demo()
                 if not bool(control_entrada.get("permitido", True)):
-                    respuesta = mensaje_demo_finalizada(control_entrada.get("motivo"))
+                    respuesta = mensaje_plan_finalizado(control_entrada)
                 else:
                     respuesta = _core_responder_demo_whatsapp(demo_access, telefono, texto)
             else:
@@ -4378,7 +4436,7 @@ def gupshup_webhook():
                 demo_access = route.get("demo_access") or {"empresa_id": route.get("empresa_id")}
                 control_entrada = consumir_mensaje_entrante_demo()
                 if not bool(control_entrada.get("permitido", True)):
-                    respuesta = mensaje_demo_finalizada(control_entrada.get("motivo"))
+                    respuesta = mensaje_plan_finalizado(control_entrada)
                 else:
                     respuesta = _core_responder_demo_whatsapp(demo_access, telefono, texto)
                 enviar_gupshup_texto(telefono, respuesta)
@@ -4968,13 +5026,44 @@ def portal_usuario_autorizado():
                 return None
             empresa_id = str(sesion.get("empresa_id") or "").strip()
             plan = estado_suscripcion_empresa(empresa_id)
-            if str(plan.get("tipo_plan") or "").lower() != "demo" or str(plan.get("estado") or "").lower() != "activo":
+            tipo_plan = str(plan.get("tipo_plan") or "").lower()
+            estado_plan = str(plan.get("estado") or "").lower()
+            acceso_conversion = False
+            if tipo_plan != "demo":
+                # Después de pagar, conservar temporalmente el acceso sin clave solo
+                # para que el cliente pueda crear su contraseña del Portal.
+                try:
+                    hp = backend_headers()
+                    rp = requests.get(
+                        f"{SUPABASE_URL}/rest/v1/nexi_pagos",
+                        headers=hp,
+                        params={
+                            "select":"id,approved_at,setup_completed,status",
+                            "empresa_id":f"eq.{empresa_id}",
+                            "status":"eq.approved",
+                            "setup_completed":"eq.false",
+                            "order":"approved_at.desc",
+                            "limit":"1",
+                        },
+                        timeout=SUPABASE_TIMEOUT,
+                    )
+                    rows_p = rp.json() if rp.ok and rp.content else []
+                    if rows_p:
+                        ap = _parse_iso(rows_p[0].get("approved_at"))
+                        acceso_conversion = bool(ap and datetime.now(pytz.UTC) - ap.astimezone(pytz.UTC) <= timedelta(hours=24))
+                except Exception as e:
+                    print("PORTAL CONVERSION AUTH SKIP:", repr(e))
+                if not acceso_conversion:
+                    print("PORTAL DEMO AUTH: demo no activa", empresa_id)
+                    return None
+            elif estado_plan != "activo":
                 print("PORTAL DEMO AUTH: demo no activa", empresa_id)
                 return None
-            fin = _parse_iso(plan.get("demo_fin"))
-            if fin and datetime.now(pytz.UTC) >= fin.astimezone(pytz.UTC):
-                print("PORTAL DEMO AUTH: demo vencida", empresa_id)
-                return None
+            if tipo_plan == "demo":
+                fin = _parse_iso(plan.get("demo_fin"))
+                if fin and datetime.now(pytz.UTC) >= fin.astimezone(pytz.UTC):
+                    print("PORTAL DEMO AUTH: demo vencida", empresa_id)
+                    return None
             datos = sesion.get("datos") or {}
             perfil = {
                 "id": f"demo:{demo_token}",
@@ -4984,6 +5073,7 @@ def portal_usuario_autorizado():
                 "rol": "demo",
                 "demo": True,
                 "demo_token": demo_token,
+                "conversion": acceso_conversion,
             }
             print("PORTAL DEMO AUTH OK:", empresa_id, perfil.get("email"))
             return perfil
@@ -5180,6 +5270,77 @@ def portal_login():
     except Exception as e:
         print("PORTAL LOGIN ERROR:", repr(e))
         return portal_json({"ok": False, "error": "No se pudo iniciar sesión en este momento"}, 502)
+
+
+
+@app.route("/portal/crear-acceso-pagado", methods=["POST", "OPTIONS"])
+def portal_crear_acceso_pagado():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    if not perfil.get("demo_token"):
+        return portal_json({"ok": False, "error": "Este acceso no requiere conversión"}, 400)
+
+    empresa_id = str(perfil.get("empresa_id") or "").strip()
+    email = str(perfil.get("email") or "").strip().lower()
+    data = request.get_json(silent=True) or {}
+    password = str(data.get("password") or "")
+    if not email or "@" not in email:
+        return portal_json({"ok": False, "error": "La demo no tiene un correo válido asociado"}, 400)
+    if len(password) < 8:
+        return portal_json({"ok": False, "error": "La contraseña debe tener al menos 8 caracteres"}, 400)
+
+    plan = estado_suscripcion_empresa(empresa_id)
+    if str(plan.get("tipo_plan") or "").lower() not in {"nexia_500", "nexia_1000"}:
+        return portal_json({"ok": False, "error": "Primero debes tener un pago aprobado"}, 409)
+
+    headers_admin = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+    nombre = str(perfil.get("nombre") or "Cliente Nexia").strip()
+    ru = requests.post(
+        f"{SUPABASE_URL}/auth/v1/admin/users",
+        headers=headers_admin,
+        json={
+            "email": email,
+            "password": password,
+            "email_confirm": True,
+            "user_metadata": {"empresa_id": empresa_id, "nombre": nombre},
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if not ru.ok:
+        detalle = ru.text[:500]
+        if ru.status_code in {400, 422} and "already" in detalle.lower():
+            return portal_json({"ok": False, "codigo":"USUARIO_EXISTE", "error":"Este correo ya tiene una cuenta. Ingresa con tu contraseña o restablécela."}, 409)
+        raise RuntimeError(f"No se pudo crear el usuario del Portal: {ru.status_code} {detalle}")
+
+    usuario = ru.json() if ru.content else {}
+    user_id = str(usuario.get("id") or "").strip()
+    if not user_id:
+        raise RuntimeError("Supabase no devolvió el id del usuario")
+
+    hp = backend_headers()
+    rp = requests.post(
+        f"{SUPABASE_URL}/rest/v1/perfiles",
+        headers={**hp, "Prefer":"resolution=merge-duplicates,return=representation"},
+        params={"on_conflict":"id"},
+        json={"id":user_id,"empresa_id":empresa_id,"nombre":nombre,"email":email,"rol":"cliente"},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    rp.raise_for_status()
+    requests.patch(
+        f"{SUPABASE_URL}/rest/v1/nexi_pagos",
+        headers={**hp, "Prefer":"return=minimal"},
+        params={"empresa_id":f"eq.{empresa_id}","status":"eq.approved","setup_completed":"eq.false"},
+        json={"setup_completed":True,"updated_at":datetime.now(pytz.UTC).isoformat()},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    return portal_json({"ok": True, "email": email, "mensaje":"Acceso permanente creado. Ya puedes ingresar con correo y contraseña."}, 201)
 
 
 @app.route("/portal/me", methods=["GET", "OPTIONS"])
@@ -5598,15 +5759,15 @@ def portal_enviar_mensaje():
                     provider = str(canal_cfg.get("provider") or provider)
         activar_por_empresa(empresa_conv_id, canal=canal, provider=provider, canal_config=canal_cfg)
 
-        # En demos, una respuesta manual desde el Portal también consume 1 mensaje.
+        # Demos y planes por mensajes: una respuesta manual del ejecutivo consume 1 mensaje.
         plan_actual = estado_suscripcion_empresa(empresa_conv_id)
-        if str(plan_actual.get("tipo_plan") or "").lower() == "demo":
+        if str(plan_actual.get("tipo_plan") or "").lower() in {"demo", "nexia_500", "nexia_1000"}:
             control_portal = consumir_mensaje_demo_atomico()
             if not bool(control_portal.get("permitido", True)):
                 return portal_json({
                     "ok": False,
-                    "codigo": "DEMO_FINALIZADA",
-                    "error": mensaje_demo_finalizada(control_portal.get("motivo")),
+                    "codigo": "PLAN_SIN_MENSAJES",
+                    "error": mensaje_plan_finalizado(control_portal),
                     "plan": estado_suscripcion_empresa(empresa_conv_id),
                 }, 409)
 
@@ -5720,6 +5881,342 @@ def portal_admin_plan(empresa_id):
         return portal_json({"ok": False, "error": str(e)[:300]}, 500)
 
 
+
+# ============================================================
+# NEXIA V2.0 - CHECKOUT / PAGOS MERCADO PAGO
+# ============================================================
+
+def _mp_headers():
+    if not MERCADOPAGO_ACCESS_TOKEN:
+        return None
+    return {
+        "Authorization": f"Bearer {MERCADOPAGO_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+
+def _plan_publico(plan):
+    return {
+        "codigo": plan["codigo"],
+        "nombre": plan["nombre"],
+        "mensajes": int(plan["mensajes"]),
+        "precio": int(plan["precio"]),
+        "precio_antes": int(plan["precio_antes"]),
+        "moneda": plan["moneda"],
+    }
+
+
+def _pago_por_external_reference(external_reference):
+    headers = backend_headers()
+    if not headers or not external_reference:
+        return None
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/nexi_pagos",
+        headers=headers,
+        params={"select":"*","external_reference":f"eq.{external_reference}","limit":"1"},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if not r.ok:
+        return None
+    rows = r.json() if r.content else []
+    return rows[0] if rows else None
+
+
+def _pago_por_payment_id(payment_id):
+    headers = backend_headers()
+    if not headers or not payment_id:
+        return None
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/nexi_pagos",
+        headers=headers,
+        params={"select":"*","payment_id":f"eq.{payment_id}","limit":"1"},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if not r.ok:
+        return None
+    rows = r.json() if r.content else []
+    return rows[0] if rows else None
+
+
+def _actualizar_pago(external_reference, payload):
+    headers = backend_headers()
+    if not headers:
+        raise RuntimeError("Supabase backend no configurado")
+    payload = {**payload, "updated_at": datetime.now(pytz.UTC).isoformat()}
+    r = requests.patch(
+        f"{SUPABASE_URL}/rest/v1/nexi_pagos",
+        headers={**headers, "Prefer":"return=representation"},
+        params={"external_reference":f"eq.{external_reference}"},
+        json=payload,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows = r.json() if r.content else []
+    return rows[0] if rows else payload
+
+
+def _activar_plan_desde_pago(pago, payment_data):
+    """Aplica la bolsa una sola vez y convierte demo -> cliente pagado."""
+    if not pago:
+        raise RuntimeError("Pago Nexia no encontrado")
+    if pago.get("applied_at"):
+        return pago
+
+    plan = NEXIA_PLANES.get(str(pago.get("plan_codigo") or ""))
+    if not plan:
+        raise RuntimeError("Plan Nexia inválido")
+
+    # Verificación fuerte contra lo cobrado por Mercado Pago.
+    monto = int(round(float(payment_data.get("transaction_amount") or 0)))
+    moneda = str(payment_data.get("currency_id") or "").upper()
+    if monto != int(plan["precio"]) or moneda != str(plan["moneda"]).upper():
+        raise RuntimeError("Monto o moneda del pago no coincide con el plan")
+
+    empresa_id = str(pago.get("empresa_id") or "").strip()
+    if not empresa_id:
+        raise RuntimeError("Pago sin empresa_id")
+
+    actual = estado_suscripcion_empresa(empresa_id)
+    usados = int(actual.get("mensajes_usados") or 0)
+    limite_actual = int(actual.get("limite_mensajes") or 0)
+    tipo_actual = str(actual.get("tipo_plan") or "").lower()
+
+    # Al convertir demo, se entregan exactamente los mensajes comprados.
+    # En una recarga de cliente pagado, se conservan los mensajes restantes.
+    if tipo_actual == "demo":
+        nuevo_limite = usados + int(plan["mensajes"])
+    else:
+        nuevo_limite = max(limite_actual, usados) + int(plan["mensajes"])
+
+    ahora = datetime.now(pytz.UTC).isoformat()
+    headers = backend_headers()
+    r = requests.post(
+        f"{SUPABASE_URL}/rest/v1/suscripciones_empresa",
+        headers={**headers, "Prefer":"resolution=merge-duplicates,return=representation"},
+        params={"on_conflict":"empresa_id"},
+        json={
+            "empresa_id": empresa_id,
+            "tipo_plan": plan["codigo"],
+            "estado": "activo",
+            "limite_mensajes": nuevo_limite,
+            "mensajes_usados": usados,
+            "demo_fin": None,
+            "updated_at": ahora,
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+
+    payment_id = str(payment_data.get("id") or "").strip()
+    return _actualizar_pago(
+        pago["external_reference"],
+        {
+            "payment_id": payment_id or pago.get("payment_id"),
+            "status": "approved",
+            "status_detail": str(payment_data.get("status_detail") or ""),
+            "approved_at": str(payment_data.get("date_approved") or ahora),
+            "applied_at": ahora,
+            "metadata": payment_data.get("metadata") or pago.get("metadata") or {},
+        },
+    )
+
+
+def _verificar_y_procesar_payment(payment_id):
+    headers_mp = _mp_headers()
+    if not headers_mp:
+        raise RuntimeError("Falta MERCADOPAGO_ACCESS_TOKEN en Render")
+    r = requests.get(
+        f"{MERCADOPAGO_API_BASE}/v1/payments/{payment_id}",
+        headers=headers_mp,
+        timeout=20,
+    )
+    r.raise_for_status()
+    pdata = r.json() if r.content else {}
+    external_reference = str(pdata.get("external_reference") or "").strip()
+    pago = _pago_por_external_reference(external_reference)
+    if not pago:
+        raise RuntimeError("El pago no corresponde a un checkout emitido por Nexia")
+
+    status = str(pdata.get("status") or "").lower()
+    patch = {
+        "payment_id": str(pdata.get("id") or payment_id),
+        "status": status or "unknown",
+        "status_detail": str(pdata.get("status_detail") or ""),
+        "merchant_order_id": str(pdata.get("order", {}).get("id") or "") or None,
+    }
+    _actualizar_pago(external_reference, patch)
+    if status == "approved":
+        pago = _pago_por_external_reference(external_reference)
+        return _activar_plan_desde_pago(pago, pdata)
+    return _pago_por_external_reference(external_reference)
+
+
+@app.route("/portal/planes", methods=["GET", "OPTIONS"])
+def portal_planes():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    return portal_json({"ok": True, "planes": [_plan_publico(x) for x in NEXIA_PLANES.values()]})
+
+
+@app.route("/portal/mercadopago/checkout", methods=["POST", "OPTIONS"])
+def portal_mercadopago_checkout():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    headers_mp = _mp_headers()
+    if not headers_mp:
+        return portal_json({"ok": False, "error": "Mercado Pago no está configurado"}, 503)
+
+    data = request.get_json(silent=True) or {}
+    codigo = str(data.get("plan") or "").strip().lower()
+    plan = NEXIA_PLANES.get(codigo)
+    if not plan:
+        return portal_json({"ok": False, "error": "Plan inválido"}, 400)
+
+    empresa_id = str(perfil.get("empresa_id") or "").strip()
+    email = str(perfil.get("email") or "").strip()
+    if not empresa_id:
+        return portal_json({"ok": False, "error": "Usuario sin empresa asociada"}, 400)
+
+    external_reference = f"NEXIA:{empresa_id}:{codigo}:{uuid.uuid4().hex[:12]}"
+    return_url = f"{PORTAL_ORIGIN}/portal.html?pago=success"
+    if perfil.get("demo") and perfil.get("demo_token"):
+        return_url += f"&demo_token={perfil.get('demo_token')}"
+
+    payload = {
+        "items": [{
+            "id": codigo,
+            "title": f"{plan['nombre']} - {plan['mensajes']} mensajes",
+            "quantity": 1,
+            "currency_id": plan["moneda"],
+            "unit_price": int(plan["precio"]),
+        }],
+        "external_reference": external_reference,
+        "metadata": {
+            "empresa_id": empresa_id,
+            "plan_codigo": codigo,
+            "mensajes": int(plan["mensajes"]),
+        },
+        "back_urls": {
+            "success": return_url,
+            "pending": f"{PORTAL_ORIGIN}/portal.html?pago=pending" + (f"&demo_token={perfil.get('demo_token')}" if perfil.get("demo") else ""),
+            "failure": f"{PORTAL_ORIGIN}/portal.html?pago=failure" + (f"&demo_token={perfil.get('demo_token')}" if perfil.get("demo") else ""),
+        },
+        "auto_return": "approved",
+        "notification_url": MERCADOPAGO_WEBHOOK_URL,
+        "statement_descriptor": "NEXIA",
+    }
+    if email:
+        payload["payer"] = {"email": email}
+
+    r = requests.post(
+        f"{MERCADOPAGO_API_BASE}/checkout/preferences",
+        headers=headers_mp,
+        json=payload,
+        timeout=20,
+    )
+    if not r.ok:
+        print("MERCADOPAGO PREFERENCE ERROR:", r.status_code, r.text[:1200])
+        return portal_json({"ok": False, "error": "No fue posible iniciar el pago"}, 502)
+    pref = r.json() if r.content else {}
+
+    headers = backend_headers()
+    registro = {
+        "empresa_id": empresa_id,
+        "plan_codigo": codigo,
+        "plan_nombre": plan["nombre"],
+        "mensajes": int(plan["mensajes"]),
+        "monto": int(plan["precio"]),
+        "moneda": plan["moneda"],
+        "preference_id": str(pref.get("id") or ""),
+        "external_reference": external_reference,
+        "status": "created",
+        "email_cliente": email or None,
+        "metadata": {"perfil_demo": bool(perfil.get("demo"))},
+        "updated_at": datetime.now(pytz.UTC).isoformat(),
+    }
+    rr = requests.post(
+        f"{SUPABASE_URL}/rest/v1/nexi_pagos",
+        headers={**headers, "Prefer":"return=representation"},
+        json=registro,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    rr.raise_for_status()
+    return portal_json({
+        "ok": True,
+        "checkout_url": pref.get("init_point") or pref.get("sandbox_init_point"),
+        "preference_id": pref.get("id"),
+        "external_reference": external_reference,
+    })
+
+
+@app.route("/webhooks/mercadopago", methods=["POST", "GET"])
+def webhook_mercadopago():
+    """Mercado Pago puede reenviar eventos; el procesamiento es idempotente."""
+    try:
+        data = request.get_json(silent=True) or {}
+        payment_id = str(
+            ((data.get("data") or {}).get("id"))
+            or request.args.get("data.id")
+            or request.args.get("id")
+            or ""
+        ).strip()
+        tipo = str(data.get("type") or request.args.get("type") or request.args.get("topic") or "").lower()
+        # Solo los eventos payment traen un id que podemos verificar en /v1/payments/{id}.
+        # merchant_order se ignora para evitar interpretar su id como payment_id.
+        if not payment_id or (tipo and tipo != "payment"):
+            return "OK", 200
+        pago = _verificar_y_procesar_payment(payment_id)
+        print("MERCADOPAGO WEBHOOK OK:", payment_id, (pago or {}).get("status"))
+        return "OK", 200
+    except Exception as e:
+        # Devolver 500 permite a Mercado Pago reintentar el webhook.
+        print("MERCADOPAGO WEBHOOK ERROR:", repr(e))
+        return "ERROR", 500
+
+
+@app.route("/portal/pago/estado", methods=["GET", "OPTIONS"])
+def portal_pago_estado():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    empresa_id = str(perfil.get("empresa_id") or "").strip()
+    headers = backend_headers()
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/nexi_pagos",
+        headers=headers,
+        params={"select":"*","empresa_id":f"eq.{empresa_id}","order":"created_at.desc","limit":"1"},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows = r.json() if r.content else []
+    pago = rows[0] if rows else None
+    return portal_json({"ok": True, "pago": pago, "plan": estado_suscripcion_empresa(empresa_id)})
+
+
+@app.route("/portal/pagos", methods=["GET", "OPTIONS"])
+def portal_pagos():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    headers = backend_headers()
+    params = {"select":"*","order":"created_at.desc","limit":"100"}
+    if not es_superadmin(perfil):
+        params["empresa_id"] = f"eq.{perfil.get('empresa_id')}"
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/nexi_pagos", headers=headers, params=params, timeout=SUPABASE_TIMEOUT)
+    r.raise_for_status()
+    return portal_json({"ok": True, "pagos": r.json() if r.content else []})
+
+
 @app.route("/")
 def health():
     return {
@@ -5728,7 +6225,7 @@ def health():
         "version": APP_VERSION,
         "channel": "Twilio WhatsApp + Gupshup WhatsApp + Instagram Meta API",
         "calendar": "Google Calendar",
-        "payments": "disabled",
+        "payments": "Mercado Pago Checkout Pro",
         "saas": "multiempresa",
         "demo": f"{DEMO_LIMITE_MENSAJES_DEFAULT} respuestas / {DEMO_DURACION_HORAS_DEFAULT} horas",
         "history": "Supabase",
