@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.8-ROUTER-SUPERIOR"
+APP_VERSION = "2026-09-10-NEXI-V1.9-PORTAL-OPERACIONES"
 load_dotenv()
 
 app = Flask(__name__)
@@ -103,6 +103,9 @@ INSTAGRAM_API_BASE = os.getenv("INSTAGRAM_API_BASE", "https://graph.instagram.co
 # Nunca debe ponerse en portal.html ni exponerse en el navegador.
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://nappdpkjtdzwtiuvrrhk.supabase.co").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
+# Usuario maestro Nexia. Este correo siempre se trata como superadmin global.
+SUPERADMIN_EMAIL = os.getenv("SUPERADMIN_EMAIL", "contacto@nexia-tech.com").strip().lower()
 DEFAULT_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "97be347a-51d6-467d-be49-839a254a4ad0")
 # Router superior WhatsApp: permite que un solo número atienda Diego, demos y nuevos negocios.
 DIEGO_EMPRESA_ID = os.getenv("DIEGO_EMPRESA_ID", DEFAULT_EMPRESA_ID).strip()
@@ -2109,7 +2112,11 @@ def notificar_derivacion_ejecutivo(identificador, canal, estado=None, motivo=Non
     canal_label = "WhatsApp" if str(canal).lower() == "whatsapp" else "Instagram"
     identificador_limpio = str(identificador or "").strip()
 
+    conversacion = obtener_conversacion_por_identificador(identificador, canal) or {}
+    conversacion_id = str(conversacion.get("id") or "").strip()
     portal_url = f"{PORTAL_ORIGIN}/portal.html"
+    if conversacion_id:
+        portal_url += f"?conversacion={conversacion_id}&accion=tomar"
 
     asunto = f"🔔 Nueva conversación para ejecutivo — {empresa}"
 
@@ -2138,7 +2145,7 @@ def notificar_derivacion_ejecutivo(identificador, canal, estado=None, motivo=Non
       <p style="margin-top:22px">
         <a href="{html.escape(portal_url)}"
            style="display:inline-block;background:#111827;color:#fff;text-decoration:none;padding:12px 18px;border-radius:9px">
-          Abrir Portal Nexia
+          Abrir conversación
         </a>
       </p>
     </div>
@@ -2705,12 +2712,14 @@ def _core_handoff_expirado(handoff):
     return mins is not None and CORE_HANDOFF_TIMEOUT_MINUTOS > 0 and mins >= CORE_HANDOFF_TIMEOUT_MINUTOS
 
 def _core_handoff_request(empresa_id, identificador, canal, datos, motivo):
+    """Registra handoff Core y envía correo con acceso directo a la conversación."""
     perfil = _core_profile(empresa_id) or {}
     pd = perfil.get("datos") or {}
-    tipo = _core_tipo(pd.get("tipo_cliente")) or "personal"
+    tipo = _core_tipo(pd.get("tipo_cliente")) or "empresa"
     contacto = str(pd.get("nombre_contacto") or "Cliente").strip()
-    empresa_demo = str(pd.get("empresa_nombre") or pd.get("profesion") or "").strip()
-    correo = str(pd.get("email_contacto") or cfg("correo_ejecutivo", "") or "").strip()
+    empresa_demo = str(pd.get("empresa_nombre") or pd.get("nombre_negocio") or pd.get("profesion") or "").strip()
+    # El destinatario es el correo del ejecutivo configurado para el tenant.
+    correo = str(cfg("correo_ejecutivo", "") or EJECUTIVO_EMAIL or "").strip()
 
     payload = {
         "empresa_id": empresa_id,
@@ -2730,21 +2739,52 @@ def _core_handoff_request(empresa_id, identificador, canal, datos, motivo):
         timeout=SUPABASE_TIMEOUT,
     )
     rr.raise_for_status()
+    rows = rr.json() if rr.content else []
+    if rows:
+        payload = dict(rows[0])
+
+    # Busca la conversación normalizada del Portal. Las demos WhatsApp se sincronizan
+    # también con public.conversaciones/public.mensajes en V1.9.
+    conv = obtener_conversacion_por_identificador(identificador, canal) or {}
+    conversacion_id = str(conv.get("id") or "").strip()
+    handoff_id = str(payload.get("id") or "").strip()
+    params = []
+    if conversacion_id:
+        params.append(f"conversacion={conversacion_id}")
+    if handoff_id:
+        params.append(f"handoff={handoff_id}")
+    params.append("accion=tomar")
+    portal_url = f"{PORTAL_ORIGIN}/portal.html" + ("?" + "&".join(params) if params else "")
 
     if correo:
-        tipo_label = {"personal":"Persona","profesional":"Profesional","empresa":"Empresa"}.get(tipo, tipo)
-        asunto = f"🔔 Solicitud de contacto — {cfg('empresa_nombre','Nexia')}"
+        negocio = str(cfg("empresa_nombre", "Nexia") or "Nexia")
+        asunto = f"🔔 Solicitud de atención — {negocio}"
         texto_mail = (
             f"Nueva solicitud de atención humana\n\n"
-            f"Perfil: {tipo_label}\n"
-            f"Nombre: {payload['nombre_contacto'] or 'No informado'}\n"
-            f"Empresa/actividad: {payload['empresa_contacto'] or 'No informado'}\n"
-            f"Motivo: {payload['motivo']}\n"
-            f"Canal: {canal}\n"
-            f"Identificador: {payload['identificador']}\n\n"
-            f"Ingresa al Portal Nexia para continuar la atención."
+            f"Nombre: {payload.get('nombre_contacto') or 'No informado'}\n"
+            f"Empresa/actividad: {payload.get('empresa_contacto') or 'No informado'}\n"
+            f"Motivo: {payload.get('motivo')}\n"
+            f"Canal: {canal}\n\n"
+            f"Abre directamente la conversación en el Portal Nexia:\n{portal_url}"
         )
-        enviar_correo_resend(correo, asunto, texto=texto_mail)
+        html_mail = f"""
+        <div style="font-family:Arial,sans-serif;max-width:620px;margin:auto;color:#111827">
+          <div style="padding:22px 0"><strong style="font-size:20px">NEXIA</strong></div>
+          <h2 style="margin-bottom:6px">🔔 Nueva solicitud de atención</h2>
+          <p style="margin-top:0;color:#6b7280">Un cliente de {html.escape(negocio)} necesita atención humana.</p>
+          <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:14px;padding:18px">
+            <p><strong>Cliente:</strong> {html.escape(str(payload.get('nombre_contacto') or 'No informado'))}</p>
+            <p><strong>Empresa/actividad:</strong> {html.escape(str(payload.get('empresa_contacto') or 'No informado'))}</p>
+            <p><strong>Motivo:</strong> {html.escape(str(payload.get('motivo') or ''))}</p>
+            <p><strong>Canal:</strong> {html.escape(str(canal).title())}</p>
+          </div>
+          <p style="margin:24px 0 8px">
+            <a href="{html.escape(portal_url)}" style="display:inline-block;background:#111827;color:white;text-decoration:none;padding:13px 20px;border-radius:10px;font-weight:700">Abrir conversación</a>
+          </p>
+          <p style="font-size:12px;color:#6b7280">El acceso requiere iniciar sesión en Portal Nexia. La conversación se toma manualmente dentro del portal.</p>
+        </div>
+        """
+        enviar_correo_resend(correo, asunto, texto=texto_mail, html_body=html_mail)
     return payload
 
 def _core_handoff_prompt(tipo):
@@ -3750,6 +3790,8 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
 
     if token:
         _core_log_message(token,empresa_id,"entrante",texto)
+    # V1.9: espejo operativo para que las demos aparezcan en la bandeja humana.
+    guardar_mensaje_supabase(telefono, "entrante", texto, canal="whatsapp")
 
     hs=_core_handoff_lookup(empresa_id,telefono,"whatsapp")
     estado_handoff=str((hs or {}).get("estado") or "").strip().lower()
@@ -3859,6 +3901,8 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
 
     if token and respuesta:
         _core_log_message(token,empresa_id,"saliente",respuesta)
+    if respuesta:
+        guardar_mensaje_supabase(telefono, "saliente", respuesta, canal="whatsapp")
 
     print("NEXI CORE WHATSAPP DEMO:",empresa_id,_normalizar_identificador_demo(telefono,"whatsapp"))
     return respuesta
@@ -4933,11 +4977,21 @@ def portal_usuario_autorizado():
         return None
 
     filas = r.json() if r.content else []
+    email_norm = email_auth.strip().lower()
     if not filas:
+        if email_norm == SUPERADMIN_EMAIL:
+            perfil = {"id": user_id, "empresa_id": ADMIN_EMPRESA_ID, "nombre": "Superadmin Nexia", "email": email_auth, "rol": "superadmin"}
+            print("PORTAL AUTH: superadmin maestro sin perfil, usando perfil virtual", email_auth)
+            return perfil
         print("PORTAL AUTH: usuario válido pero sin perfil:", user_id, email_auth)
         return None
 
-    perfil = filas[0]
+    perfil = dict(filas[0])
+    if email_norm == SUPERADMIN_EMAIL:
+        perfil["rol"] = "superadmin"
+        perfil["email"] = email_auth
+        if not perfil.get("empresa_id"):
+            perfil["empresa_id"] = ADMIN_EMPRESA_ID
 
     if not perfil.get("empresa_id"):
         print("PORTAL AUTH: perfil sin empresa_id:", user_id)
@@ -4955,7 +5009,9 @@ def portal_usuario_autorizado():
 
 
 def es_superadmin(perfil):
-    return str((perfil or {}).get("rol") or "").strip().lower() == "superadmin"
+    email = str((perfil or {}).get("email") or "").strip().lower()
+    rol = str((perfil or {}).get("rol") or "").strip().lower()
+    return rol == "superadmin" or (bool(SUPERADMIN_EMAIL) and email == SUPERADMIN_EMAIL)
 
 
 def obtener_conversacion_supabase(conversacion_id, perfil_portal=None):
@@ -4989,6 +5045,34 @@ def obtener_conversacion_supabase(conversacion_id, perfil_portal=None):
     filas = r.json() if r.content else []
     return enriquecer_estado_conversacion(filas[0]) if filas else None
 
+
+
+
+@app.route("/portal/config-public", methods=["GET", "OPTIONS"])
+def portal_config_public():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    return portal_json({
+        "ok": True,
+        "supabase_url": SUPABASE_URL,
+        "supabase_anon_key": SUPABASE_ANON_KEY,
+        "app_version": APP_VERSION,
+    })
+
+
+@app.route("/portal/me", methods=["GET", "OPTIONS"])
+def portal_me():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    return portal_json({
+        "ok": True,
+        "perfil": perfil,
+        "superadmin": es_superadmin(perfil),
+        "alcance": "global" if es_superadmin(perfil) else "empresa",
+    })
 
 
 @app.route("/portal/conversaciones", methods=["GET", "OPTIONS"])
@@ -5675,6 +5759,138 @@ def _estadisticas_empresa(empresa_id, empresa_nombre=None):
         "mensajes_totales": recibidos + enviados,
         "conversaciones": conversaciones,
     }
+
+
+
+@app.route("/portal/handoffs", methods=["GET", "OPTIONS"])
+def portal_handoffs():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    try:
+        params = {"select": "*", "order": "created_at.desc", "limit": "300"}
+        if not es_superadmin(perfil):
+            params["empresa_id"] = f"eq.{perfil.get('empresa_id')}"
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/nexi_core_handoffs", headers=supabase_headers(), params=params, timeout=SUPABASE_TIMEOUT)
+        if r.status_code == 404:
+            return portal_json({"ok": True, "handoffs": []})
+        r.raise_for_status()
+        return portal_json({"ok": True, "handoffs": r.json() if r.content else []})
+    except Exception as e:
+        return portal_json({"ok": False, "error": str(e)[:300]}, 500)
+
+
+def _portal_actualizar_handoff_por_conversacion(conv, estado):
+    """Sincroniza, cuando existe, el handoff Core asociado a la conversación."""
+    headers = supabase_headers()
+    if not headers or not conv:
+        return
+    ident = _normalizar_identificador_demo(conv.get("telefono"), conv.get("canal") or "whatsapp")
+    try:
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/nexi_core_handoffs",
+            headers={**headers, "Prefer": "return=minimal"},
+            params={"empresa_id": f"eq.{conv.get('empresa_id')}", "identificador": f"eq.{ident}", "canal": f"eq.{conv.get('canal') or 'whatsapp'}", "estado": "in.(pendiente,en_atencion)"},
+            json={"estado": estado, "updated_at": datetime.now(pytz.UTC).isoformat()},
+            timeout=SUPABASE_TIMEOUT,
+        )
+    except Exception as e:
+        print("PORTAL HANDOFF SYNC WARN:", repr(e))
+    try:
+        sesion_estado = "derivado" if estado == "pendiente" else ("en_atencion" if estado == "en_atencion" else "cerrado")
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/nexi_core_handoff_sesiones",
+            headers={**headers, "Prefer": "return=minimal"},
+            params={"empresa_id": f"eq.{conv.get('empresa_id')}", "identificador": f"eq.{ident}", "canal": f"eq.{conv.get('canal') or 'whatsapp'}"},
+            json={"estado": sesion_estado, "updated_at": datetime.now(pytz.UTC).isoformat()},
+            timeout=SUPABASE_TIMEOUT,
+        )
+    except Exception as e:
+        print("PORTAL HANDOFF SESSION SYNC WARN:", repr(e))
+
+
+@app.route("/portal/conversacion/<conversacion_id>/tomar", methods=["POST", "OPTIONS"])
+def portal_tomar_conversacion(conversacion_id):
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    try:
+        conv = obtener_conversacion_supabase(conversacion_id, perfil)
+        if not conv:
+            return portal_json({"ok": False, "error": "Conversación no encontrada"}, 404)
+        activar_por_empresa(conv.get("empresa_id"), canal=conv.get("canal"))
+        establecer_modo_atencion(conversacion_id, "ejecutivo")
+        _portal_actualizar_handoff_por_conversacion(conv, "en_atencion")
+        return portal_json({"ok": True, "modo": "ejecutivo", "estado_handoff": "en_atencion"})
+    except Exception as e:
+        return portal_json({"ok": False, "error": str(e)[:300]}, 500)
+
+
+@app.route("/portal/conversacion/<conversacion_id>/cerrar", methods=["POST", "OPTIONS"])
+def portal_cerrar_conversacion(conversacion_id):
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    try:
+        conv = obtener_conversacion_supabase(conversacion_id, perfil)
+        if not conv:
+            return portal_json({"ok": False, "error": "Conversación no encontrada"}, 404)
+        activar_por_empresa(conv.get("empresa_id"), canal=conv.get("canal"))
+        establecer_modo_atencion(conversacion_id, "bot")
+        _portal_actualizar_handoff_por_conversacion(conv, "cerrado")
+        return portal_json({"ok": True, "modo": "bot", "estado_handoff": "cerrado"})
+    except Exception as e:
+        return portal_json({"ok": False, "error": str(e)[:300]}, 500)
+
+
+@app.route("/portal/agenda", methods=["GET", "OPTIONS"])
+def portal_agenda():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    headers = supabase_headers()
+    try:
+        filtros = {}
+        if not es_superadmin(perfil):
+            filtros["empresa_id"] = f"eq.{perfil.get('empresa_id')}"
+        reservas = []
+        solicitudes = []
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/reservas", headers=headers, params={"select":"*", "order":"fecha.desc,hora.desc", "limit":"300", **filtros}, timeout=SUPABASE_TIMEOUT)
+        if r.ok:
+            reservas = r.json() if r.content else []
+        r2 = requests.get(f"{SUPABASE_URL}/rest/v1/nexi_core_solicitudes_agenda", headers=headers, params={"select":"*", "order":"created_at.desc", "limit":"300", **filtros}, timeout=SUPABASE_TIMEOUT)
+        if r2.ok:
+            solicitudes = r2.json() if r2.content else []
+        return portal_json({"ok": True, "reservas": reservas, "solicitudes": solicitudes})
+    except Exception as e:
+        return portal_json({"ok": False, "error": str(e)[:300]}, 500)
+
+
+@app.route("/portal/consumo", methods=["GET", "OPTIONS"])
+def portal_consumo():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+    try:
+        headers = supabase_headers()
+        params = {"select":"*", "order":"updated_at.desc", "limit":"500"}
+        if not es_superadmin(perfil):
+            params["empresa_id"] = f"eq.{perfil.get('empresa_id')}"
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/suscripciones_empresa", headers=headers, params=params, timeout=SUPABASE_TIMEOUT)
+        r.raise_for_status()
+        return portal_json({"ok": True, "planes": r.json() if r.content else []})
+    except Exception as e:
+        return portal_json({"ok": False, "error": str(e)[:300]}, 500)
 
 
 @app.route("/portal/estadisticas", methods=["GET", "OPTIONS"])
