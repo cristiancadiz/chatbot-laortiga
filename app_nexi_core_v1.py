@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.9.3-CORS-FIX"
+APP_VERSION = "2026-09-10-NEXI-V1.9.4-CORS-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2115,8 +2115,20 @@ def notificar_derivacion_ejecutivo(identificador, canal, estado=None, motivo=Non
     conversacion = obtener_conversacion_por_identificador(identificador, canal) or {}
     conversacion_id = str(conversacion.get("id") or "").strip()
     portal_url = f"{PORTAL_ORIGIN}/portal.html"
+    portal_params = []
     if conversacion_id:
-        portal_url += f"?conversacion={conversacion_id}&accion=tomar"
+        portal_params.extend([f"conversacion={conversacion_id}", "accion=tomar"])
+    # Para una demo activa, permitir acceso temporal desde el correo sin login.
+    try:
+        plan_notif = estado_suscripcion_empresa(empresa_actual_id())
+        if str(plan_notif.get("tipo_plan") or "").lower() == "demo" and str(plan_notif.get("estado") or "").lower() == "activo":
+            demo_notif_token = str(_core_token_por_empresa(empresa_actual_id()) or "").strip()
+            if demo_notif_token:
+                portal_params.append(f"demo_token={demo_notif_token}")
+    except Exception as e:
+        print("DERIVACION DEMO PORTAL TOKEN SKIP:", repr(e))
+    if portal_params:
+        portal_url += "?" + "&".join(portal_params)
 
     asunto = f"🔔 Nueva conversación para ejecutivo — {empresa}"
 
@@ -2754,6 +2766,20 @@ def _core_handoff_request(empresa_id, identificador, canal, datos, motivo):
     if handoff_id:
         params.append(f"handoff={handoff_id}")
     params.append("accion=tomar")
+
+    # Si la conversación pertenece a una demo activa, el correo abre el Portal
+    # con el token temporal de esa misma demo. Así no pide usuario/contraseña.
+    # Clientes pagados y superadmin siguen usando su autenticación normal.
+    demo_portal_token = ""
+    try:
+        plan_handoff = estado_suscripcion_empresa(empresa_id)
+        if str(plan_handoff.get("tipo_plan") or "").lower() == "demo" and str(plan_handoff.get("estado") or "").lower() == "activo":
+            demo_portal_token = str(_core_token_por_empresa(empresa_id) or "").strip()
+    except Exception as e:
+        print("HANDOFF DEMO PORTAL TOKEN SKIP:", repr(e))
+    if demo_portal_token:
+        params.append(f"demo_token={demo_portal_token}")
+
     portal_url = f"{PORTAL_ORIGIN}/portal.html" + ("?" + "&".join(params) if params else "")
 
     if correo:
@@ -2781,7 +2807,7 @@ def _core_handoff_request(empresa_id, identificador, canal, datos, motivo):
           <p style="margin:24px 0 8px">
             <a href="{html.escape(portal_url)}" style="display:inline-block;background:#111827;color:white;text-decoration:none;padding:13px 20px;border-radius:10px;font-weight:700">Abrir conversación</a>
           </p>
-          <p style="font-size:12px;color:#6b7280">El acceso requiere iniciar sesión en Portal Nexia. La conversación se toma manualmente dentro del portal.</p>
+          <p style="font-size:12px;color:#6b7280">{"Acceso temporal de demo: este enlace abre el Portal sin contraseña." if demo_portal_token else "Por seguridad, el acceso de clientes permanentes requiere iniciar sesión."} La conversación se toma manualmente dentro del portal.</p>
         </div>
         """
         enviar_correo_resend(correo, asunto, texto=texto_mail, html_body=html_mail)
