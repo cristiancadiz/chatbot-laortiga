@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.6.2-RECURSION-FIX"
+APP_VERSION = "2026-09-10-NEXI-V1.6.3-HANDOFF-CANCEL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2331,6 +2331,24 @@ def _core_es_rechazo(texto):
 
 
 
+
+def _core_cancelar_handoff_texto(texto):
+    t = _core_norm(texto)
+    return any(x in t for x in (
+        "salir",
+        "cancelar",
+        "no quiero",
+        "no gracias",
+        "dejalo",
+        "déjalo",
+        "seguir con el bot",
+        "seguir con el asistente",
+        "volver",
+        "volver al bot",
+        "volver al asistente",
+    ))
+
+
 def _core_handoff_lookup(empresa_id, identificador, canal):
     ident = _normalizar_identificador_demo(identificador, canal)
     r = requests.get(
@@ -3291,6 +3309,19 @@ def _core_responder_demo_web(token, empresa_id, texto):
         )
 
     if estado_handoff == "recolectando":
+        if _core_cancelar_handoff_texto(texto):
+            _core_handoff_upsert(
+                empresa_id,
+                identificador,
+                "web",
+                {
+                    "estado": "cerrado",
+                    "datos": {**(hs.get("datos") or {}), "cierre": "cancelado_usuario"},
+                    "started_at": hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+                },
+            )
+            return "Perfecto, cancelé la derivación. Seguimos con el asistente 😊 ¿En qué te puedo ayudar?"
+
         detalles = _core_parse_handoff_details("empresa", texto)
         nombre = str(detalles.get("nombre") or "").strip()
         empresa_contacto = str(detalles.get("empresa") or "").strip()
@@ -3318,6 +3349,21 @@ def _core_responder_demo_web(token, empresa_id, texto):
         )
 
     if estado_handoff == "ofrecido":
+        if _core_cancelar_handoff_texto(texto):
+            canal_handoff = "web" if str(identificador).startswith("web:") else "whatsapp"
+            destino_handoff = identificador if canal_handoff == "web" else telefono
+            _core_handoff_upsert(
+                empresa_id,
+                destino_handoff,
+                canal_handoff,
+                {
+                    "estado": "cerrado",
+                    "datos": {**(hs.get("datos") or {}), "cierre": "cancelado_usuario"},
+                    "started_at": hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+                },
+            )
+            return "Perfecto, cancelé la derivación. Seguimos con el asistente 😊 ¿En qué te puedo ayudar?"
+
         if _core_es_confirmacion(texto):
             _core_handoff_upsert(
                 empresa_id,
@@ -3426,6 +3472,19 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
         )
 
     if estado_handoff == "recolectando":
+        if _core_cancelar_handoff_texto(texto):
+            _core_handoff_upsert(
+                empresa_id,
+                telefono,
+                "whatsapp",
+                {
+                    "estado": "cerrado",
+                    "datos": {**(hs.get("datos") or {}), "cierre": "cancelado_usuario"},
+                    "started_at": hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+                },
+            )
+            return "Perfecto, cancelé la derivación. Seguimos con el asistente 😊 ¿En qué te puedo ayudar?"
+
         detalles=_core_parse_handoff_details(tipo,texto)
         motivo=str(detalles.get("motivo") or "").strip()
         nombre=str(detalles.get("nombre") or "").strip()
