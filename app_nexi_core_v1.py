@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.2.1-AGENDA-ESTADO-PERSISTENTE"
+APP_VERSION = "2026-09-10-NEXI-V2.2.2-AGENDA-ESTADO-PERSISTENTE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -4085,6 +4085,28 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
     hs=_core_handoff_lookup(empresa_id,telefono,"whatsapp")
     estado_handoff=str((hs or {}).get("estado") or "").strip().lower()
 
+    # V2.2.2: Agenda tiene prioridad sobre handoffs pendientes (ofrecido/recolectando).
+    # Un handoff ya DERIVADO sigue teniendo prioridad porque la atención humana ya fue solicitada.
+    agenda_session_key = f"core:{empresa_id}:{_normalizar_identificador_demo(telefono, 'whatsapp')}"
+    agenda_estado = get_estado(agenda_session_key)
+    agenda_activa = str(agenda_estado.get("paso") or "inicio") != "inicio"
+    agente_previsto = _core_route_intent(texto, datos_perfil)
+    agenda_solicitada = agente_previsto == "agenda"
+
+    if estado_handoff in {"recolectando", "ofrecido"} and (agenda_solicitada or agenda_activa):
+        _core_handoff_upsert(
+            empresa_id,
+            telefono,
+            "whatsapp",
+            {
+                "estado": "cerrado",
+                "datos": {**((hs or {}).get("datos") or {}), "cierre": "interrumpido_por_agenda"},
+                "started_at": (hs or {}).get("started_at") or datetime.now(pytz.UTC).isoformat(),
+            },
+        )
+        estado_handoff = "cerrado"
+        print("NEXI CORE HANDOFF CERRADO POR AGENDA:", empresa_id, _normalizar_identificador_demo(telefono, "whatsapp"))
+
     if estado_handoff == "derivado":
         if not _core_handoff_expirado(hs):
             print("NEXI CORE HANDOFF ACTIVO:",empresa_id,_normalizar_identificador_demo(telefono,"whatsapp"))
@@ -4173,15 +4195,9 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
         # Si esta empresa conectó Google Calendar y tiene servicios reales configurados,
         # el agente de agenda usa disponibilidad y creación de eventos reales.
         # Sin conexión, conserva el flujo de solicitud/orientación del Core.
-        agente_previsto = _core_route_intent(texto, datos_perfil)
-
-        # V2.2.1: una vez iniciado el flujo de agenda, los mensajes siguientes
-        # (por ejemplo "1", un nombre o un correo) deben seguir en el motor
-        # de agenda aunque el router aislado los clasifique como "atencion".
-        # Esto replica el comportamiento del flujo probado de Diego.
-        agenda_session_key = f"core:{empresa_id}:{_normalizar_identificador_demo(telefono, 'whatsapp')}"
-        agenda_estado = get_estado(agenda_session_key)
-        agenda_activa = str(agenda_estado.get("paso") or "inicio") != "inicio"
+        # V2.2.2: agente_previsto / agenda_activa se calcularon antes del handoff
+        # para que una intención de agenda explícita no sea consumida por un
+        # handoff pendiente de una conversación anterior.
 
         if negocio_tiene_calendar_real() and (agente_previsto == "agenda" or agenda_activa):
             # Agenda estándar Nexia: mismo flujo probado de Diego, pero con el
