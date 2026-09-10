@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.1.2-GOOGLE-OAUTH-SCOPES-LIMPIOS"
+APP_VERSION = "2026-09-10-NEXI-V2.2-AGENDA-ESTANDAR-MULTIEMPRESA"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1336,7 +1336,7 @@ def crear_evento(inicio, servicio_codigo, nombre, telefono, correo):
                 "cliente": nombre,
                 "correo": correo,
                 "servicio_codigo": servicio_codigo,
-                "origen": "whatsapp_asistente_diego",
+                "origen": "whatsapp_nexia",
             }
         },
     }
@@ -2376,7 +2376,7 @@ def procesar_agenda(estado, texto):
 
     if es_cancelar(texto):
         telefono = estado["telefono"]
-        reset_estado(telefono)
+        reset_estado(estado.get("_session_key") or telefono)
         return "No hay problema 😊. Cuando quieras agendar una hora, escríbeme nuevamente."
 
     # 1) SERVICIO
@@ -2485,8 +2485,8 @@ def procesar_agenda(estado, texto):
             f"📅 {formatear_fecha(fecha)}\n"
             f"👤 {estado['nombre']}\n"
             f"📧 {estado['correo']}\n"
-            f"📍 {cfg('direccion', DEFAULT_DIRECCION_ATENCION)}\n\n"
-            "Si todo está correcto, escribe *CONFIRMAR*."
+            + ((f"📍 {cfg('direccion')}\n") if str(cfg("direccion", "") or "").strip() else "")
+            + "\nSi todo está correcto, escribe *CONFIRMAR*."
         )
 
     # 6) CONFIRMAR -> RESERVA INMEDIATA, SIN PAGO
@@ -2533,8 +2533,8 @@ def procesar_agenda(estado, texto):
             f"📅 {fecha_txt}\n"
             f"👤 {nombre}\n"
             f"📧 {correo}\n"
-            f"📍 {cfg('direccion', DEFAULT_DIRECCION_ATENCION)}\n"
-            f"⏱️ Duración: {cfg_int('duracion_reserva', DEFAULT_DURACION_RESERVA)} minutos\n\n"
+            + ((f"📍 {cfg('direccion')}\n") if str(cfg("direccion", "") or "").strip() else "")
+            + f"⏱️ Duración: {cfg_int('duracion_reserva', DEFAULT_DURACION_RESERVA)} minutos\n\n"
             "No necesitas realizar ningún pago para agendar. ¡Te esperamos! 😊"
         )
 
@@ -3302,6 +3302,12 @@ def _core_create_company_from_session(session):
         f"Tono: {datos.get('tono','')}. Si no sabe: {datos.get('desconocido','')}. " "Nunca muestres teléfonos privados, correos internos ni datos personales del ejecutivo."
     )
 
+    agenda_apertura, agenda_cierre = _core_parse_business_hours(
+        datos.get("agenda_horario"), DEFAULT_HORA_APERTURA, DEFAULT_HORA_CIERRE
+    )
+    agenda_duracion_min = _core_parse_duration_minutes(datos.get("agenda_duracion"), DEFAULT_DURACION_RESERVA)
+    agenda_dias_cfg = _core_parse_days(datos.get("agenda_dias"))
+
     cfg_payload={
         "empresa_id":empresa_id,
         "tipo_negocio":"reservas" if usa_reservas else "comercial",
@@ -3309,10 +3315,10 @@ def _core_create_company_from_session(session):
         "asistente_nombre":str(datos.get("nombre_asistente") or "Nexi").strip(),
         "correo_ejecutivo":str(datos.get("email_contacto") or "").strip(),
         "timezone":TIMEZONE,
-        "hora_apertura":DEFAULT_HORA_APERTURA,
-        "hora_cierre":DEFAULT_HORA_CIERRE,
-        "duracion_reserva":DEFAULT_DURACION_RESERVA,
-        "dias_atencion":[0,1,2,3,4,5],
+        "hora_apertura":agenda_apertura,
+        "hora_cierre":agenda_cierre,
+        "duracion_reserva":agenda_duracion_min,
+        "dias_atencion":agenda_dias_cfg,
         "prompt_extra":prompt_extra,
         "modulos":modulos,
     }
@@ -3667,6 +3673,122 @@ def _core_agent_ventas(empresa_id, texto, ctx=None):
             "No solicites datos innecesarios antes de que el usuario acepte la derivación."
         ),
     )
+
+
+
+def _core_parse_duration_minutes(valor, default=60):
+    """Convierte textos del onboarding (ej. '45 min', '1 hora', '1.5 horas') a minutos."""
+    t = _core_norm(valor)
+    if not t:
+        return int(default)
+    m = re.search(r"(\d+(?:[\.,]\d+)?)\s*(hora|horas|hr|hrs|h)\b", t)
+    if m:
+        try:
+            return max(15, min(480, int(float(m.group(1).replace(',', '.')) * 60)))
+        except Exception:
+            pass
+    m = re.search(r"(\d+)\s*(min|minuto|minutos)\b", t)
+    if m:
+        return max(15, min(480, int(m.group(1))))
+    m = re.search(r"\b(\d{1,3})\b", t)
+    if m:
+        n = int(m.group(1))
+        # En onboarding, valores pequeños suelen significar horas.
+        if n <= 8 and "min" not in t:
+            n *= 60
+        return max(15, min(480, n))
+    return int(default)
+
+
+def _core_parse_business_hours(valor, default_open=9, default_close=18):
+    t = _core_norm(valor)
+    horas = [int(x) for x in re.findall(r"(?<!\d)([0-2]?\d)(?::[0-5]\d)?(?!\d)", t)]
+    horas = [h for h in horas if 0 <= h <= 23]
+    if len(horas) >= 2:
+        apertura, cierre = horas[0], horas[1]
+        if cierre > apertura:
+            return apertura, cierre
+    return int(default_open), int(default_close)
+
+
+def _core_parse_days(valor):
+    t = _core_norm(valor)
+    if not t:
+        return [0, 1, 2, 3, 4, 5]
+    names = {"lunes":0,"martes":1,"miercoles":2,"jueves":3,"viernes":4,"sabado":5,"domingo":6}
+    # Rangos habituales.
+    if "lunes a viernes" in t or "lunes-viernes" in t:
+        return [0,1,2,3,4]
+    if "lunes a sabado" in t or "lunes-sabado" in t:
+        return [0,1,2,3,4,5]
+    if "lunes a domingo" in t or "lunes-domingo" in t or "todos los dias" in t:
+        return [0,1,2,3,4,5,6]
+    out = [idx for name, idx in names.items() if name in t]
+    return sorted(set(out)) or [0,1,2,3,4,5]
+
+
+def _core_agenda_catalog(datos):
+    """Crea un catálogo seguro para Core sin caer jamás en SERVICIOS_DEFAULT de Diego."""
+    raw = str(datos.get("agenda_que") or datos.get("productos_servicios") or "").strip()
+    if not raw:
+        items = ["Reserva"]
+    else:
+        # Separar solo delimitadores claros; no destrozar descripciones completas.
+        items = [x.strip(" -•\t") for x in re.split(r"[\n;|]+", raw) if x.strip(" -•\t")]
+        if len(items) == 1 and raw.count(",") <= 5:
+            comma = [x.strip() for x in raw.split(",") if x.strip()]
+            if 1 < len(comma) <= 6:
+                items = comma
+        items = items[:8] or ["Reserva"]
+    catalog = {}
+    for i, name in enumerate(items, 1):
+        code = f"core_servicio_{i}"
+        catalog[code] = {
+            "numero": i,
+            "nombre": name[:120],
+            "precio": 0,
+            "precio_texto": "Valor por confirmar",
+            "detalle": "",
+            "categoria": "Servicios",
+            "aliases": [name[:120]],
+            "duracion_minutos": None,
+        }
+    return catalog
+
+
+def _core_prepare_calendar_runtime(datos):
+    """Adapta la configuración de agenda del onboarding al mismo motor usado por Diego."""
+    actual = dict(tenant_actual())
+    apertura, cierre = _core_parse_business_hours(
+        datos.get("agenda_horario"),
+        actual.get("hora_apertura") or DEFAULT_HORA_APERTURA,
+        actual.get("hora_cierre") or DEFAULT_HORA_CIERRE,
+    )
+    actual["hora_apertura"] = apertura
+    actual["hora_cierre"] = cierre
+    actual["duracion_reserva"] = _core_parse_duration_minutes(
+        datos.get("agenda_duracion"),
+        actual.get("duracion_reserva") or DEFAULT_DURACION_RESERVA,
+    )
+    actual["dias_atencion"] = _core_parse_days(datos.get("agenda_dias"))
+    # CRÍTICO: si Core no tiene servicios estructurados propios, crear un catálogo
+    # desde el onboarding para impedir cualquier fallback a los servicios de Diego.
+    if not actual.get("servicios"):
+        actual["servicios"] = _core_agenda_catalog(datos)
+    # Las empresas Core no heredan la dirección privada/default de Diego.
+    actual["direccion"] = str(datos.get("direccion") or "").strip()
+    set_tenant(actual)
+    return actual
+
+
+def _core_procesar_agenda_estandar(empresa_id, telefono, texto, datos):
+    """Usa el mismo motor conversacional y de disponibilidad de Diego, aislado por empresa_id."""
+    _core_prepare_calendar_runtime(datos)
+    session_key = f"core:{empresa_id}:{_normalizar_identificador_demo(telefono, 'whatsapp')}"
+    estado = get_estado(session_key)
+    estado["telefono"] = telefono
+    estado["_session_key"] = session_key
+    return procesar_agenda(estado, texto)
 
 
 def _core_agent_agenda(empresa_id, texto, ctx=None):
@@ -4052,13 +4174,12 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
         # el agente de agenda usa disponibilidad y creación de eventos reales.
         # Sin conexión, conserva el flujo de solicitud/orientación del Core.
         agente_previsto = _core_route_intent(texto, datos_perfil)
-        if agente_previsto == "agenda" and negocio_tiene_calendar_real() and bool(cfg("servicios")):
-            session_key = f"core:{empresa_id}:{_normalizar_identificador_demo(telefono, 'whatsapp')}"
-            estado = get_estado(session_key)
-            estado["telefono"] = telefono
-            respuesta = procesar_agenda(estado, texto)
+        if agente_previsto == "agenda" and negocio_tiene_calendar_real():
+            # Agenda estándar Nexia: mismo flujo probado de Diego, pero con el
+            # Calendar, horarios, duración y servicios del empresa_id actual.
+            respuesta = _core_procesar_agenda_estandar(empresa_id, telefono, texto, datos_perfil)
             agente_usado = "agenda"
-            print("NEXI CORE CALENDAR REAL:", empresa_id, google_calendar_id_actual())
+            print("NEXI CORE AGENDA ESTANDAR:", empresa_id, google_calendar_id_actual())
         else:
             respuesta, agente_usado = _core_orchestrate(empresa_id, texto, token=token, canal="whatsapp")
 
