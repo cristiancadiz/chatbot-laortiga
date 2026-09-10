@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.5.7-HANDOFF-WAIT-MESSAGE"
+APP_VERSION = "2026-09-10-NEXI-V1.6.1-50-TOTAL-MESSAGES"
 load_dotenv()
 
 app = Flask(__name__)
@@ -163,15 +163,15 @@ def backend_headers():
 
 
 # ============================================================
-# NEXIA SAAS - PLANES, DEMO 100 RESPUESTAS / 24 HORAS
+# NEXIA SAAS - PLANES, DEMO 50 MENSAJES TOTALES / 24 HORAS
 # ============================================================
 # Una demo termina cuando ocurre primero:
-#   1) se consumen 50 respuestas automáticas; o
+#   1) se consumen 50 mensajes totales (recibidos + enviados); o
 #   2) pasan 24 horas desde su activación.
 #
 # Las respuestas manuales de un ejecutivo enviadas desde Portal Nexia NO
 # consumen demo porque este control solo se ejecuta en los webhooks del bot.
-DEMO_LIMITE_RESPUESTAS_DEFAULT = int(os.getenv("DEMO_LIMITE_RESPUESTAS", "50"))
+DEMO_LIMITE_MENSAJES_DEFAULT = int(os.getenv("DEMO_LIMITE_MENSAJES", os.getenv("DEMO_LIMITE_RESPUESTAS", "50")))
 DEMO_DURACION_HORAS_DEFAULT = int(os.getenv("DEMO_DURACION_HORAS", "24"))
 DEMO_OVERRIDE_ACTIVO = os.getenv("DEMO_OVERRIDE_ACTIVO", "true").strip().lower() in {"1", "true", "yes", "si", "sí"}
 
@@ -261,9 +261,9 @@ def estado_suscripcion_empresa(empresa_id=None):
             return {"empresa_id": empresa_id, "tipo_plan": "legacy", "estado": "activo", "controlado": False}
         out = dict(rows[0])
         out["controlado"] = True
-        limite = int(out.get("limite_respuestas") or 0)
-        usadas = int(out.get("respuestas_usadas") or 0)
-        out["respuestas_restantes"] = max(0, limite - usadas) if limite else None
+        limite = int(out.get("limite_mensajes") or out.get("limite_respuestas") or 0)
+        usadas = int(out.get("mensajes_usados") or out.get("respuestas_usadas") or 0)
+        out["mensajes_restantes"] = max(0, limite - usadas) if limite else None
         return out
     except Exception as e:
         print("NEXIA PLAN STATUS ERROR:", repr(e))
@@ -271,7 +271,7 @@ def estado_suscripcion_empresa(empresa_id=None):
         return {"empresa_id": empresa_id, "tipo_plan": "legacy", "estado": "activo", "controlado": False, "error": str(e)[:200]}
 
 
-def consumir_respuesta_demo_atomica():
+def consumir_mensaje_demo_atomico():
     """Reserva 1 respuesta de demo mediante RPC atómica de Supabase.
 
     Para planes pagados/legacy devuelve permitido=True sin descontar.
@@ -283,7 +283,7 @@ def consumir_respuesta_demo_atomica():
         return {"permitido": True, "tipo_plan": "legacy", "controlado": False}
     try:
         r = requests.post(
-            f"{SUPABASE_URL}/rest/v1/rpc/consumir_respuesta_nexia",
+            f"{SUPABASE_URL}/rest/v1/rpc/consumir_mensaje_nexia",
             headers=headers,
             json={"p_empresa_id": empresa_id},
             timeout=SUPABASE_TIMEOUT,
@@ -303,12 +303,42 @@ def consumir_respuesta_demo_atomica():
         return {"permitido": True, "tipo_plan": "legacy", "controlado": False, "error": str(e)[:200]}
 
 
+
+def consumir_mensaje_entrante_demo():
+    """Cuenta un mensaje recibido del usuario dentro de una demo."""
+    return consumir_mensaje_demo_atomico()
+
+
+def preparar_mensaje_saliente_demo(mensaje):
+    """Cuenta un mensaje enviado por el bot y aplica avisos de saldo."""
+    control = consumir_mensaje_demo_atomico()
+    if bool(control.get("permitido", True)):
+        tipo = str(control.get("tipo_plan") or "").lower()
+        if tipo == "demo":
+            restantes = control.get("mensajes_restantes")
+            try:
+                restantes = int(restantes)
+            except Exception:
+                restantes = None
+            aviso = None
+            if restantes == 20:
+                aviso = "\n\nℹ️ Tu demo de Nexia tiene 20 mensajes disponibles."
+            elif restantes == 5:
+                aviso = "\n\n⚠️ Te quedan 5 mensajes en tu demo de Nexia."
+            elif restantes == 1:
+                aviso = "\n\n⚠️ Te queda 1 mensaje en tu demo de Nexia."
+            if aviso:
+                mensaje = str(mensaje or "").rstrip() + aviso
+        return mensaje
+    return mensaje_demo_finalizada(control.get("motivo"))
+
+
 def mensaje_demo_finalizada(motivo=None):
     motivo = str(motivo or "").strip().lower()
     if motivo == "tiempo":
         detalle = "Tu período de prueba de 24 horas ya finalizó."
     elif motivo == "limite":
-        detalle = "Ya utilizaste las 50 respuestas gratuitas incluidas en tu prueba."
+        detalle = "Ya utilizaste las 50 mensajes gratuitos incluidas en tu prueba."
     else:
         detalle = "Tu demostración gratuita de Nexia ya finalizó."
     return (
@@ -318,33 +348,13 @@ def mensaje_demo_finalizada(motivo=None):
     )
 
 
-def aplicar_plan_a_respuesta(respuesta):
-    """Aplica consumo/expiración justo antes de enviar una respuesta automática."""
-    control = consumir_respuesta_demo_atomica()
-    if bool(control.get("permitido", True)):
-        tipo = str(control.get("tipo_plan") or "").lower()
-        if tipo == "demo":
-            restantes = control.get("respuestas_restantes")
-            try:
-                restantes = int(restantes)
-            except Exception:
-                restantes = None
-            aviso = None
-            if restantes == 20:
-                aviso = "\n\nℹ️ Tu demo de Nexia tiene 20 respuestas gratuitas disponibles."
-            elif restantes == 5:
-                aviso = "\n\n⚠️ Te quedan 5 respuestas gratuitas en tu demo de Nexia."
-            elif restantes == 1:
-                aviso = "\n\n⚠️ Te queda 1 respuesta gratuita en tu demo de Nexia."
-            if aviso:
-                respuesta = str(respuesta or "").rstrip() + aviso
-        return respuesta
-
-    return mensaje_demo_finalizada(control.get("motivo"))
+def preparar_mensaje_saliente_demo(respuesta):
+    """Compatibilidad: prepara y contabiliza un mensaje saliente de la demo."""
+    return preparar_mensaje_saliente_demo(respuesta)
 
 
 def activar_demo_empresa(empresa_id, identificador_cliente=None, canal="whatsapp"):
-    """Activa/reinicia una demo por 24h y 50 respuestas para una empresa."""
+    """Activa/reinicia una demo por 24h y 50 mensajes totales para una empresa."""
     headers = backend_headers()
     empresa_id = str(empresa_id or "").strip()
     if not headers or not empresa_id:
@@ -358,8 +368,8 @@ def activar_demo_empresa(empresa_id, identificador_cliente=None, canal="whatsapp
         "estado": "activo",
         "demo_inicio": ahora.isoformat(),
         "demo_fin": fin.isoformat(),
-        "limite_respuestas": DEMO_LIMITE_RESPUESTAS_DEFAULT,
-        "respuestas_usadas": 0,
+        "limite_mensajes": DEMO_LIMITE_MENSAJES_DEFAULT,
+        "mensajes_usados": 0,
         "updated_at": ahora.isoformat(),
     }
     r = requests.post(
@@ -397,9 +407,9 @@ def activar_demo_empresa(empresa_id, identificador_cliente=None, canal="whatsapp
         "estado": "activo",
         "demo_inicio": ahora.isoformat(),
         "demo_fin": fin.isoformat(),
-        "limite_respuestas": DEMO_LIMITE_RESPUESTAS_DEFAULT,
-        "respuestas_usadas": 0,
-        "respuestas_restantes": DEMO_LIMITE_RESPUESTAS_DEFAULT,
+        "limite_mensajes": DEMO_LIMITE_MENSAJES_DEFAULT,
+        "mensajes_usados": 0,
+        "mensajes_restantes": DEMO_LIMITE_MENSAJES_DEFAULT,
         "identificador_cliente": identificador or None,
         "canal": (canal or "whatsapp").lower(),
     }
@@ -2939,6 +2949,313 @@ def _core_respuesta_no_verificable(texto):
 
 
 
+
+# ============================================================
+# NEXI V1.6 - ORQUESTADOR CENTRAL + AGENTES ESPECIALIZADOS
+# ============================================================
+
+CORE_AGENT_NAMES = {
+    "atencion": "Atención",
+    "conocimiento": "Conocimiento",
+    "ventas": "Ventas",
+    "agenda": "Agenda",
+    "soporte": "Soporte",
+    "seguimiento": "Seguimiento",
+}
+
+
+def _core_public_profile(empresa_id):
+    """Perfil seguro para agentes: elimina datos privados del creador/ejecutivo."""
+    perfil = _core_profile(empresa_id) or {}
+    datos = dict(perfil.get("datos") or {})
+    for privado in (
+        "nombre_contacto",
+        "email_contacto",
+        "whatsapp_demo",
+        "correo_ejecutivo",
+        "telefono_ejecutivo",
+        "web_knowledge",
+    ):
+        datos.pop(privado, None)
+    return perfil, datos
+
+
+def _core_agent_enabled(agent, datos):
+    objetivo = _core_norm(datos.get("objetivo"))
+    if agent == "agenda":
+        return _core_necesita_agenda(datos)
+    if agent == "ventas":
+        return any(x in objetivo for x in (
+            "vender", "venta", "precio", "informar precios",
+            "personas interesadas", "seguimiento",
+        )) or True
+    if agent == "seguimiento":
+        return "seguimiento" in objetivo
+    return True
+
+
+def _core_route_intent(texto, datos):
+    """
+    Router barato y determinista.
+    No consume una llamada adicional a OpenAI.
+    """
+    t = _core_norm(texto)
+
+    if _core_es_handoff(texto):
+        return "handoff"
+
+    if any(x in t for x in (
+        "agendar", "agenda", "reservar", "reserva", "hora disponible",
+        "pedir hora", "cita", "turno", "disponibilidad",
+    )):
+        return "agenda" if _core_agent_enabled("agenda", datos) else "atencion"
+
+    if any(x in t for x in (
+        "precio", "precios", "cuanto cuesta", "cuánto cuesta", "cuanto cobran",
+        "cuánto cobran", "cotizar", "cotizacion", "cotización", "comprar",
+        "contratar", "plan", "planes", "valor", "valores",
+    )):
+        return "ventas"
+
+    if any(x in t for x in (
+        "problema", "error", "falla", "no funciona", "ayuda tecnica",
+        "ayuda técnica", "soporte", "reclamo", "incidente",
+    )):
+        return "soporte"
+
+    if any(x in t for x in (
+        "seguimiento", "estado de mi", "como va mi", "cómo va mi",
+        "mi solicitud", "mi pedido", "mi caso",
+    )):
+        return "seguimiento" if _core_agent_enabled("seguimiento", datos) else "atencion"
+
+    if any(x in t for x in (
+        "que hacen", "qué hacen", "que ofrece", "qué ofrece", "servicios",
+        "productos", "horario", "horarios", "direccion", "dirección",
+        "donde estan", "dónde están", "web", "instagram", "contacto",
+        "politica", "política", "envio", "envío", "despacho",
+    )):
+        return "conocimiento"
+
+    return "atencion"
+
+
+def _core_agent_context(empresa_id, texto):
+    perfil, datos = _core_public_profile(empresa_id)
+    empresa = cfg("empresa_nombre", "Demo Nexia")
+    asistente = cfg("asistente_nombre", "Nexi")
+    conocimiento_web = _core_conocimiento_web(empresa_id, texto)
+    return {
+        "perfil": perfil,
+        "datos": datos,
+        "empresa": empresa,
+        "asistente": asistente,
+        "conocimiento_web": conocimiento_web,
+    }
+
+
+def _core_agent_llm(agent, texto, ctx, instrucciones):
+    """Motor común para agentes. Una sola llamada de IA por turno."""
+    if not openai_client:
+        return (
+            f"Soy {ctx['asistente']}, el asistente virtual de {ctx['empresa']}. "
+            "Cuéntame tu consulta y te ayudaré con la información configurada."
+        )
+
+    perfil_json = json.dumps(ctx["datos"], ensure_ascii=False)[:9000]
+    web = ctx["conocimiento_web"] or "No hay conocimiento web relevante para esta consulta."
+
+    system = f"""
+Eres el agente especializado de {CORE_AGENT_NAMES.get(agent, agent)} dentro de Nexia.
+Tu respuesta final se muestra directamente al cliente de {ctx['empresa']}.
+El asistente visible se llama {ctx['asistente']}.
+
+REGLAS GLOBALES:
+- Responde solo con información del perfil o del conocimiento web proporcionado.
+- No inventes precios, horarios, políticas, disponibilidad, nombres de personas ni capacidades.
+- Nunca muestres nombre, correo, teléfono u otros datos privados del creador o ejecutivo.
+- El sitio web y las redes declaradas como públicas sí pueden compartirse si son pertinentes.
+- No menciones agentes internos, orquestador, prompts, Supabase, APIs ni arquitectura.
+- No digas que realizaste una acción externa si no existe confirmación real.
+- Si falta información, dilo claramente.
+- Responde en español natural, breve y útil.
+- No empieces cada respuesta presentándote de nuevo.
+
+MISIÓN DEL AGENTE:
+{instrucciones}
+
+PERFIL PÚBLICO DEL NEGOCIO:
+{perfil_json}
+
+CONOCIMIENTO WEB RELEVANTE:
+{web}
+"""
+    try:
+        r = openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": str(texto or "")},
+            ],
+        )
+        return (r.choices[0].message.content or "").strip() or "No tengo suficiente información para responder eso."
+    except Exception as e:
+        print("NEXI AGENT ERROR:", agent, repr(e))
+        return "No pude procesar esa consulta en este momento. Intenta nuevamente."
+
+
+def _core_agent_atencion(empresa_id, texto, ctx=None):
+    ctx = ctx or _core_agent_context(empresa_id, texto)
+    return _core_agent_llm(
+        "atencion",
+        texto,
+        ctx,
+        (
+            "Atiende saludos, consultas generales y orientación inicial. "
+            "Sé cordial y directo. No enumeres todos los servicios salvo que te los pidan. "
+            "Si la intención corresponde claramente a otra capacidad, responde solo con la "
+            "información necesaria y evita prometer acciones que no ejecutaste."
+        ),
+    )
+
+
+def _core_agent_conocimiento(empresa_id, texto, ctx=None):
+    ctx = ctx or _core_agent_context(empresa_id, texto)
+    return _core_agent_llm(
+        "conocimiento",
+        texto,
+        ctx,
+        (
+            "Responde preguntas sobre el negocio, productos, servicios, horarios, políticas, "
+            "ubicaciones, web y redes usando principalmente la fuente web y el perfil. "
+            "Cuando una respuesta no esté en las fuentes, indícalo sin completar con suposiciones."
+        ),
+    )
+
+
+def _core_agent_ventas(empresa_id, texto, ctx=None):
+    ctx = ctx or _core_agent_context(empresa_id, texto)
+    return _core_agent_llm(
+        "ventas",
+        texto,
+        ctx,
+        (
+            "Ayuda a una persona interesada a entender productos, servicios y precios disponibles. "
+            "No inventes valores. Si no existe precio publicado, dilo de forma simple y, si la "
+            "configuración permite derivación humana, ofrece derivar para cotización. "
+            "No solicites datos innecesarios antes de que el usuario acepte la derivación."
+        ),
+    )
+
+
+def _core_agent_agenda(empresa_id, texto, ctx=None):
+    ctx = ctx or _core_agent_context(empresa_id, texto)
+    datos = ctx["datos"]
+    agenda = {
+        "que": datos.get("agenda_que"),
+        "duracion": datos.get("agenda_duracion"),
+        "dias": datos.get("agenda_dias"),
+        "horario": datos.get("agenda_horario"),
+        "buffer": datos.get("agenda_buffer"),
+    }
+    agenda_txt = json.dumps(agenda, ensure_ascii=False)
+    return _core_agent_llm(
+        "agenda",
+        texto,
+        ctx,
+        (
+            "Orienta sobre agenda o reservas usando únicamente la configuración disponible. "
+            f"Configuración declarada de agenda: {agenda_txt}. "
+            "En esta demo no afirmes que una reserva quedó creada ni que una hora está disponible "
+            "si no existe una confirmación real de calendario. Puedes pedir la fecha/hora deseada "
+            "como intención de reserva y explicar las condiciones conocidas."
+        ),
+    )
+
+
+def _core_agent_soporte(empresa_id, texto, ctx=None):
+    ctx = ctx or _core_agent_context(empresa_id, texto)
+    return _core_agent_llm(
+        "soporte",
+        texto,
+        ctx,
+        (
+            "Ayuda con problemas o dudas de soporte usando solo procedimientos publicados o "
+            "configurados. Si no existe solución documentada, dilo y ofrece derivación humana "
+            "solo cuando esté habilitada."
+        ),
+    )
+
+
+def _core_agent_seguimiento(empresa_id, texto, ctx=None):
+    ctx = ctx or _core_agent_context(empresa_id, texto)
+    return _core_agent_llm(
+        "seguimiento",
+        texto,
+        ctx,
+        (
+            "Gestiona consultas de seguimiento. No inventes estados de solicitudes, pedidos, "
+            "reservas o casos. Si no existe una fuente de estado en tiempo real, explica que no "
+            "puedes confirmarlo y ofrece el siguiente paso permitido."
+        ),
+    )
+
+
+CORE_AGENT_REGISTRY = {
+    "atencion": _core_agent_atencion,
+    "conocimiento": _core_agent_conocimiento,
+    "ventas": _core_agent_ventas,
+    "agenda": _core_agent_agenda,
+    "soporte": _core_agent_soporte,
+    "seguimiento": _core_agent_seguimiento,
+}
+
+
+def _core_log_orchestration(empresa_id, token, canal, texto, agente):
+    """Auditoría no bloqueante: si la tabla aún no existe, la conversación sigue."""
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/nexi_core_orquestacion",
+            headers=_core_headers("return=minimal"),
+            json={
+                "empresa_id": empresa_id,
+                "onboarding_token": token or None,
+                "canal": canal,
+                "mensaje": str(texto or "")[:4000],
+                "agente": agente,
+                "created_at": datetime.now(pytz.UTC).isoformat(),
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+    except Exception as e:
+        print("NEXI ORCHESTRATION LOG SKIP:", repr(e))
+
+
+def _core_orchestrate(empresa_id, texto, token=None, canal="web"):
+    """
+    Orquestador central.
+    Decide una capacidad/agente, prepara contexto y delega.
+    """
+    _, datos = _core_public_profile(empresa_id)
+    agente = _core_route_intent(texto, datos)
+
+    if agente == "handoff":
+        # El handoff real se procesa antes de llegar aquí.
+        agente = "atencion"
+
+    if not _core_agent_enabled(agente, datos):
+        agente = "atencion"
+
+    fn = CORE_AGENT_REGISTRY.get(agente, _core_agent_atencion)
+    ctx = _core_agent_context(empresa_id, texto)
+    respuesta = fn(empresa_id, texto, ctx=ctx)
+
+    _core_log_orchestration(empresa_id, token, canal, texto, agente)
+    print("NEXI ORCHESTRATOR:", empresa_id, canal, "->", agente)
+    return respuesta, agente
+
+
 def _core_responder_demo_web(token, empresa_id, texto):
     """Simulador web con handoff persistente."""
     perfil = _core_profile(empresa_id) or {}
@@ -2971,7 +3288,7 @@ def _core_responder_demo_web(token, empresa_id, texto):
             f"No hemos podido conectarte con una persona dentro de los "
             f"{CORE_HANDOFF_TIMEOUT_MINUTOS} minutos estimados. "
             "Puedo seguir ayudándote por aquí mientras tanto.\n\n"
-            + _core_demo_answer(empresa_id, texto)
+            + _core_orchestrate(empresa_id, texto, token=token, canal="web")[0]
         )
 
     if estado_handoff == "recolectando":
@@ -3046,7 +3363,7 @@ def _core_responder_demo_web(token, empresa_id, texto):
         )
         return _core_handoff_prompt("empresa")
 
-    respuesta = _core_demo_answer(empresa_id, texto)
+    respuesta, agente_usado = _core_orchestrate(empresa_id, texto, token=token, canal="web")
 
     nr = normalizar_texto(respuesta)
     if _core_si(datos_perfil.get("handoff")) and any(
@@ -3106,7 +3423,7 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
         respuesta=(
             f"No hemos podido conectarte con una persona dentro de los {CORE_HANDOFF_TIMEOUT_MINUTOS} minutos estimados. "
             "Puedo seguir ayudándote por aquí mientras tanto.\n\n"
-            + _core_demo_answer(empresa_id,texto)
+            + _core_orchestrate(empresa_id, texto, token=token, canal="whatsapp")[0]
         )
 
     if estado_handoff == "recolectando":
@@ -3163,9 +3480,9 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
             "a ella como información previa, pero no como una confirmación actual."
         )
     else:
-        respuesta=_core_demo_answer(empresa_id,texto)
+        respuesta, agente_usado = _core_orchestrate(empresa_id, texto, token=token, canal="whatsapp")
 
-        # Si la IA termina ofreciendo handoff, dejamos contexto pendiente para que "sí" tenga sentido.
+        # Si el agente termina ofreciendo handoff, dejamos contexto pendiente para que "sí" tenga sentido.
         nr=normalizar_texto(respuesta)
         if _core_si(datos_perfil.get("handoff")) and any(x in nr for x in (
             "puedo derivarte", "quieres que te derive", "puedo ponerte en contacto",
@@ -3177,7 +3494,9 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
             )
 
     respuesta=proteger_respuesta_publica_core(respuesta)
-    respuesta=aplicar_plan_a_respuesta(respuesta)
+    es_mensaje_espera_handoff = (respuesta == 'Seguimos en contacto con el ejecutivo. Tu solicitud ya fue enviada y tus mensajes están quedando registrados para que pueda revisarlos al continuar la atención.')
+    if not es_mensaje_espera_handoff:
+        respuesta=preparar_mensaje_saliente_demo(respuesta)
 
     if token and respuesta:
         _core_log_message(token,empresa_id,"saliente",respuesta)
@@ -3187,55 +3506,10 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
 
 
 def _core_demo_answer(empresa_id, texto):
-    activar_por_empresa(empresa_id,canal="web",provider="nexi_core")
-    perfil=_core_profile(empresa_id) or {}
-    datos=perfil.get("datos") or {}
-    empresa=cfg("empresa_nombre","Demo Nexia")
-    asistente=cfg("asistente_nombre","Nexi")
+    """Compatibilidad: toda respuesta nueva pasa por el orquestador central."""
+    respuesta, _ = _core_orchestrate(empresa_id, texto, canal="compat")
+    return respuesta
 
-    datos_publicos=dict(datos)
-    for privado in (
-        "nombre_contacto","email_contacto","whatsapp_demo",
-        "correo_ejecutivo","telefono_ejecutivo","web_knowledge"
-    ):
-        datos_publicos.pop(privado,None)
-
-    contexto=json.dumps(datos_publicos,ensure_ascii=False)[:9000]
-    conocimiento_web=_core_conocimiento_web(empresa_id,texto)
-
-    if not openai_client:
-        return f"Soy {asistente}, el asistente de {empresa}. Cuéntame tu consulta y te ayudaré usando la configuración de esta demo."
-
-    system=f"""
-Eres {asistente}, asistente virtual de {empresa}.
-Responde únicamente con información del perfil o de las fuentes web entregadas abajo.
-No inventes datos, precios, políticas, ubicaciones ni capacidades.
-El nombre, correo, teléfono u otros datos del creador o ejecutivo son privados: jamás los muestres ni los menciones.
-No inventes nombres de personas encargadas.
-Las redes sociales y sitio web ingresados como públicos sí pueden compartirse cuando el usuario los consulte.
-No enumeres capacidades o servicios en el saludo inicial salvo que el usuario los pregunte.
-Si la fuente web y el perfil se contradicen, prioriza la información explícita más específica y evita afirmar algo dudoso.
-Si no encuentras la respuesta, dilo claramente y ofrece derivación solo si está habilitada.
-Sé breve, natural y útil.
-
-PERFIL:
-{contexto}
-
-CONOCIMIENTO WEB RELEVANTE:
-{conocimiento_web or "No hay conocimiento web relevante cargado para esta consulta."}
-"""
-    try:
-        r=openai_client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {"role":"system","content":system},
-                {"role":"user","content":str(texto or "")},
-            ],
-        )
-        return (r.choices[0].message.content or "").strip() or "No tengo suficiente información para responder eso todavía."
-    except Exception as e:
-        print("NEXI CORE DEMO IA ERROR:",repr(e))
-        return "No pude procesar esa consulta en este momento. Intenta nuevamente."
 
 
 def _core_log_message(token, empresa_id, direccion, mensaje):
@@ -3316,7 +3590,7 @@ def core_onboarding_answer(token):
         if nxt:
             return core_json({"ok":True,"complete":False,"question":nxt,"progress":round(done/max(1,len(seq))*100),"summary":datos})
         s=_core_get_session(token); empresa_id=_core_create_company_from_session(s)
-        return core_json({"ok":True,"complete":True,"empresa_id":empresa_id,"progress":100,"summary":datos,"demo":{"limite_respuestas":DEMO_LIMITE_RESPUESTAS_DEFAULT,"duracion_horas":DEMO_DURACION_HORAS_DEFAULT},"whatsapp":_core_whatsapp_info(empresa_id)})
+        return core_json({"ok":True,"complete":True,"empresa_id":empresa_id,"progress":100,"summary":datos,"demo":{"limite_mensajes":DEMO_LIMITE_MENSAJES_DEFAULT,"duracion_horas":DEMO_DURACION_HORAS_DEFAULT},"whatsapp":_core_whatsapp_info(empresa_id)})
     except Exception as e:
         print("CORE ANSWER ERROR:",repr(e)); return core_json({"ok":False,"error":str(e)[:300]},500)
 
@@ -3338,6 +3612,17 @@ def core_demo_message(token):
         if not texto:
             return core_json({"ok":False,"error":"Falta message"},400)
 
+        control_entrada = consumir_mensaje_entrante_demo()
+        if not bool(control_entrada.get("permitido", True)):
+            respuesta = mensaje_demo_finalizada(control_entrada.get("motivo"))
+            return core_json({
+                "ok": True,
+                "reply": respuesta,
+                "plan": estado_suscripcion_empresa(empresa_id),
+                "handoff_waiting": False,
+                "orchestrated": False,
+            })
+
         if _core_respuesta_no_verificable(texto):
             _core_log_message(token,empresa_id,"entrante",texto)
             respuesta=(
@@ -3350,7 +3635,7 @@ def core_demo_message(token):
         respuesta=proteger_respuesta_publica_core(respuesta)
         es_mensaje_espera_handoff = (respuesta == 'Seguimos en contacto con el ejecutivo. Tu solicitud ya fue enviada y tus mensajes están quedando registrados para que pueda revisarlos al continuar la atención.')
         if not es_mensaje_espera_handoff:
-            respuesta=aplicar_plan_a_respuesta(respuesta)
+            respuesta=preparar_mensaje_saliente_demo(respuesta)
 
         if respuesta:
             _core_log_message(token,empresa_id,"saliente",respuesta)
@@ -3361,6 +3646,7 @@ def core_demo_message(token):
             "reply":respuesta,
             "plan":plan,
             "handoff_waiting": not bool(respuesta),
+            "orchestrated": True,
         })
     except Exception as e:
         print("CORE DEMO MESSAGE ERROR:",repr(e))
@@ -3418,7 +3704,11 @@ def whatsapp_webhook():
         # usa SU perfil y SU contador; no entra al flujo legacy de Diego.
         if demo_access:
             if texto:
-                respuesta = _core_responder_demo_whatsapp(demo_access, telefono, texto)
+                control_entrada = consumir_mensaje_entrante_demo()
+                if not bool(control_entrada.get("permitido", True)):
+                    respuesta = mensaje_demo_finalizada(control_entrada.get("motivo"))
+                else:
+                    respuesta = _core_responder_demo_whatsapp(demo_access, telefono, texto)
             else:
                 respuesta = "¡Hola! 👋 Tu demo de Nexia está activa. Escríbeme una consulta para probar tu asistente."
             if respuesta:
@@ -3479,7 +3769,7 @@ def whatsapp_webhook():
                 respuesta = respuesta_general(texto)
 
         # V67: controla plan/demo antes de guardar y enviar la respuesta automática.
-        respuesta = aplicar_plan_a_respuesta(respuesta)
+        respuesta = preparar_mensaje_saliente_demo(respuesta)
         # Filtro final de privacidad para Nexia.
         respuesta = proteger_respuesta_publica_nexia(respuesta)
         guardar_mensaje(telefono, "assistant", respuesta)
@@ -3699,7 +3989,7 @@ def gupshup_webhook():
                 respuesta = respuesta_general(texto)
 
         # V67: controla plan/demo antes de guardar y enviar la respuesta automática.
-        respuesta = aplicar_plan_a_respuesta(respuesta)
+        respuesta = preparar_mensaje_saliente_demo(respuesta)
         # Filtro final de privacidad para Nexia.
         respuesta = proteger_respuesta_publica_nexia(respuesta)
         guardar_mensaje(telefono, "assistant", respuesta)
@@ -3952,7 +4242,7 @@ def procesar_texto_instagram(cliente_id, texto, username=None):
         respuesta = respuesta_general(texto)
 
     # V67: controla plan/demo antes de guardar y enviar la respuesta automática.
-    respuesta = aplicar_plan_a_respuesta(respuesta)
+    respuesta = preparar_mensaje_saliente_demo(respuesta)
     # Filtro final de privacidad para Nexia.
     respuesta = proteger_respuesta_publica_nexia(respuesta)
     guardar_mensaje(session_id, "assistant", respuesta, canal="instagram")
@@ -4801,7 +5091,7 @@ def portal_admin_plan(empresa_id):
         if request.method == "GET":
             return portal_json({"ok": True, "plan": estado_suscripcion_empresa(empresa_id)})
         data = request.get_json(silent=True) or {}
-        allowed = {"tipo_plan", "estado", "limite_respuestas", "respuestas_usadas", "demo_inicio", "demo_fin"}
+        allowed = {"tipo_plan", "estado", "limite_mensajes", "mensajes_usados", "demo_inicio", "demo_fin"}
         payload = {k: data[k] for k in allowed if k in data}
         payload["empresa_id"] = empresa_id
         payload["updated_at"] = datetime.now(pytz.UTC).isoformat()
@@ -4830,7 +5120,7 @@ def health():
         "calendar": "Google Calendar",
         "payments": "disabled",
         "saas": "multiempresa",
-        "demo": f"{DEMO_LIMITE_RESPUESTAS_DEFAULT} respuestas / {DEMO_DURACION_HORAS_DEFAULT} horas",
+        "demo": f"{DEMO_LIMITE_MENSAJES_DEFAULT} respuestas / {DEMO_DURACION_HORAS_DEFAULT} horas",
         "history": "Supabase",
     }, 200
 
