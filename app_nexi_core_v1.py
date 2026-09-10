@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-CORE-V1.5-BUSINESS-WEB-50"
+APP_VERSION = "2026-09-10-NEXI-V1.5.2-ONBOARDING-SIMPLE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2123,9 +2123,9 @@ CORE_QUESTIONS = {
         "kind": "long_text",
     },
     "productos_servicios": {
-        "text": "¿Qué productos o servicios ofreces?",
+        "text": "¿Qué productos o servicios ofrece tu negocio?",
         "kind": "long_text",
-        "help": "Puedes incluir precios o valores referenciales. Si tu web ya contiene esta información, también puedes permitir que Nexi la aprenda.",
+        "help": "Puedes escribirlos brevemente. Si tienes una página web con esta información, después podrás permitir que Nexi la use para aprender sobre tu negocio.",
     },
     "objetivo": {
         "text": "¿Qué quieres que Nexi haga por tu negocio?",
@@ -2211,13 +2211,15 @@ CORE_QUESTIONS = {
         ],
     },
     "handoff": {
-        "text": "¿Quieres que Nexi pueda derivar conversaciones a una persona?",
-        "kind": "yes_no",
+        "text": "¿Quieres que Nexi pueda derivar una conversación a una persona cuando sea necesario?",
+        "kind": "choice",
+        "options": ["Sí, permitir derivaciones", "No, Nexi atenderá sin derivar"],
+        "help": "Si un cliente necesita atención humana, Nexi podrá pausar la conversación y avisar a la persona encargada.",
     },
     "email_contacto": {
-        "text": "¿A qué correo deben llegar las derivaciones?",
+        "text": "¿A qué correo quieres recibir los avisos de derivación?",
         "kind": "email",
-        "help": "Este correo es privado y nunca se mostrará a tus clientes.",
+        "help": "Por ahora los avisos se enviarán por correo electrónico. Este dato es privado y nunca se mostrará a tus clientes.",
     },
     "tono": {
         "text": "¿Cómo quieres que se comunique Nexi?",
@@ -2228,11 +2230,6 @@ CORE_QUESTIONS = {
         "text": "Si Nexi no sabe una respuesta, ¿qué debe hacer?",
         "kind": "choice",
         "options": ["Decir que no cuenta con esa información", "Pedir más detalles", "Derivar a una persona"],
-    },
-    "restricciones": {
-        "text": "¿Hay algo que Nexi nunca debería responder, prometer o informar?",
-        "kind": "long_text",
-        "placeholder": "Si no hay restricciones adicionales, escribe No.",
     },
 }
 
@@ -2483,7 +2480,7 @@ def _core_secuencia(datos):
     if _core_si(datos.get("handoff")):
         seq.append("email_contacto")
 
-    seq += ["tono","desconocido","restricciones"]
+    seq += ["tono","desconocido"]
 
     out=[]
     for k in seq:
@@ -2767,9 +2764,7 @@ def _core_create_company_from_session(session):
         f"Canales deseados: {datos.get('canales_deseados','')}. "
         f"Personas que atienden clientes: {datos.get('personas_atencion','')}. "
         f"Sitio web público: {sitio_web}. Redes sociales públicas: {json.dumps(redes,ensure_ascii=False)}. "
-        f"Tono: {datos.get('tono','')}. Si no sabe: {datos.get('desconocido','')}. "
-        f"Restricciones: {datos.get('restricciones','')}. "
-        "Nunca muestres teléfonos privados, correos internos ni datos personales del ejecutivo."
+        f"Tono: {datos.get('tono','')}. Si no sabe: {datos.get('desconocido','')}. " "Nunca muestres teléfonos privados, correos internos ni datos personales del ejecutivo."
     )
 
     cfg_payload={
