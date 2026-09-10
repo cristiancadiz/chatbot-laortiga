@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.9.1-DEMOS-PORTAL"
+APP_VERSION = "2026-09-10-NEXI-V1.9.3-CORS-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2534,9 +2534,9 @@ CORE_QUESTIONS = {
         "help": "Si un cliente necesita atención humana, Nexi podrá pausar la conversación y avisar a la persona encargada.",
     },
     "email_contacto": {
-        "text": "¿A qué correo quieres recibir los avisos de derivación?",
+        "text": "¿Qué correo quieres usar para tu acceso al Portal Nexia?",
         "kind": "email",
-        "help": "Por ahora los avisos se enviarán por correo electrónico. Este dato es privado y nunca se mostrará a tus clientes.",
+        "help": "Usaremos este correo para asociar tu acceso al Portal Nexia y también para enviarte avisos de derivación durante la demo. Este dato es privado y nunca se mostrará a tus clientes.",
     },
     "tono": {
         "text": "¿Cómo quieres que se comunique Nexi?",
@@ -4896,9 +4896,24 @@ def instagram_diagnostico():
 
 
 def portal_cors_response(response):
-    response.headers["Access-Control-Allow-Origin"] = PORTAL_ORIGIN
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    # Permite el dominio principal con y sin www, además del PORTAL_ORIGIN configurado.
+    # Esto evita el "Failed to fetch" del navegador cuando el portal está servido
+    # desde https://nexia-tech.com pero Render tenía configurado otro host/origen.
+    request_origin = str(request.headers.get("Origin") or "").rstrip("/")
+    allowed_origins = {
+        str(PORTAL_ORIGIN or "").rstrip("/"),
+        "https://nexia-tech.com",
+        "https://www.nexia-tech.com",
+    }
+    allowed_origins.discard("")
+    if request_origin in allowed_origins:
+        response.headers["Access-Control-Allow-Origin"] = request_origin
+    elif not request_origin:
+        # Requests servidor-a-servidor / pruebas directas.
+        response.headers["Access-Control-Allow-Origin"] = str(PORTAL_ORIGIN or "https://nexia-tech.com").rstrip("/")
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Demo-Token"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
+    response.headers["Access-Control-Max-Age"] = "600"
     response.headers["Vary"] = "Origin"
     return response
 
@@ -4910,6 +4925,47 @@ def portal_json(payload, status=200):
 
 
 def portal_usuario_autorizado():
+    """
+    Valida acceso al Portal. Soporta:
+    1) sesión normal Supabase Auth (correo + contraseña);
+    2) acceso temporal de demo sin contraseña mediante X-Demo-Token.
+
+    El token demo corresponde al token aleatorio del onboarding y solo es
+    válido mientras la empresa tenga una demo activa.
+    """
+    demo_token = str(request.headers.get("X-Demo-Token") or "").strip()
+    if demo_token:
+        try:
+            sesion = _core_get_session(demo_token)
+            if not sesion or not sesion.get("completado") or not sesion.get("empresa_id"):
+                print("PORTAL DEMO AUTH: token inválido o onboarding incompleto")
+                return None
+            empresa_id = str(sesion.get("empresa_id") or "").strip()
+            plan = estado_suscripcion_empresa(empresa_id)
+            if str(plan.get("tipo_plan") or "").lower() != "demo" or str(plan.get("estado") or "").lower() != "activo":
+                print("PORTAL DEMO AUTH: demo no activa", empresa_id)
+                return None
+            fin = _parse_iso(plan.get("demo_fin"))
+            if fin and datetime.now(pytz.UTC) >= fin.astimezone(pytz.UTC):
+                print("PORTAL DEMO AUTH: demo vencida", empresa_id)
+                return None
+            datos = sesion.get("datos") or {}
+            perfil = {
+                "id": f"demo:{demo_token}",
+                "empresa_id": empresa_id,
+                "nombre": str(datos.get("nombre_contacto") or datos.get("nombre_negocio") or "Usuario demo"),
+                "email": str(datos.get("email_contacto") or ""),
+                "rol": "demo",
+                "demo": True,
+                "demo_token": demo_token,
+            }
+            print("PORTAL DEMO AUTH OK:", empresa_id, perfil.get("email"))
+            return perfil
+        except Exception as e:
+            print("PORTAL DEMO AUTH ERROR:", repr(e))
+            return None
+
+    # Sesión normal Supabase Auth
     """
     Valida el access token real enviado por portal.html y obtiene el perfil
     del usuario autenticado.
@@ -5058,6 +5114,46 @@ def portal_config_public():
         "supabase_anon_key": SUPABASE_ANON_KEY,
         "app_version": APP_VERSION,
     })
+
+
+@app.route("/portal/login", methods=["POST", "OPTIONS"])
+def portal_login():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+    data = request.get_json(silent=True) or {}
+    email = str(data.get("email") or "").strip()
+    password = str(data.get("password") or "")
+    if not email or not password:
+        return portal_json({"ok": False, "error": "Ingresa correo y contraseña"}, 400)
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return portal_json({"ok": False, "error": "Supabase Auth no está configurado en el backend"}, 500)
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/auth/v1/token?grant_type=password",
+            headers={"apikey": SUPABASE_SERVICE_ROLE_KEY, "Content-Type": "application/json"},
+            json={"email": email, "password": password},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if not r.ok:
+            detalle = "Correo o contraseña incorrectos"
+            try:
+                detalle = (r.json() or {}).get("msg") or (r.json() or {}).get("error_description") or detalle
+            except Exception:
+                pass
+            return portal_json({"ok": False, "error": detalle}, 401)
+        auth_data = r.json() if r.content else {}
+        token = str(auth_data.get("access_token") or "")
+        if not token:
+            return portal_json({"ok": False, "error": "Supabase no devolvió una sesión válida"}, 502)
+        return portal_json({
+            "ok": True,
+            "access_token": token,
+            "expires_in": auth_data.get("expires_in"),
+            "token_type": auth_data.get("token_type") or "bearer",
+        })
+    except Exception as e:
+        print("PORTAL LOGIN ERROR:", repr(e))
+        return portal_json({"ok": False, "error": "No se pudo iniciar sesión en este momento"}, 502)
 
 
 @app.route("/portal/me", methods=["GET", "OPTIONS"])
@@ -5475,6 +5571,18 @@ def portal_enviar_mensaje():
                     canal_cfg = rows[0]
                     provider = str(canal_cfg.get("provider") or provider)
         activar_por_empresa(empresa_conv_id, canal=canal, provider=provider, canal_config=canal_cfg)
+
+        # En demos, una respuesta manual desde el Portal también consume 1 mensaje.
+        plan_actual = estado_suscripcion_empresa(empresa_conv_id)
+        if str(plan_actual.get("tipo_plan") or "").lower() == "demo":
+            control_portal = consumir_mensaje_demo_atomico()
+            if not bool(control_portal.get("permitido", True)):
+                return portal_json({
+                    "ok": False,
+                    "codigo": "DEMO_FINALIZADA",
+                    "error": mensaje_demo_finalizada(control_portal.get("motivo")),
+                    "plan": estado_suscripcion_empresa(empresa_conv_id),
+                }, 409)
 
         # En cuanto un ejecutivo responde desde el portal, el bot deja de intervenir
         # en esta conversación hasta que se reactive manualmente.
