@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-CORE-V1.1-WHATSAPP-DEMO"
+APP_VERSION = "2026-09-10-NEXI-CORE-V1.2-ORCHESTRATOR-HANDOFF-MAIL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2082,64 +2082,174 @@ def procesar_agenda(estado, texto):
 
 import uuid
 
-CORE_ONBOARDING_VERSION = "nexi-core-v1"
+CORE_ONBOARDING_VERSION = "nexi-core-v1.2"
 CORE_DEMO_CHANNEL = "web"
 
 CORE_COMMON_FIELDS = [
-    "tipo_cliente", "nombre_contacto", "nombre_asistente", "objetivo",
-    "canales_actuales", "canales_deseados",
+    "tipo_cliente", "nombre_contacto", "email_contacto", "nombre_asistente",
+    "objetivo", "canales_actuales", "canales_deseados", "presencia_digital",
 ]
 
 CORE_QUESTIONS = {
     "tipo_cliente": {
-        "text": "¿Para quién quieres crear Nexia? Responde: Personal, Profesional independiente o Empresa/emprendimiento.",
+        "text": "¿Para quién quieres crear Nexia?",
         "kind": "choice",
         "options": ["Personal", "Profesional independiente", "Empresa/emprendimiento"],
+        "help": "Esto adapta el resto de la configuración para no hacerte preguntas innecesarias.",
     },
-    "nombre_contacto": {"text": "¿Cuál es tu nombre?", "kind": "text"},
-    "nombre_asistente": {"text": "¿Cómo quieres que se llame tu asistente? Si no tienes un nombre, escribe Asistente Virtual.", "kind": "text"},
+    "nombre_contacto": {
+        "text": "¿Cuál es tu nombre?",
+        "kind": "text",
+    },
+    "email_contacto": {
+        "text": "¿A qué correo quieres recibir avisos cuando alguien pida hablar con una persona?",
+        "kind": "email",
+        "help": "Este correo queda como canal privado de notificación de la demo y nunca se muestra a tus clientes.",
+    },
+    "nombre_asistente": {
+        "text": "¿Cómo quieres que se llame tu asistente?",
+        "kind": "text",
+        "placeholder": "Ej: Luna, Sofía, Asistente Virtual",
+    },
     "objetivo": {
-        "text": "¿Qué te gustaría que Nexia hiciera? Puedes mezclar opciones: atender consultas, vender, captar interesados, informar precios, agendar, hacer seguimiento, derivar a una persona o automatizar otro proceso.",
-        "kind": "multi_text",
+        "text": "¿Qué quieres que haga Nexia por ti?",
+        "kind": "multi_choice",
+        "options": [
+            "Responder consultas",
+            "Atender clientes",
+            "Vender productos o servicios",
+            "Informar precios",
+            "Captar interesados",
+            "Agendar o reservar",
+            "Hacer seguimiento",
+            "Derivar a una persona",
+            "Soporte / preguntas frecuentes",
+            "Automatizar otro proceso",
+        ],
+        "help": "Puedes elegir más de una opción.",
     },
     "canales_actuales": {
-        "text": "¿Por dónde hablan hoy contigo o con tu negocio? Puedes indicar varios: WhatsApp, Instagram, Facebook/Messenger, sitio web, chat web, correo, teléfono, presencial u otro.",
-        "kind": "multi_text",
+        "text": "¿Por dónde hablan hoy contigo o con tu negocio?",
+        "kind": "multi_choice",
+        "options": ["WhatsApp", "Instagram", "Facebook/Messenger", "Sitio web", "Chat web", "Correo", "Teléfono", "Presencial", "Otro"],
     },
     "canales_deseados": {
-        "text": "¿Dónde te gustaría que Nexia pudiera atender? Puedes elegir varios: WhatsApp, Instagram, Facebook/Messenger, sitio web/chat web u otro.",
-        "kind": "multi_text",
+        "text": "¿Dónde te gustaría que Nexia pudiera atender?",
+        "kind": "multi_choice",
+        "options": ["WhatsApp", "Instagram", "Facebook/Messenger", "Sitio web / Chat web", "Otro"],
+    },
+    "presencia_digital": {
+        "text": "Agrega tu web y redes sociales.",
+        "kind": "digital_presence",
+        "help": "Puedes dejar en blanco lo que no uses. Esto queda guardado de forma estructurada para que luego Nexia pueda usarlo como fuente de conocimiento.",
     },
     "whatsapp_demo": {
-        "text": "¿Cuál es el número de WhatsApp desde el que probarás tu asistente? Escríbelo con código de país, por ejemplo +56912345678.",
+        "text": "¿Cuál es el número de WhatsApp desde el que probarás tu asistente?",
         "kind": "phone",
+        "placeholder": "+56912345678",
     },
-    "sitio_web": {"text": "¿Tienes sitio web? Si sí, pega la dirección. Si no, responde No.", "kind": "url_or_no"},
-    "redes_sociales": {"text": "¿Qué redes sociales utilizas? Puedes pegar tus usuarios o enlaces de Instagram, Facebook, TikTok, LinkedIn u otras. Si no usas, responde No.", "kind": "multi_text"},
+
     # Personal
-    "personal_audiencia": {"text": "¿Quiénes hablarían con tu asistente y qué tipo de ayuda deberían recibir?", "kind": "text"},
-    "personal_info": {"text": "Cuéntame la información que Nexia debería conocer para responder correctamente.", "kind": "long_text"},
+    "personal_audiencia": {
+        "text": "¿Quiénes hablarían con tu asistente y qué tipo de ayuda deberían recibir?",
+        "kind": "long_text",
+    },
+    "personal_info": {
+        "text": "¿Qué información debería conocer Nexia para responder correctamente?",
+        "kind": "long_text",
+    },
+
     # Profesional
-    "profesion": {"text": "¿A qué te dedicas o qué profesión/actividad realizas?", "kind": "text"},
-    "servicios_profesional": {"text": "¿Qué servicios ofreces? Incluye precios o valores referenciales si los tienes.", "kind": "long_text"},
-    "modalidad": {"text": "¿Cómo atiendes? Presencial, online, a domicilio o una combinación.", "kind": "multi_text"},
-    "ubicacion": {"text": "¿Hay una ubicación o zona de atención que tus clientes deban conocer? Si no corresponde, responde No.", "kind": "text"},
+    "profesion": {
+        "text": "¿A qué te dedicas o qué profesión/actividad realizas?",
+        "kind": "text",
+    },
+    "servicios_profesional": {
+        "text": "¿Qué servicios ofreces?",
+        "kind": "long_text",
+        "help": "Incluye precios o valores referenciales si los tienes.",
+    },
+    "modalidad": {
+        "text": "¿Cómo atiendes?",
+        "kind": "multi_choice",
+        "options": ["Presencial", "Online", "A domicilio", "Mixto"],
+    },
+    "ubicacion": {
+        "text": "¿Hay una ubicación o zona de atención que tus clientes deban conocer?",
+        "kind": "text_or_no",
+    },
+
     # Empresa
-    "empresa_nombre": {"text": "¿Cómo se llama tu empresa, pyme o emprendimiento?", "kind": "text"},
-    "rubro": {"text": "¿A qué se dedica la empresa?", "kind": "text"},
-    "productos_servicios": {"text": "¿Qué productos o servicios ofrece? Incluye precios si corresponde.", "kind": "long_text"},
-    "equipo_atencion": {"text": "¿Cuántas personas atienden hoy consultas de clientes aproximadamente?", "kind": "text"},
-    "captura_leads": {"text": "¿Quieres que Nexia capture datos de personas interesadas para seguimiento comercial? Responde Sí, No o explica qué datos necesitas.", "kind": "text"},
-    # Condicionales
-    "agenda_que": {"text": "Veo que necesitas agenda o reservas. ¿Qué se agenda: una cita, servicio, reunión u otra cosa?", "kind": "text"},
-    "agenda_duracion": {"text": "¿Cuánto dura normalmente cada atención o reserva?", "kind": "text"},
-    "agenda_dias": {"text": "¿Qué días atiendes o se pueden realizar reservas?", "kind": "text"},
-    "agenda_horario": {"text": "¿En qué horario se pueden agendar?", "kind": "text"},
-    "agenda_buffer": {"text": "¿Necesitas tiempo entre una atención y otra? Si sí, indica cuántos minutos.", "kind": "text"},
-    "handoff": {"text": "¿Nexia debe poder derivar una conversación a una persona o ejecutivo cuando sea necesario?", "kind": "yes_no"},
-    "tono": {"text": "¿Cómo quieres que responda? Por ejemplo: cercano, profesional, formal, amigable o directo. Indica también si puede usar emojis.", "kind": "text"},
-    "desconocido": {"text": "Si Nexia no sabe una respuesta, ¿qué prefieres: que lo diga, que pida más detalles o que derive a una persona?", "kind": "choice"},
-    "restricciones": {"text": "¿Hay algo que Nexia nunca debería responder, prometer o informar? Si no, responde No.", "kind": "long_text"},
+    "empresa_nombre": {
+        "text": "¿Cómo se llama tu empresa, pyme o emprendimiento?",
+        "kind": "text",
+    },
+    "rubro": {
+        "text": "¿A qué se dedica la empresa?",
+        "kind": "text",
+    },
+    "productos_servicios": {
+        "text": "¿Qué productos o servicios ofrece?",
+        "kind": "long_text",
+        "help": "Puedes incluir precios, planes o valores referenciales.",
+    },
+    "equipo_atencion": {
+        "text": "¿Cuántas personas atienden hoy consultas de clientes aproximadamente?",
+        "kind": "text",
+    },
+    "captura_leads": {
+        "text": "¿Quieres que Nexia capture datos de personas interesadas para seguimiento comercial?",
+        "kind": "choice",
+        "options": ["Sí", "No", "Sí, pero solo nombre y contacto", "Sí, quiero definir los datos"],
+    },
+
+    # Agenda condicional
+    "agenda_que": {
+        "text": "Veo que necesitas agenda o reservas. ¿Qué se agenda?",
+        "kind": "text",
+        "placeholder": "Ej: cita, servicio, reunión, evaluación",
+    },
+    "agenda_duracion": {
+        "text": "¿Cuánto dura normalmente cada atención o reserva?",
+        "kind": "text",
+        "placeholder": "Ej: 60 minutos",
+    },
+    "agenda_dias": {
+        "text": "¿Qué días se puede reservar?",
+        "kind": "text",
+        "placeholder": "Ej: lunes a sábado",
+    },
+    "agenda_horario": {
+        "text": "¿En qué horario se puede agendar?",
+        "kind": "text",
+        "placeholder": "Ej: 10:00 a 19:00",
+    },
+    "agenda_buffer": {
+        "text": "¿Necesitas tiempo entre una atención y otra?",
+        "kind": "text_or_no",
+        "placeholder": "Ej: 15 minutos",
+    },
+
+    # Comportamiento
+    "handoff": {
+        "text": "¿Nexia debe poder derivar la conversación a una persona cuando sea necesario?",
+        "kind": "yes_no",
+    },
+    "tono": {
+        "text": "¿Cómo quieres que se comunique tu asistente?",
+        "kind": "multi_choice",
+        "options": ["Cercano", "Profesional", "Formal", "Amigable", "Directo y breve", "Puede usar emojis", "Sin emojis"],
+    },
+    "desconocido": {
+        "text": "Si Nexia no sabe una respuesta, ¿qué debe hacer?",
+        "kind": "choice",
+        "options": ["Decir que no cuenta con esa información", "Pedir más detalles", "Derivar a una persona"],
+    },
+    "restricciones": {
+        "text": "¿Hay algo que Nexia nunca debería responder, prometer o informar?",
+        "kind": "long_text",
+        "placeholder": "Si no hay restricciones adicionales, escribe No.",
+    },
 }
 
 
@@ -2169,30 +2279,175 @@ def _core_canales_texto(datos):
     return " ".join(_core_norm(datos.get(k)) for k in ("canales_actuales","canales_deseados"))
 
 
+def _core_presencia(datos):
+    raw = datos.get("presencia_digital")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+    return {}
+
+def _core_email_valido(value):
+    value = str(value or "").strip()
+    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value))
+
+def _core_es_handoff(texto):
+    t = _core_norm(texto)
+    return any(x in t for x in (
+        "derivar", "hablar con una persona", "hablar con persona", "hablar con alguien",
+        "hablar con ejecutivo", "hablar con un ejecutivo", "persona real", "humano",
+        "asesor", "ejecutivo", "contactar a alguien", "quiero contacto",
+    ))
+
+def _core_handoff_lookup(empresa_id, identificador, canal):
+    ident = _normalizar_identificador_demo(identificador, canal)
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/nexi_core_handoff_sesiones",
+        headers=_core_headers(),
+        params={
+            "select": "*",
+            "empresa_id": f"eq.{empresa_id}",
+            "identificador": f"eq.{ident}",
+            "canal": f"eq.{canal}",
+            "limit": "1",
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows = r.json() if r.content else []
+    return rows[0] if rows else None
+
+def _core_handoff_upsert(empresa_id, identificador, canal, payload):
+    ident = _normalizar_identificador_demo(identificador, canal)
+    row = {
+        "empresa_id": empresa_id,
+        "identificador": ident,
+        "canal": canal,
+        "updated_at": datetime.now(pytz.UTC).isoformat(),
+        **payload,
+    }
+    r = requests.post(
+        f"{SUPABASE_URL}/rest/v1/nexi_core_handoff_sesiones",
+        headers=_core_headers("resolution=merge-duplicates,return=representation"),
+        params={"on_conflict": "empresa_id,canal,identificador"},
+        json=row,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows = r.json() if r.content else []
+    return rows[0] if rows else row
+
+def _core_handoff_request(empresa_id, identificador, canal, datos, motivo):
+    perfil = _core_profile(empresa_id) or {}
+    pd = perfil.get("datos") or {}
+    tipo = _core_tipo(pd.get("tipo_cliente")) or "personal"
+    contacto = str(pd.get("nombre_contacto") or "Cliente").strip()
+    empresa_demo = str(pd.get("empresa_nombre") or pd.get("profesion") or "").strip()
+    correo = str(pd.get("email_contacto") or cfg("correo_ejecutivo", "") or "").strip()
+
+    payload = {
+        "empresa_id": empresa_id,
+        "identificador": _normalizar_identificador_demo(identificador, canal),
+        "canal": canal,
+        "nombre_contacto": str(datos.get("nombre") or contacto or "").strip() or None,
+        "empresa_contacto": str(datos.get("empresa") or empresa_demo or "").strip() or None,
+        "motivo": str(motivo or datos.get("motivo") or "").strip() or "Solicita atención humana",
+        "estado": "pendiente",
+        "created_at": datetime.now(pytz.UTC).isoformat(),
+        "updated_at": datetime.now(pytz.UTC).isoformat(),
+    }
+    rr = requests.post(
+        f"{SUPABASE_URL}/rest/v1/nexi_core_handoffs",
+        headers=_core_headers("return=representation"),
+        json=payload,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    rr.raise_for_status()
+
+    if correo:
+        tipo_label = {"personal":"Persona","profesional":"Profesional","empresa":"Empresa"}.get(tipo, tipo)
+        asunto = f"🔔 Solicitud de contacto — {cfg('empresa_nombre','Nexia')}"
+        texto_mail = (
+            f"Nueva solicitud de atención humana\n\n"
+            f"Perfil: {tipo_label}\n"
+            f"Nombre: {payload['nombre_contacto'] or 'No informado'}\n"
+            f"Empresa/actividad: {payload['empresa_contacto'] or 'No informado'}\n"
+            f"Motivo: {payload['motivo']}\n"
+            f"Canal: {canal}\n"
+            f"Identificador: {payload['identificador']}\n\n"
+            f"Ingresa al Portal Nexia para continuar la atención."
+        )
+        enviar_correo_resend(correo, asunto, texto=texto_mail)
+    return payload
+
+def _core_handoff_prompt(tipo):
+    if tipo == "empresa":
+        return (
+            "Claro 😊. Voy a registrar tu solicitud para que una persona continúe contigo por este mismo canal.\n\n"
+            "Escríbeme en un solo mensaje:\n• tu nombre\n• tu empresa\n• el motivo de tu consulta"
+        )
+    if tipo == "profesional":
+        return (
+            "Claro 😊. Voy a registrar tu solicitud para que una persona continúe contigo por este mismo canal.\n\n"
+            "Escríbeme en un solo mensaje:\n• tu nombre\n• tu profesión o actividad\n• el motivo de tu consulta"
+        )
+    return (
+        "Claro 😊. Voy a registrar tu solicitud para que una persona continúe contigo por este mismo canal.\n\n"
+        "Escríbeme en un solo mensaje:\n• tu nombre\n• el motivo de tu consulta"
+    )
+
+def _core_parse_handoff_details(tipo, texto):
+    limpio = str(texto or "").strip()
+    partes = [p.strip() for p in re.split(r"[,;|\\n]+", limpio) if p.strip()]
+    if tipo == "empresa":
+        return {
+            "nombre": partes[0] if len(partes) > 0 else "",
+            "empresa": partes[1] if len(partes) > 1 else "",
+            "motivo": ", ".join(partes[2:]) if len(partes) > 2 else (partes[1] if len(partes) > 1 else ""),
+        }
+    if tipo == "profesional":
+        return {
+            "nombre": partes[0] if len(partes) > 0 else "",
+            "empresa": partes[1] if len(partes) > 1 else "",
+            "motivo": ", ".join(partes[2:]) if len(partes) > 2 else (partes[1] if len(partes) > 1 else ""),
+        }
+    return {
+        "nombre": partes[0] if len(partes) > 0 else "",
+        "empresa": "",
+        "motivo": ", ".join(partes[1:]) if len(partes) > 1 else "",
+    }
+
+
 def _core_secuencia(datos):
     tipo=_core_tipo(datos.get("tipo_cliente")) or datos.get("tipo_cliente")
     seq=list(CORE_COMMON_FIELDS)
     canales=_core_canales_texto(datos)
-    # La presencia digital forma parte explícita del Core V1.
+
+    # WhatsApp demo solo si se usa o se desea usar WhatsApp.
     if "whatsapp" in canales:
         seq.append("whatsapp_demo")
-    if any(x in canales for x in ("web","sitio","pagina","ecommerce","tienda")) or tipo in {"profesional","empresa"}:
-        seq.append("sitio_web")
-    if any(x in canales for x in ("instagram","facebook","tiktok","linkedin","red social","redes")) or tipo in {"profesional","empresa"}:
-        seq.append("redes_sociales")
+
     if tipo == "personal":
         seq += ["personal_audiencia","personal_info"]
     elif tipo == "profesional":
         seq += ["profesion","servicios_profesional","modalidad","ubicacion"]
     elif tipo == "empresa":
         seq += ["empresa_nombre","rubro","productos_servicios","equipo_atencion","captura_leads"]
+
     if _core_necesita_agenda(datos):
         seq += ["agenda_que","agenda_duracion","agenda_dias","agenda_horario","agenda_buffer"]
+
     seq += ["handoff","tono","desconocido","restricciones"]
-    # No repetir y conservar orden.
+
     out=[]
     for k in seq:
-        if k not in out: out.append(k)
+        if k not in out:
+            out.append(k)
     return out
 
 
@@ -2242,16 +2497,21 @@ def _core_create_company_from_session(session):
     tipo_negocio="reservas" if usa_reservas else ("personal" if tipo=="personal" else "comercial")
     descripcion=" | ".join(x for x in [str(datos.get("rubro") or ""),str(datos.get("profesion") or ""),str(datos.get("productos_servicios") or datos.get("servicios_profesional") or datos.get("personal_info") or "")] if x.strip())
     modulos={"ia":True,"reservas":usa_reservas,"handoff_humano":_core_si(datos.get("handoff")),"whatsapp":"whatsapp" in _core_canales_texto(datos),"instagram":"instagram" in _core_canales_texto(datos),"web":True}
+    presencia=_core_presencia(datos)
+    sitio_web=str(presencia.get("web") or "").strip()
+    redes={k:v for k,v in presencia.items() if k != "web" and str(v or "").strip()}
     prompt_extra=(
-        f"NEXI CORE V1. Perfil: {tipo}. Objetivo: {objetivos}. "
+        f"NEXI CORE V1.2. Perfil: {tipo}. Objetivo: {objetivos}. "
         f"Canales actuales: {datos.get('canales_actuales','')}. Canales deseados: {datos.get('canales_deseados','')}. "
-        f"Sitio web: {datos.get('sitio_web','')}. Redes sociales: {datos.get('redes_sociales','')}. "
+        f"Sitio web: {sitio_web}. Redes sociales: {json.dumps(redes,ensure_ascii=False)}. "
         f"Tono: {datos.get('tono','')}. Si no sabe: {datos.get('desconocido','')}. "
-        f"Restricciones: {datos.get('restricciones','')}."
+        f"Restricciones: {datos.get('restricciones','')}. "
+        "REGLA DE PRIVACIDAD: nunca muestres teléfonos privados, correos internos ni datos personales del ejecutivo. "
+        "Si el usuario pide una persona, la derivación es interna y continúa por el mismo canal."
     )
-    cfg_payload={"empresa_id":empresa_id,"tipo_negocio":tipo_negocio,"descripcion_empresa":descripcion,"asistente_nombre":str(datos.get("nombre_asistente") or "Nexia"),"timezone":TIMEZONE,"hora_apertura":DEFAULT_HORA_APERTURA,"hora_cierre":DEFAULT_HORA_CIERRE,"duracion_reserva":DEFAULT_DURACION_RESERVA,"dias_atencion":[0,1,2,3,4,5],"prompt_extra":prompt_extra,"modulos":modulos}
+    cfg_payload={"empresa_id":empresa_id,"tipo_negocio":tipo_negocio,"descripcion_empresa":descripcion,"asistente_nombre":str(datos.get("nombre_asistente") or "Nexia"),"correo_ejecutivo":str(datos.get("email_contacto") or "").strip(),"timezone":TIMEZONE,"hora_apertura":DEFAULT_HORA_APERTURA,"hora_cierre":DEFAULT_HORA_CIERRE,"duracion_reserva":DEFAULT_DURACION_RESERVA,"dias_atencion":[0,1,2,3,4,5],"prompt_extra":prompt_extra,"modulos":modulos}
     cr=requests.post(f"{SUPABASE_URL}/rest/v1/configuracion_bot",headers=_core_headers("return=representation"),json=cfg_payload,timeout=SUPABASE_TIMEOUT); cr.raise_for_status()
-    profile={"empresa_id":empresa_id,"onboarding_token":token,"version":CORE_ONBOARDING_VERSION,"tipo_cliente":tipo,"datos":datos,"canales_actuales":str(datos.get("canales_actuales") or ""),"canales_deseados":str(datos.get("canales_deseados") or ""),"sitio_web":str(datos.get("sitio_web") or ""),"redes_sociales":str(datos.get("redes_sociales") or ""),"objetivo":objetivos,"created_at":now,"updated_at":now}
+    profile={"empresa_id":empresa_id,"onboarding_token":token,"version":CORE_ONBOARDING_VERSION,"tipo_cliente":tipo,"datos":datos,"canales_actuales":str(datos.get("canales_actuales") or ""),"canales_deseados":str(datos.get("canales_deseados") or ""),"sitio_web":sitio_web,"redes_sociales":json.dumps(redes,ensure_ascii=False),"objetivo":objetivos,"created_at":now,"updated_at":now}
     pr=requests.post(f"{SUPABASE_URL}/rest/v1/nexi_core_perfiles",headers=_core_headers("return=representation"),json=profile,timeout=SUPABASE_TIMEOUT); pr.raise_for_status()
     whatsapp_demo=str(datos.get("whatsapp_demo") or "").strip()
     activar_demo_empresa(empresa_id, whatsapp_demo if whatsapp_demo else None, "whatsapp")
@@ -2297,18 +2557,63 @@ def _core_whatsapp_info(empresa_id=None):
 
 
 def _core_responder_demo_whatsapp(demo_access, telefono, texto):
-    """Procesa una conversación de demo real desde WhatsApp usando Nexi Core."""
+    """Procesa una demo real por WhatsApp con handoff persistente y correo."""
     empresa_id=str((demo_access or {}).get("empresa_id") or empresa_actual_id() or "").strip()
     if not empresa_id:
         raise RuntimeError("Demo sin empresa_id")
+
     activar_por_empresa(empresa_id,canal="whatsapp",provider="demo")
     token=_core_token_por_empresa(empresa_id)
+    perfil=_core_profile(empresa_id) or {}
+    datos_perfil=perfil.get("datos") or {}
+    tipo=_core_tipo(datos_perfil.get("tipo_cliente")) or "personal"
+
     if token:
         _core_log_message(token,empresa_id,"entrante",texto)
-    respuesta=_core_demo_answer(empresa_id,texto)
+
+    hs=_core_handoff_lookup(empresa_id,telefono,"whatsapp")
+
+    # Si ya fue derivado, el bot no vuelve a intervenir.
+    if hs and str(hs.get("estado") or "") == "derivado":
+        print("NEXI CORE HANDOFF ACTIVO:",empresa_id,_normalizar_identificador_demo(telefono,"whatsapp"))
+        return ""
+
+    # Recolección de datos posterior a "derivar".
+    if hs and str(hs.get("estado") or "") == "recolectando":
+        detalles=_core_parse_handoff_details(tipo,texto)
+        motivo=str(detalles.get("motivo") or "").strip()
+        nombre=str(detalles.get("nombre") or "").strip()
+
+        if not nombre or not motivo:
+            respuesta=_core_handoff_prompt(tipo)
+        else:
+            _core_handoff_request(empresa_id,telefono,"whatsapp",detalles,motivo)
+            _core_handoff_upsert(
+                empresa_id,telefono,"whatsapp",
+                {"estado":"derivado","datos":detalles,"started_at":hs.get("started_at") or datetime.now(pytz.UTC).isoformat()}
+            )
+            respuesta=(
+                f"Gracias, {nombre} 🙌\\n\\n"
+                "Ya registré tu solicitud y la envié al equipo. "
+                "Una persona podrá continuar la atención por este mismo canal. "
+                "No necesitas compartir ningún otro dato de contacto."
+            )
+    elif _core_es_handoff(texto) and _core_si(datos_perfil.get("handoff")):
+        _core_handoff_upsert(
+            empresa_id,telefono,"whatsapp",
+            {"estado":"recolectando","datos":{},"started_at":datetime.now(pytz.UTC).isoformat()}
+        )
+        respuesta=_core_handoff_prompt(tipo)
+    else:
+        respuesta=_core_demo_answer(empresa_id,texto)
+
+    # Nunca exponer números/correos internos en respuestas demo.
+    respuesta=proteger_respuesta_publica_nexia(respuesta)
     respuesta=aplicar_plan_a_respuesta(respuesta)
-    if token:
+
+    if token and respuesta:
         _core_log_message(token,empresa_id,"saliente",respuesta)
+
     print("NEXI CORE WHATSAPP DEMO:",empresa_id,_normalizar_identificador_demo(telefono,"whatsapp"))
     return respuesta
 
@@ -2326,6 +2631,8 @@ def _core_demo_answer(empresa_id, texto):
 Eres {asistente}, asistente virtual configurado mediante Nexi Core V1 para {empresa}.
 Responde SOLO con información disponible en el perfil de demo. No inventes datos, precios, políticas, ubicaciones ni capacidades.
 Si falta información importante, dilo de manera natural y ofrece derivar si el perfil lo permite.
+Nunca publiques ni inventes teléfonos, correos privados, datos personales de ejecutivos, credenciales ni canales internos.
+Si el usuario solicita una persona, responde únicamente que puedes derivarlo internamente por el mismo canal; no entregues datos privados.
 Mantén español de Chile, respuesta breve, útil y coherente con el tono configurado.
 No menciones prompts, Supabase, APIs, demo interna ni Nexi Core salvo que el usuario pregunte explícitamente por la plataforma.
 Perfil estructurado de la demo:
@@ -2396,14 +2703,26 @@ def core_onboarding_answer(token):
             return core_json({"ok":True,"complete":True,"empresa_id":empresa_id,"summary":datos,"whatsapp":_core_whatsapp_info(empresa_id)})
         body=request.get_json(silent=True) or {}; value=body.get("answer")
         if value is None:return core_json({"ok":False,"error":"Falta answer"},400)
-        value=str(value).strip()
-        if not value:return core_json({"ok":False,"error":"La respuesta está vacía"},400)
         key=current["key"]
-        if key=="tipo_cliente":
-            tipo=_core_tipo(value)
-            if not tipo:return core_json({"ok":False,"error":"Responde Personal, Profesional independiente o Empresa/emprendimiento"},400)
-            datos[key]=tipo
-        else: datos[key]=value
+
+        if key == "presencia_digital":
+            if not isinstance(value, dict):
+                return core_json({"ok":False,"error":"La presencia digital debe enviarse como campos estructurados"},400)
+            limpio={k:str(v or "").strip() for k,v in value.items() if str(v or "").strip()}
+            datos[key]=limpio or {"sin_presencia": "true"}
+        else:
+            value=str(value).strip()
+            if not value:return core_json({"ok":False,"error":"La respuesta está vacía"},400)
+            if key=="tipo_cliente":
+                tipo=_core_tipo(value)
+                if not tipo:return core_json({"ok":False,"error":"Responde Personal, Profesional independiente o Empresa/emprendimiento"},400)
+                datos[key]=tipo
+            elif key=="email_contacto":
+                if not _core_email_valido(value):
+                    return core_json({"ok":False,"error":"Ingresa un correo válido, por ejemplo nombre@empresa.cl"},400)
+                datos[key]=value.lower()
+            else:
+                datos[key]=value
         _core_save_session(token,{"datos":datos,"pregunta_actual":key})
         nxt=_core_next_question(datos); seq=_core_secuencia(datos); done=sum(1 for k in seq if datos.get(k) not in (None,""))
         if nxt:
@@ -2489,7 +2808,8 @@ def whatsapp_webhook():
                 respuesta = _core_responder_demo_whatsapp(demo_access, telefono, texto)
             else:
                 respuesta = "¡Hola! 👋 Tu demo de Nexia está activa. Escríbeme una consulta para probar tu asistente."
-            twiml.message(respuesta)
+            if respuesta:
+                twiml.message(respuesta)
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
         if not texto:
