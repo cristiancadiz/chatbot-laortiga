@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.5-PRODUCCION-ACCESO-PORTAL"
+APP_VERSION = "2026-09-10-NEXI-V2.5.1-AGENDA-PAYLOAD-ESCAPE-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1265,21 +1265,34 @@ def enviar_twilio_agenda_interactiva(destino, estado, pagina_servicios=0, pagina
 
 
 def agenda_payload_a_texto(payload):
-    """Convierte una selección interactiva en el número que ya entiende procesar_agenda()."""
-    raw = str(payload or "").strip().lower()
+    """
+    Convierte una selección interactiva en el número que ya entiende procesar_agenda().
+
+    Twilio puede entregar el ListId/ButtonPayload escapado, por ejemplo:
+    agenda\:hora\_num:1
+    agenda\:servicio\_num:2
+
+    Para la lógica interna quitamos esos backslashes antes de interpretar el id.
+    """
+    original = str(payload or "").strip()
+    raw = original.replace("\\", "").strip().lower()
     m = re.fullmatch(r"agenda:(?:servicio_num|hora_num):(\d{1,3})", raw)
-    return m.group(1) if m else str(payload or "")
+    return m.group(1) if m else original
 
 def router_payload_interactivo(request_form):
     """Extrae el id de quick-reply/list-picker que Twilio envía al webhook."""
     # Quick reply / botones
     payload = str(request_form.get("ButtonPayload") or "").strip()
     if payload:
+        if payload.replace("\\", "").lower().startswith(("agenda:", "pago:")):
+            return payload.replace("\\", "")
         return payload
 
     # Twilio list-picker envía la selección en ListId.
     list_id = str(request_form.get("ListId") or "").strip()
     if list_id:
+        if list_id.replace("\\", "").lower().startswith(("agenda:", "pago:")):
+            return list_id.replace("\\", "")
         return list_id
 
     # Compatibilidad con respuestas ricas normalizadas.
@@ -5206,9 +5219,10 @@ def whatsapp_webhook():
         # puede enviar en Body el texto visible del ítem y en ButtonPayload el ID real.
         # El motor de agenda entiende el número normalizado del payload; por eso
         # usamos texto_procesado para la lógica y conservamos Body solo para logs.
+        payload_logico = str(interactive_payload or "").replace("\\", "").strip().lower()
         texto_procesado = (
             texto_router
-            if interactive_payload and interactive_payload.lower().startswith("agenda:")
+            if interactive_payload and payload_logico.startswith("agenda:")
             else texto
         )
         message_id = (request.form.get("MessageSid") or "").strip()
