@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.3.1-AGENDA-LISTAS-INTERACTIVAS"
+APP_VERSION = "2026-09-10-NEXI-V2.3.2-AGENDA-PAYLOAD-INTERACTIVO-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -4875,6 +4875,15 @@ def whatsapp_webhook():
         texto = (request.form.get("Body") or "").strip()
         interactive_payload = router_payload_interactivo(request.form)
         texto_router = agenda_payload_a_texto(interactive_payload) if interactive_payload else texto
+        # V2.3.2: cuando el usuario toca una opción de servicios/horas, Twilio
+        # puede enviar en Body el texto visible del ítem y en ButtonPayload el ID real.
+        # El motor de agenda entiende el número normalizado del payload; por eso
+        # usamos texto_procesado para la lógica y conservamos Body solo para logs.
+        texto_procesado = (
+            texto_router
+            if interactive_payload and interactive_payload.lower().startswith("agenda:")
+            else texto
+        )
         message_id = (request.form.get("MessageSid") or "").strip()
 
         print("=" * 60)
@@ -4942,12 +4951,12 @@ def whatsapp_webhook():
 
         if str(route.get("motor") or "core").lower() != "legacy":
             demo_access = route.get("demo_access") or {"empresa_id": route.get("empresa_id")}
-            if texto:
+            if texto_procesado:
                 control_entrada = consumir_mensaje_entrante_demo()
                 if not bool(control_entrada.get("permitido", True)):
                     respuesta = mensaje_plan_finalizado(control_entrada)
                 else:
-                    respuesta = _core_responder_demo_whatsapp(demo_access, telefono, texto)
+                    respuesta = _core_responder_demo_whatsapp(demo_access, telefono, texto_procesado)
             else:
                 respuesta = router_bienvenida_contexto({**route, "telefono": telefono})
             if respuesta:
@@ -4959,12 +4968,14 @@ def whatsapp_webhook():
                 twiml.message(respuesta)
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
-        if not texto:
+        if not texto_procesado:
             respuesta = mensaje_bienvenida()
         else:
             modo_actual = obtener_modo_atencion(telefono, "whatsapp")
-            guardar_mensaje(telefono, "user", texto)
-            guardar_mensaje_supabase(telefono, "entrante", texto)
+            # Conservamos el texto visible en historial, pero procesamos el payload
+            # normalizado cuando la entrada proviene de una lista interactiva.
+            guardar_mensaje(telefono, "user", texto or texto_procesado)
+            guardar_mensaje_supabase(telefono, "entrante", texto or texto_procesado)
 
             if modo_actual == "ejecutivo":
                 print("WHATSAPP MODO EJECUTIVO: solo esta conversación queda con ejecutivo")
@@ -4973,19 +4984,19 @@ def whatsapp_webhook():
             estado = get_estado(telefono)
             debe_derivar = False
 
-            if quiere_hablar_con_persona(texto):
+            if quiere_hablar_con_persona(texto_procesado):
                 respuesta = mensaje_derivacion_ejecutivo()
                 debe_derivar = True
-            elif es_menu(texto):
+            elif es_menu(texto_procesado):
                 reset_estado(telefono)
                 respuesta = mensaje_bienvenida()
-            elif es_empresa_nexia() and pregunta_contacto_sensible(texto):
+            elif es_empresa_nexia() and pregunta_contacto_sensible(texto_procesado):
                 respuesta = mensaje_contacto_no_publicado()
-            elif pregunta_horarios(texto):
+            elif pregunta_horarios(texto_procesado):
                 respuesta = mensaje_horario_no_publicado() if es_empresa_nexia() else mensaje_horarios()
             elif negocio_es_comercial() and (
                 estado.get("paso", "inicio").startswith("comercial_")
-                or intencion_interes_comercial(texto)
+                or intencion_interes_comercial(texto_procesado)
             ):
                 paso_antes = estado.get("paso")
                 respuesta = procesar_comercial(estado, texto)
@@ -4993,24 +5004,24 @@ def whatsapp_webhook():
                     debe_derivar = True
             elif negocio_usa_reservas() and estado.get("paso") != "inicio":
                 respuesta = procesar_agenda(estado, texto)
-            elif pregunta_servicios(texto):
+            elif pregunta_servicios(texto_procesado):
                 respuesta = mostrar_servicios()
             elif negocio_usa_reservas() and (
-                detectar_servicio(texto)
-                or corte_ambiguo(texto)
-                or intencion_agendar(texto)
-                or texto_menciona_fecha(texto)
+                detectar_servicio(texto_procesado)
+                or corte_ambiguo(texto_procesado)
+                or intencion_agendar(texto_procesado)
+                or texto_menciona_fecha(texto_procesado)
             ):
                 estado["paso"] = "inicio"
                 respuesta = procesar_agenda(estado, texto)
-            elif negocio_es_comercial() and detectar_servicio(texto):
+            elif negocio_es_comercial() and detectar_servicio(texto_procesado):
                 respuesta = (
                     f"Sí 😊 Ese servicio está disponible. "
                     f"Si te interesa contratarlo, escribe *ME INTERESA* y te hago unas preguntas breves."
                 )
             else:
                 # Cualquier otra cosa recibe una respuesta natural pero acotada al negocio actual.
-                respuesta = respuesta_general(texto)
+                respuesta = respuesta_general(texto_procesado)
 
         # V67: controla plan/demo antes de guardar y enviar la respuesta automática.
         respuesta = preparar_mensaje_saliente_demo(respuesta)
