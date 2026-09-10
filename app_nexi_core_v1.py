@@ -20,7 +20,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-CORE-V1-BRANCH"
+APP_VERSION = "2026-09-10-NEXI-CORE-V1.1-WHATSAPP-DEMO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -227,8 +227,9 @@ def activar_demo_por_contacto(identificador_cliente, canal="whatsapp"):
         if not empresa_id:
             return False
         activar_por_empresa(empresa_id, canal=canal, provider="demo")
+        row=dict(rows[0]); row["empresa_id"]=empresa_id; row["identificador_cliente"]=identificador
         print("NEXIA DEMO TENANT:", empresa_id, canal, identificador)
-        return True
+        return row
     except Exception as e:
         print("NEXIA DEMO RESOLVE ERROR:", repr(e))
         return False
@@ -2109,6 +2110,10 @@ CORE_QUESTIONS = {
         "text": "¿Dónde te gustaría que Nexia pudiera atender? Puedes elegir varios: WhatsApp, Instagram, Facebook/Messenger, sitio web/chat web u otro.",
         "kind": "multi_text",
     },
+    "whatsapp_demo": {
+        "text": "¿Cuál es el número de WhatsApp desde el que probarás tu asistente? Escríbelo con código de país, por ejemplo +56912345678.",
+        "kind": "phone",
+    },
     "sitio_web": {"text": "¿Tienes sitio web? Si sí, pega la dirección. Si no, responde No.", "kind": "url_or_no"},
     "redes_sociales": {"text": "¿Qué redes sociales utilizas? Puedes pegar tus usuarios o enlaces de Instagram, Facebook, TikTok, LinkedIn u otras. Si no usas, responde No.", "kind": "multi_text"},
     # Personal
@@ -2169,6 +2174,8 @@ def _core_secuencia(datos):
     seq=list(CORE_COMMON_FIELDS)
     canales=_core_canales_texto(datos)
     # La presencia digital forma parte explícita del Core V1.
+    if "whatsapp" in canales:
+        seq.append("whatsapp_demo")
     if any(x in canales for x in ("web","sitio","pagina","ecommerce","tienda")) or tipo in {"profesional","empresa"}:
         seq.append("sitio_web")
     if any(x in canales for x in ("instagram","facebook","tiktok","linkedin","red social","redes")) or tipo in {"profesional","empresa"}:
@@ -2246,7 +2253,8 @@ def _core_create_company_from_session(session):
     cr=requests.post(f"{SUPABASE_URL}/rest/v1/configuracion_bot",headers=_core_headers("return=representation"),json=cfg_payload,timeout=SUPABASE_TIMEOUT); cr.raise_for_status()
     profile={"empresa_id":empresa_id,"onboarding_token":token,"version":CORE_ONBOARDING_VERSION,"tipo_cliente":tipo,"datos":datos,"canales_actuales":str(datos.get("canales_actuales") or ""),"canales_deseados":str(datos.get("canales_deseados") or ""),"sitio_web":str(datos.get("sitio_web") or ""),"redes_sociales":str(datos.get("redes_sociales") or ""),"objetivo":objetivos,"created_at":now,"updated_at":now}
     pr=requests.post(f"{SUPABASE_URL}/rest/v1/nexi_core_perfiles",headers=_core_headers("return=representation"),json=profile,timeout=SUPABASE_TIMEOUT); pr.raise_for_status()
-    activar_demo_empresa(empresa_id)
+    whatsapp_demo=str(datos.get("whatsapp_demo") or "").strip()
+    activar_demo_empresa(empresa_id, whatsapp_demo if whatsapp_demo else None, "whatsapp")
     _core_save_session(token,{"empresa_id":empresa_id,"estado":"demo_activa","completado":True})
     return empresa_id
 
@@ -2255,6 +2263,54 @@ def _core_profile(empresa_id):
     r=requests.get(f"{SUPABASE_URL}/rest/v1/nexi_core_perfiles",headers=_core_headers(),params={"select":"*","empresa_id":f"eq.{empresa_id}","limit":"1"},timeout=SUPABASE_TIMEOUT)
     r.raise_for_status(); rows=r.json() if r.content else []
     return rows[0] if rows else None
+
+
+def _core_token_por_empresa(empresa_id):
+    """Obtiene el token de onboarding asociado a la empresa demo."""
+    try:
+        r=requests.get(
+            f"{SUPABASE_URL}/rest/v1/nexi_core_perfiles",
+            headers=_core_headers(),
+            params={"select":"onboarding_token","empresa_id":f"eq.{empresa_id}","limit":"1"},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status(); rows=r.json() if r.content else []
+        return str(rows[0].get("onboarding_token") or "").strip() if rows else ""
+    except Exception as e:
+        print("NEXI CORE TOKEN LOOKUP ERROR:",repr(e)); return ""
+
+
+def _core_whatsapp_destino():
+    """Número compartido al que el participante debe escribir para probar la demo."""
+    raw=str(TWILIO_WHATSAPP_FROM or GUPSHUP_SOURCE or "").strip()
+    return re.sub(r"\D","",raw)
+
+
+def _core_whatsapp_info(empresa_id=None):
+    destino=_core_whatsapp_destino()
+    return {
+        "enabled": bool(destino),
+        "destination": (f"+{destino}" if destino else None),
+        "wa_url": (f"https://wa.me/{destino}" if destino else None),
+        "empresa_id": str(empresa_id or "") or None,
+    }
+
+
+def _core_responder_demo_whatsapp(demo_access, telefono, texto):
+    """Procesa una conversación de demo real desde WhatsApp usando Nexi Core."""
+    empresa_id=str((demo_access or {}).get("empresa_id") or empresa_actual_id() or "").strip()
+    if not empresa_id:
+        raise RuntimeError("Demo sin empresa_id")
+    activar_por_empresa(empresa_id,canal="whatsapp",provider="demo")
+    token=_core_token_por_empresa(empresa_id)
+    if token:
+        _core_log_message(token,empresa_id,"entrante",texto)
+    respuesta=_core_demo_answer(empresa_id,texto)
+    respuesta=aplicar_plan_a_respuesta(respuesta)
+    if token:
+        _core_log_message(token,empresa_id,"saliente",respuesta)
+    print("NEXI CORE WHATSAPP DEMO:",empresa_id,_normalizar_identificador_demo(telefono,"whatsapp"))
+    return respuesta
 
 
 def _core_demo_answer(empresa_id, texto):
@@ -2337,7 +2393,7 @@ def core_onboarding_answer(token):
         datos=dict(s.get("datos") or {}); current=_core_next_question(datos)
         if not current:
             empresa_id=_core_create_company_from_session(s)
-            return core_json({"ok":True,"complete":True,"empresa_id":empresa_id,"summary":datos})
+            return core_json({"ok":True,"complete":True,"empresa_id":empresa_id,"summary":datos,"whatsapp":_core_whatsapp_info(empresa_id)})
         body=request.get_json(silent=True) or {}; value=body.get("answer")
         if value is None:return core_json({"ok":False,"error":"Falta answer"},400)
         value=str(value).strip()
@@ -2353,7 +2409,7 @@ def core_onboarding_answer(token):
         if nxt:
             return core_json({"ok":True,"complete":False,"question":nxt,"progress":round(done/max(1,len(seq))*100),"summary":datos})
         s=_core_get_session(token); empresa_id=_core_create_company_from_session(s)
-        return core_json({"ok":True,"complete":True,"empresa_id":empresa_id,"progress":100,"summary":datos,"demo":{"limite_respuestas":DEMO_LIMITE_RESPUESTAS_DEFAULT,"duracion_horas":DEMO_DURACION_HORAS_DEFAULT}})
+        return core_json({"ok":True,"complete":True,"empresa_id":empresa_id,"progress":100,"summary":datos,"demo":{"limite_respuestas":DEMO_LIMITE_RESPUESTAS_DEFAULT,"duracion_horas":DEMO_DURACION_HORAS_DEFAULT},"whatsapp":_core_whatsapp_info(empresa_id)})
     except Exception as e:
         print("CORE ANSWER ERROR:",repr(e)); return core_json({"ok":False,"error":str(e)[:300]},500)
 
@@ -2386,7 +2442,7 @@ def core_demo_status(token):
         s=_core_get_session(token)
         if not s:return core_json({"ok":False,"error":"Demo no encontrada"},404)
         plan=estado_suscripcion_empresa(s.get("empresa_id")) if s.get("empresa_id") else None
-        return core_json({"ok":True,"session":s,"plan":plan})
+        return core_json({"ok":True,"session":s,"plan":plan,"whatsapp":_core_whatsapp_info(s.get("empresa_id"))})
     except Exception as e:return core_json({"ok":False,"error":str(e)[:300]},500)
 
 
@@ -2401,7 +2457,7 @@ def whatsapp_webhook():
         to_numero = re.sub(r"\D", "", str(request.form.get("To") or TWILIO_WHATSAPP_FROM))
         activar_por_canal("whatsapp", "twilio", to_numero)
         telefono = (request.form.get("From") or "").strip()
-        activar_demo_por_contacto(telefono, "whatsapp")
+        demo_access = activar_demo_por_contacto(telefono, "whatsapp")
         texto = (request.form.get("Body") or "").strip()
         message_id = (request.form.get("MessageSid") or "").strip()
 
@@ -2424,6 +2480,16 @@ def whatsapp_webhook():
                 PROCESADOS[message_id] = ahora_ts
 
         if not telefono:
+            return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+        # Nexi Core V1.1: si este teléfono está asociado a una demo,
+        # usa SU perfil y SU contador; no entra al flujo legacy de Diego.
+        if demo_access:
+            if texto:
+                respuesta = _core_responder_demo_whatsapp(demo_access, telefono, texto)
+            else:
+                respuesta = "¡Hola! 👋 Tu demo de Nexia está activa. Escríbeme una consulta para probar tu asistente."
+            twiml.message(respuesta)
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
         if not texto:
@@ -2603,7 +2669,7 @@ def gupshup_webhook():
         payload = data.get("payload") or {}
         message_id = (payload.get("id") or "").strip()
         telefono = str(payload.get("source") or (payload.get("sender") or {}).get("phone") or "").strip()
-        activar_demo_por_contacto(telefono, "whatsapp")
+        demo_access = activar_demo_por_contacto(telefono, "whatsapp")
         tipo = (payload.get("type") or "").strip().lower()
         contenido = payload.get("payload") or {}
 
@@ -2629,6 +2695,13 @@ def gupshup_webhook():
                 PROCESADOS[message_id] = ahora_ts
 
         if not telefono:
+            return "OK", 200
+
+        # Nexi Core V1.1: las demos vinculadas por teléfono usan el Core y
+        # quedan totalmente separadas del flujo productivo/legacy.
+        if demo_access and tipo == "text" and texto:
+            respuesta = _core_responder_demo_whatsapp(demo_access, telefono, texto)
+            enviar_gupshup_texto(telefono, respuesta)
             return "OK", 200
 
         # Por ahora el bot conversa por texto. Si llega imagen/audio/documento,
