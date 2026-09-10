@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.1-CALENDAR-MULTIEMPRESA"
+APP_VERSION = "2026-09-10-NEXI-V2.1.1-CALENDAR-AISLAMIENTO-DIEGO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1146,8 +1146,14 @@ def google_calendar_conexion(empresa_id=None):
         return None
 
 
+def es_diego_calendar_legacy(empresa_id=None):
+    """Permite usar el refresh token global SOLO a la empresa legacy de Diego."""
+    empresa_id = str(empresa_id or empresa_actual_id() or "").strip()
+    return bool(empresa_id and DIEGO_EMPRESA_ID and empresa_id == str(DIEGO_EMPRESA_ID).strip())
+
+
 def google_credentials():
-    # 1) Cliente/empresa con OAuth propio.
+    # 1) Cada cliente/empresa usa primero su propia conexión OAuth.
     conn = google_calendar_conexion()
     if conn and conn.get("refresh_token"):
         if not all([GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET]):
@@ -1161,9 +1167,14 @@ def google_credentials():
             scopes=GOOGLE_SCOPES,
         )
 
-    # 2) Compatibilidad con Diego/legacy: conserva el refresh token global actual.
-    if not all([GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN]):
+    # 2) Fallback legacy EXCLUSIVO para Diego.
+    # Ninguna otra empresa puede caer en GOOGLE_REFRESH_TOKEN aunque no tenga OAuth propio.
+    if not es_diego_calendar_legacy():
         raise RuntimeError("Google Calendar no está conectado para esta empresa")
+
+    if not all([GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN]):
+        raise RuntimeError("Google Calendar legacy de Diego no está configurado")
+
     return Credentials(
         token=None,
         refresh_token=GOOGLE_REFRESH_TOKEN,
@@ -1178,7 +1189,12 @@ def google_calendar_id_actual():
     conn = google_calendar_conexion()
     if conn and conn.get("calendar_id"):
         return str(conn.get("calendar_id"))
-    return str(cfg("calendar_id", DEFAULT_CALENDAR_ID) or DEFAULT_CALENDAR_ID)
+
+    # El calendar_id global/legacy también queda restringido a Diego.
+    if es_diego_calendar_legacy():
+        return str(cfg("calendar_id", DEFAULT_CALENDAR_ID) or DEFAULT_CALENDAR_ID)
+
+    raise RuntimeError("Google Calendar no está conectado para esta empresa")
 
 
 def calendar_service():
@@ -1186,11 +1202,15 @@ def calendar_service():
 
 
 def negocio_tiene_calendar_real():
-    """True si el tenant tiene OAuth propio o es legacy con Calendar global configurado."""
+    """True si el tenant tiene OAuth propio o si es Diego con su Calendar legacy."""
     if google_calendar_conexion():
         return True
-    # Compatibilidad solo para el tenant productivo que ya usaba las credenciales globales.
-    return bool(GOOGLE_REFRESH_TOKEN and str(empresa_actual_id()) == str(DEFAULT_EMPRESA_ID))
+    return bool(
+        es_diego_calendar_legacy()
+        and GOOGLE_CLIENT_ID
+        and GOOGLE_CLIENT_SECRET
+        and GOOGLE_REFRESH_TOKEN
+    )
 
 
 def es_dia_atencion(fecha):
