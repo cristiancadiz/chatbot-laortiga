@@ -22,7 +22,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V1.5.2-ONBOARDING-SIMPLE"
+APP_VERSION = "2026-09-10-NEXI-V1.5.3-WEB-KNOWLEDGE-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2814,14 +2814,20 @@ def _core_create_company_from_session(session):
     if sitio_web and _core_si(datos.get("aprende_web")):
         try:
             resultado_web=_core_guardar_conocimiento_web(empresa_id,sitio_web)
-            _core_save_session(token,{"web_knowledge":resultado_web})
+            datos["web_knowledge"] = resultado_web
+            _core_save_session(token,{"datos":datos})
         except Exception as e:
             print("CORE WEB KNOWLEDGE CREATE ERROR:",repr(e))
-            _core_save_session(token,{"web_knowledge":{"ok":False,"error":str(e)[:250]}})
+            datos["web_knowledge"] = {"ok":False,"error":str(e)[:250]}
+            try:
+                _core_save_session(token,{"datos":datos})
+            except Exception as save_error:
+                # El aprendizaje web no debe bloquear la creación de la demo.
+                print("CORE WEB KNOWLEDGE STATUS SAVE ERROR:",repr(save_error))
 
     whatsapp_demo=str(datos.get("whatsapp_demo") or "").strip()
     activar_demo_empresa(empresa_id, whatsapp_demo if whatsapp_demo else None, "whatsapp")
-    _core_save_session(token,{"empresa_id":empresa_id,"estado":"demo_activa","completado":True})
+    _core_save_session(token,{"empresa_id":empresa_id,"estado":"demo_activa","completado":True,"datos":datos})
     return empresa_id
 
 
