@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.8.6-PRECIOS-CATALOGO-FIX"
+APP_VERSION = "2026-09-11-NEXI-V2.9.0-CONFIG-AUTOGESTION"
 load_dotenv()
 
 app = Flask(__name__)
@@ -9529,6 +9529,342 @@ def portal_admin_servicio(servicio_id):
     except Exception as e:
         print("PORTAL ADMIN SERVICIO ERROR:", repr(e))
         return admin_json_error("No se pudo modificar el servicio", 500)
+
+
+
+# ============================================================
+# NEXIA V2.9 - CONFIGURACION AUTOGESTION DEL CLIENTE
+# ============================================================
+
+def _portal_empresa_propia():
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return None, None
+    empresa_id = str(perfil.get("empresa_id") or "").strip()
+    if not empresa_id:
+        return perfil, None
+    return perfil, empresa_id
+
+
+def _portal_perfil_core_empresa(empresa_id):
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/nexi_core_perfiles",
+        headers=backend_headers(),
+        params={"select":"*", "empresa_id":f"eq.{empresa_id}", "limit":"1"},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows = r.json() if r.content else []
+    return rows[0] if rows else None
+
+
+def _portal_config_snapshot(empresa_id):
+    headers = backend_headers()
+
+    er = requests.get(
+        f"{SUPABASE_URL}/rest/v1/empresas",
+        headers=headers,
+        params={"select":"id,nombre,activo", "id":f"eq.{empresa_id}", "limit":"1"},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    er.raise_for_status()
+    empresas = er.json() if er.content else []
+    if not empresas:
+        raise RuntimeError("Empresa no encontrada")
+
+    cr = requests.get(
+        f"{SUPABASE_URL}/rest/v1/configuracion_bot",
+        headers=headers,
+        params={"select":"*", "empresa_id":f"eq.{empresa_id}", "limit":"1"},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    cr.raise_for_status()
+    configs = cr.json() if cr.content else []
+    conf = configs[0] if configs else {}
+
+    perfil_core = _portal_perfil_core_empresa(empresa_id)
+    datos = dict((perfil_core or {}).get("datos") or {})
+
+    sr = requests.get(
+        f"{SUPABASE_URL}/rest/v1/servicios",
+        headers=headers,
+        params={
+            "select":"*",
+            "empresa_id":f"eq.{empresa_id}",
+            "order":"orden.asc,created_at.asc",
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    sr.raise_for_status()
+
+    return {
+        "empresa": empresas[0],
+        "configuracion": conf,
+        "perfil_core": perfil_core,
+        "datos": datos,
+        "servicios": sr.json() if sr.content else [],
+    }
+
+
+@app.route("/portal/configuracion-negocio", methods=["GET", "PATCH", "OPTIONS"])
+def portal_configuracion_negocio():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+
+    perfil, empresa_id = _portal_empresa_propia()
+    if not perfil:
+        return portal_json({"ok":False,"error":"Sesión no autorizada"},401)
+    if not empresa_id:
+        return portal_json({"ok":False,"error":"Tu usuario no tiene una empresa asociada"},409)
+
+    headers = backend_headers()
+    if not headers:
+        return portal_json({"ok":False,"error":"Supabase backend no configurado"},500)
+
+    try:
+        if request.method == "GET":
+            snap = _portal_config_snapshot(empresa_id)
+            return portal_json({"ok":True, **snap})
+
+        data = request.get_json(silent=True) or {}
+        ahora = datetime.now(pytz.UTC).isoformat()
+
+        # Empresa
+        nombre_negocio = str(data.get("nombre_negocio") or "").strip()
+        if nombre_negocio:
+            er = requests.patch(
+                f"{SUPABASE_URL}/rest/v1/empresas",
+                headers={**headers, "Prefer":"return=representation"},
+                params={"id":f"eq.{empresa_id}"},
+                json={"nombre":nombre_negocio},
+                timeout=SUPABASE_TIMEOUT,
+            )
+            er.raise_for_status()
+
+        # Perfil Core: conserva toda la información previa y reemplaza solo lo editado.
+        perfil_core = _portal_perfil_core_empresa(empresa_id)
+        datos = dict((perfil_core or {}).get("datos") or {})
+
+        profile_fields = {
+            "nombre_negocio", "nombre_asistente", "rubro", "objetivo", "tono",
+            "atiende_direccion_fisica", "direccion", "comuna",
+            "referencia_direccion", "google_maps_url",
+        }
+        for key in profile_fields:
+            if key in data:
+                datos[key] = data.get(key)
+
+        # Dirección: si no tiene atención física no publicar una dirección antigua.
+        atiende = bool(data.get("atiende_direccion_fisica", datos.get("atiende_direccion_fisica", False)))
+        datos["atiende_direccion_fisica"] = atiende
+        if atiende:
+            direccion = str(data.get("direccion") if "direccion" in data else datos.get("direccion") or "").strip()
+            comuna = str(data.get("comuna") if "comuna" in data else datos.get("comuna") or "").strip()
+            referencia = str(data.get("referencia_direccion") if "referencia_direccion" in data else datos.get("referencia_direccion") or "").strip()
+            maps = str(data.get("google_maps_url") if "google_maps_url" in data else datos.get("google_maps_url") or "").strip()
+            direccion_completa = ", ".join(x for x in (direccion, comuna) if x)
+            if direccion and not maps:
+                maps = "https://www.google.com/maps/search/?api=1&query=" + quote(direccion_completa, safe="")
+            datos["direccion"] = direccion_completa or direccion
+            datos["comuna"] = comuna
+            datos["referencia_direccion"] = referencia
+            datos["google_maps_url"] = maps
+        else:
+            datos["direccion"] = ""
+            datos["comuna"] = ""
+            datos["referencia_direccion"] = ""
+            datos["google_maps_url"] = ""
+
+        if perfil_core:
+            pr = requests.patch(
+                f"{SUPABASE_URL}/rest/v1/nexi_core_perfiles",
+                headers={**headers, "Prefer":"return=representation"},
+                params={"empresa_id":f"eq.{empresa_id}"},
+                json={"datos":datos,"updated_at":ahora},
+                timeout=SUPABASE_TIMEOUT,
+            )
+        else:
+            pr = requests.post(
+                f"{SUPABASE_URL}/rest/v1/nexi_core_perfiles",
+                headers={**headers, "Prefer":"return=representation"},
+                json={
+                    "empresa_id":empresa_id,
+                    "version":CORE_ONBOARDING_VERSION,
+                    "tipo_cliente":"empresa",
+                    "datos":datos,
+                    "updated_at":ahora,
+                    "created_at":ahora,
+                },
+                timeout=SUPABASE_TIMEOUT,
+            )
+        pr.raise_for_status()
+
+        # Configuración que utiliza el runtime.
+        conf_payload = {"empresa_id": empresa_id}
+        mapping = {
+            "rubro":"tipo_negocio",
+            "descripcion_empresa":"descripcion_empresa",
+            "nombre_asistente":"asistente_nombre",
+            "email_contacto":"correo_ejecutivo",
+            "hora_apertura":"hora_apertura",
+            "hora_cierre":"hora_cierre",
+            "duracion_reserva":"duracion_reserva",
+            "dias_atencion":"dias_atencion",
+            "prompt_extra":"prompt_extra",
+        }
+        for source, target in mapping.items():
+            if source in data:
+                conf_payload[target] = data.get(source)
+
+        conf_payload["direccion"] = datos.get("direccion") if atiende else ""
+
+        if len(conf_payload) > 1:
+            cr = requests.post(
+                f"{SUPABASE_URL}/rest/v1/configuracion_bot",
+                headers={**headers, "Prefer":"resolution=merge-duplicates,return=representation"},
+                params={"on_conflict":"empresa_id"},
+                json=conf_payload,
+                timeout=SUPABASE_TIMEOUT,
+            )
+            cr.raise_for_status()
+
+        with TENANT_CACHE_LOCK:
+            TENANT_CACHE.pop(f"empresa:{empresa_id}", None)
+
+        snap = _portal_config_snapshot(empresa_id)
+        return portal_json({
+            "ok":True,
+            "mensaje":"Configuración actualizada. Tu asistente ya utilizará los nuevos datos.",
+            **snap,
+        })
+
+    except Exception as e:
+        print("PORTAL CONFIG NEGOCIO ERROR:", repr(e))
+        return portal_json({"ok":False,"error":"No se pudo guardar la configuración"},500)
+
+
+@app.route("/portal/configuracion-negocio/servicios", methods=["POST", "OPTIONS"])
+def portal_configuracion_servicio_crear():
+    if request.method == "OPTIONS":
+        return portal_json({"ok":True},204)
+
+    perfil, empresa_id = _portal_empresa_propia()
+    if not perfil:
+        return portal_json({"ok":False,"error":"Sesión no autorizada"},401)
+    if not empresa_id:
+        return portal_json({"ok":False,"error":"Tu usuario no tiene una empresa asociada"},409)
+
+    try:
+        data = request.get_json(silent=True) or {}
+        nombre = str(data.get("nombre") or "").strip()
+        if not nombre:
+            return portal_json({"ok":False,"error":"El nombre del producto o servicio es obligatorio"},400)
+
+        precio_texto = str(data.get("precio_texto") or "").strip()
+        digitos = re.sub(r"\D","",precio_texto)
+        precio = int(digitos) if digitos else int(data.get("precio") or 0)
+        codigo = str(data.get("codigo") or "").strip()
+        if not codigo:
+            codigo = "portal_" + uuid.uuid4().hex[:10]
+
+        payload = {
+            "empresa_id":empresa_id,
+            "codigo":codigo,
+            "nombre":nombre[:180],
+            "categoria":str(data.get("categoria") or "Productos y servicios")[:100],
+            "precio":precio,
+            "precio_texto":precio_texto or ("Valor por confirmar" if not precio else str(precio)),
+            "detalle":str(data.get("detalle") or "")[:1000],
+            "aliases":data.get("aliases") or [],
+            "duracion_minutos":int(data.get("duracion_minutos") or 60),
+            "orden":int(data.get("orden") or 100),
+            "activo":bool(data.get("activo",True)),
+        }
+
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/servicios",
+            headers={**backend_headers(),"Prefer":"return=representation"},
+            json=payload,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        with TENANT_CACHE_LOCK:
+            TENANT_CACHE.pop(f"empresa:{empresa_id}", None)
+        rows=r.json() if r.content else []
+        return portal_json({"ok":True,"servicio":rows[0] if rows else payload},201)
+    except Exception as e:
+        print("PORTAL CONFIG SERVICIO CREAR ERROR:",repr(e))
+        return portal_json({"ok":False,"error":"No se pudo crear el producto o servicio"},500)
+
+
+@app.route("/portal/configuracion-negocio/servicio/<servicio_id>", methods=["PATCH","DELETE","OPTIONS"])
+def portal_configuracion_servicio(servicio_id):
+    if request.method == "OPTIONS":
+        return portal_json({"ok":True},204)
+
+    perfil, empresa_id = _portal_empresa_propia()
+    if not perfil:
+        return portal_json({"ok":False,"error":"Sesión no autorizada"},401)
+    if not empresa_id:
+        return portal_json({"ok":False,"error":"Tu usuario no tiene una empresa asociada"},409)
+
+    try:
+        headers=backend_headers()
+        qr=requests.get(
+            f"{SUPABASE_URL}/rest/v1/servicios",
+            headers=headers,
+            params={"select":"id,empresa_id","id":f"eq.{servicio_id}","empresa_id":f"eq.{empresa_id}","limit":"1"},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        qr.raise_for_status()
+        rows=qr.json() if qr.content else []
+        if not rows:
+            return portal_json({"ok":False,"error":"Producto o servicio no encontrado"},404)
+
+        if request.method=="DELETE":
+            dr=requests.delete(
+                f"{SUPABASE_URL}/rest/v1/servicios",
+                headers=headers,
+                params={"id":f"eq.{servicio_id}","empresa_id":f"eq.{empresa_id}"},
+                timeout=SUPABASE_TIMEOUT,
+            )
+            dr.raise_for_status()
+            with TENANT_CACHE_LOCK:
+                TENANT_CACHE.pop(f"empresa:{empresa_id}", None)
+            return portal_json({"ok":True})
+
+        data=request.get_json(silent=True) or {}
+        payload={}
+        for key in ("nombre","categoria","detalle","duracion_minutos","orden","activo"):
+            if key in data:
+                payload[key]=data[key]
+
+        if "precio_texto" in data:
+            precio_texto=str(data.get("precio_texto") or "").strip()
+            payload["precio_texto"]=precio_texto or "Valor por confirmar"
+            digitos=re.sub(r"\D","",precio_texto)
+            payload["precio"]=int(digitos) if digitos else 0
+
+        if "nombre" in payload:
+            payload["nombre"]=str(payload["nombre"] or "").strip()[:180]
+            if not payload["nombre"]:
+                return portal_json({"ok":False,"error":"El nombre no puede quedar vacío"},400)
+
+        ur=requests.patch(
+            f"{SUPABASE_URL}/rest/v1/servicios",
+            headers={**headers,"Prefer":"return=representation"},
+            params={"id":f"eq.{servicio_id}","empresa_id":f"eq.{empresa_id}"},
+            json=payload,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        ur.raise_for_status()
+        with TENANT_CACHE_LOCK:
+            TENANT_CACHE.pop(f"empresa:{empresa_id}", None)
+        updated=ur.json() if ur.content else []
+        return portal_json({"ok":True,"servicio":updated[0] if updated else payload})
+    except Exception as e:
+        print("PORTAL CONFIG SERVICIO ERROR:",repr(e))
+        return portal_json({"ok":False,"error":"No se pudo modificar el producto o servicio"},500)
 
 
 # ============================================================
