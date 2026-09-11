@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.8.4-ONBOARDING-DIRECTO"
+APP_VERSION = "2026-09-11-NEXI-V2.8.5-DEMOS-PUBLICAS-CTA-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1005,70 +1005,53 @@ def _router_descripcion_demo(datos):
 
 def router_demos_publicas_activas():
     """
-    Devuelve todas las demos activas/no vencidas para el menú global.
-    No expone teléfono, correo ni datos privados del creador.
+    Devuelve TODAS las demos activas/no vencidas para el menú global.
+
+    Fuente de verdad:
+      suscripciones_empresa(tipo_plan='demo', estado='activo')
+
+    No depende de demo_accesos: una demo creada desde la web puede existir
+    antes de que conozcamos el WhatsApp del creador.
     """
     headers = _router_headers()
     if not headers:
         return []
 
     try:
-        # 1. Accesos demo activos. Se deduplican por empresa_id.
-        rd = requests.get(
-            f"{SUPABASE_URL}/rest/v1/demo_accesos",
-            headers=headers,
-            params={
-                "select": "empresa_id,activo,inicio,fin,created_at",
-                "activo": "eq.true",
-                "order": "created_at.desc",
-                "limit": "500",
-            },
-            timeout=SUPABASE_TIMEOUT,
-        )
-        rd.raise_for_status()
-        accesos = rd.json() if rd.content else []
-
-        ahora = datetime.now(pytz.UTC)
-        ids = []
-        acceso_por_empresa = {}
-        for row in accesos:
-            eid = str(row.get("empresa_id") or "").strip()
-            if not eid or eid in acceso_por_empresa:
-                continue
-            fin = _parse_iso(row.get("fin"))
-            if fin and ahora >= fin.astimezone(pytz.UTC):
-                continue
-            ids.append(eid)
-            acceso_por_empresa[eid] = dict(row)
-
-        if not ids:
-            return []
-
-        # 2. Solo suscripciones que siguen siendo DEMO + ACTIVO.
         rs = requests.get(
             f"{SUPABASE_URL}/rest/v1/suscripciones_empresa",
             headers=headers,
             params={
-                "select": "empresa_id,tipo_plan,estado",
-                "empresa_id": f"in.({','.join(ids)})",
+                "select": "*",
                 "tipo_plan": "eq.demo",
                 "estado": "eq.activo",
+                "order": "created_at.desc",
                 "limit": "500",
             },
             timeout=SUPABASE_TIMEOUT,
         )
         rs.raise_for_status()
         subs = rs.json() if rs.content else []
-        demo_ids = {
-            str(x.get("empresa_id") or "").strip()
-            for x in subs
-            if str(x.get("empresa_id") or "").strip()
-        }
-        ids = [eid for eid in ids if eid in demo_ids]
+
+        ahora = datetime.now(pytz.UTC)
+        activas = {}
+        for s in subs:
+            eid = str(s.get("empresa_id") or "").strip()
+            if not eid:
+                continue
+            fin = _parse_iso(s.get("demo_fin"))
+            if fin and ahora >= fin.astimezone(pytz.UTC):
+                continue
+            limite = int(s.get("limite_mensajes") or DEMO_LIMITE_MENSAJES_DEFAULT)
+            usados = int(s.get("mensajes_usados") or 0)
+            if limite and usados >= limite:
+                continue
+            activas[eid] = dict(s)
+
+        ids = list(activas.keys())
         if not ids:
             return []
 
-        # 3. Nombre público de empresa.
         re_ = requests.get(
             f"{SUPABASE_URL}/rest/v1/empresas",
             headers=headers,
@@ -1084,7 +1067,6 @@ def router_demos_publicas_activas():
         empresas = re_.json() if re_.content else []
         empresa_por_id = {str(e.get("id") or ""): e for e in empresas}
 
-        # 4. Rubro / actividad pública desde el perfil Core.
         rp = requests.get(
             f"{SUPABASE_URL}/rest/v1/nexi_core_perfiles",
             headers=headers,
@@ -1097,28 +1079,60 @@ def router_demos_publicas_activas():
         )
         rp.raise_for_status()
         perfiles = rp.json() if rp.content else []
-        datos_por_id = {
-            str(p.get("empresa_id") or ""): dict(p.get("datos") or {})
-            for p in perfiles
-            if str(p.get("empresa_id") or "").strip()
+        perfil_por_id = {
+            str(x.get("empresa_id") or ""): (x.get("datos") or {})
+            for x in perfiles
         }
 
-        out = []
+        acceso_por_empresa = {}
+        try:
+            ra = requests.get(
+                f"{SUPABASE_URL}/rest/v1/demo_accesos",
+                headers=headers,
+                params={
+                    "select": "empresa_id,canal,identificador_cliente,activo,inicio,fin",
+                    "empresa_id": f"in.({','.join(ids)})",
+                    "activo": "eq.true",
+                    "limit": "500",
+                },
+                timeout=SUPABASE_TIMEOUT,
+            )
+            if ra.ok:
+                for row in (ra.json() if ra.content else []):
+                    eid = str(row.get("empresa_id") or "").strip()
+                    if eid and eid not in acceso_por_empresa:
+                        acceso_por_empresa[eid] = dict(row)
+        except Exception as e:
+            print("NEXI ROUTER DEMO ACCESS OPTIONAL WARN:", repr(e))
+
+        salida = []
         for eid in ids:
-            empresa = empresa_por_id.get(eid)
-            if not empresa:
+            emp = empresa_por_id.get(eid)
+            if not emp:
                 continue
-            nombre = str(empresa.get("nombre") or "Negocio Nexia").strip() or "Negocio Nexia"
-            datos = datos_por_id.get(eid) or {}
-            out.append({
+            datos = perfil_por_id.get(eid) or {}
+            nombre = str(emp.get("nombre") or datos.get("nombre_negocio") or "Negocio Nexia").strip()
+            rubro = str(datos.get("rubro") or "").strip()
+            asistente = str(datos.get("nombre_asistente") or "").strip()
+            description = rubro or (f"Probar el asistente {asistente}" if asistente else "Asistente en prueba de Nexia")
+
+            demo_access = acceso_por_empresa.get(eid) or {
+                "empresa_id": eid,
+                "canal": "publico",
+                "identificador_cliente": "",
+                "activo": True,
+                "inicio": activas[eid].get("demo_inicio"),
+                "fin": activas[eid].get("demo_fin"),
+            }
+
+            salida.append({
                 "empresa_id": eid,
                 "nombre": nombre,
-                "description": _router_descripcion_demo(datos),
-                "motor": "core",
-                "origen": "demo",
-                "demo_access": acceso_por_empresa.get(eid) or {"empresa_id": eid},
+                "description": description[:72],
+                "demo_access": demo_access,
             })
-        return out
+
+        return salida
     except Exception as e:
         print("NEXI ROUTER DEMOS PUBLICAS ERROR:", repr(e))
         return []
@@ -1264,6 +1278,8 @@ def router_opciones_menu(telefono, pagina=0):
     for demo in demos:
         eid = str(demo.get("empresa_id") or "").strip()
         if not eid:
+            continue
+        if propio and eid == str(propio.get("empresa_id") or "").strip():
             continue
         nombre = str(demo.get("nombre") or "Negocio Nexia").strip()
         todas.append({
@@ -1980,6 +1996,49 @@ def router_bienvenida_contexto(route):
     )
 
 
+def router_vincular_demo_a_whatsapp(empresa_id, telefono):
+    """
+    Vincula el WhatsApp que abrió una demo mediante NEXI <codigo>.
+    No crea otra demo; registra teléfono -> mismo empresa_id.
+    """
+    empresa_id = str(empresa_id or "").strip()
+    ident = _router_identificador(telefono)
+    headers = _router_headers()
+    if not empresa_id or not ident or not headers:
+        return False
+    try:
+        plan = estado_suscripcion_empresa(empresa_id)
+        if str(plan.get("tipo_plan") or "").lower() != "demo":
+            return False
+        if str(plan.get("estado") or "").lower() != "activo":
+            return False
+        if plan.get("vigente") is False:
+            return False
+
+        ahora = datetime.now(pytz.UTC).isoformat()
+        acceso = {
+            "empresa_id": empresa_id,
+            "canal": "whatsapp",
+            "identificador_cliente": ident,
+            "activo": True,
+            "inicio": plan.get("demo_inicio") or ahora,
+            "fin": plan.get("demo_fin"),
+            "updated_at": ahora,
+        }
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/demo_accesos",
+            headers={**headers, "Prefer": "resolution=merge-duplicates,return=minimal"},
+            params={"on_conflict": "canal,identificador_cliente"},
+            json=acceso,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        print("NEXI ROUTER VINCULAR DEMO ERROR:", repr(e))
+        return False
+
+
 def router_superior_resolver(telefono, texto):
     """Devuelve accion=menu|seleccionado|ruta y la empresa/motor cuando corresponda."""
     if not NEXIA_ROUTER_SUPERIOR_ACTIVO:
@@ -2026,11 +2085,13 @@ def router_superior_resolver(telefono, texto):
         return row
 
     if raw_texto.lower() == "nexi:nueva_prueba":
+        router_contexto_borrar(telefono)
         return {
-            "accion": "menu",
+            "accion": "mensaje",
             "respuesta": (
                 "🚀 Crea tu asistente Nexia gratis.\n\n"
-                "Tendrás 50 mensajes o 24 horas para probarlo, lo que ocurra primero.\n\n"
+                "Configura tu negocio y luego podrás probar tu propio asistente por WhatsApp.\n"
+                "La prueba incluye 50 mensajes o 24 horas, lo que ocurra primero.\n\n"
                 f"👉 {NEXIA_PRUEBA_URL}"
             ),
         }
@@ -2125,6 +2186,10 @@ def router_superior_resolver(telefono, texto):
             return {"accion": "menu", "respuesta": "Ese acceso no está disponible o ya no es válido.\n\n" + router_menu_superior(telefono)}
         empresa_id = str(destino.get("empresa_id") or "")
         motor = str(destino.get("motor") or "core").lower()
+
+        if motor == "core":
+            router_vincular_demo_a_whatsapp(empresa_id, telefono)
+
         row = router_contexto_guardar(telefono, empresa_id, motor=motor, origen="codigo", codigo=codigo) or {}
         row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": motor, "codigo": codigo, "telefono": telefono})
         return row
@@ -6376,6 +6441,10 @@ def whatsapp_webhook():
             twiml.message(route.get("respuesta") or router_menu_superior(telefono, pagina=pagina))
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
+        if route.get("accion") == "mensaje":
+            twiml.message(route.get("respuesta") or NEXIA_PRUEBA_URL)
+            return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
         router_activar_ruta(route, "twilio")
 
         # V2.3.1: paginación de listas interactivas de agenda.
@@ -6646,6 +6715,10 @@ def gupshup_webhook():
             route = router_superior_resolver(telefono, texto)
             if route.get("accion") == "menu":
                 enviar_gupshup_texto(telefono, route.get("respuesta") or router_menu_superior(telefono))
+                return "OK", 200
+
+            if route.get("accion") == "mensaje":
+                enviar_gupshup_texto(telefono, route.get("respuesta") or NEXIA_PRUEBA_URL)
                 return "OK", 200
 
             router_activar_ruta(route, "gupshup")
