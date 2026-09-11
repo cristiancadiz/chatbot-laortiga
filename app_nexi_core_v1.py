@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.9.1-ESTADO-VISUAL-MENU"
+APP_VERSION = "2026-09-11-NEXI-V2.9.2-PRECIOS-15990-29990"
 load_dotenv()
 
 app = Flask(__name__)
@@ -150,8 +150,8 @@ NEXIA_PLANES = {
         "nombre": "Nexia 500",
         "mensajes": 500,
         "duracion_dias": NEXIA_PLAN_DURACION_DIAS_DEFAULT,
-        "precio": 19990,
-        "precio_antes": 29990,
+        "precio": 15990,
+        "precio_antes": 19990,
         "moneda": "CLP",
     },
     "nexia_1000": {
@@ -159,8 +159,8 @@ NEXIA_PLANES = {
         "nombre": "Nexia 1000",
         "mensajes": 1000,
         "duracion_dias": NEXIA_PLAN_DURACION_DIAS_DEFAULT,
-        "precio": 39990,
-        "precio_antes": 49990,
+        "precio": 29990,
+        "precio_antes": 39990,
         "moneda": "CLP",
     },
 }
