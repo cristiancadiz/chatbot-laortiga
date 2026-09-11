@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.8.3-MENU-NUEVOS-USUARIOS"
+APP_VERSION = "2026-09-11-NEXI-V2.8.4-ONBOARDING-DIRECTO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -3875,7 +3875,7 @@ CORE_QUESTIONS = {
         "help": "Agrega uno por uno. El precio es opcional: si no lo publicas, déjalo vacío.",
     },
     "objetivo": {
-        "text": "¿Qué quieres que Nexi haga por tu negocio?",
+        "text": "¿Qué necesitas que haga tu asistente?",
         "kind": "multi_choice",
         "options": [
             "Responder consultas",
@@ -3898,10 +3898,10 @@ CORE_QUESTIONS = {
         "help": "Esto nos ayuda a preparar la derivación y el trabajo del equipo.",
     },
     "aprende_web": {
-        "text": "¿Quieres que Nexi use la información de tu sitio web para responder consultas?",
+        "text": "¿Quieres usar la información de tu sitio web para responder consultas?",
         "kind": "choice",
         "options": ["Sí, aprender de mi web", "No, solo guardar el enlace"],
-        "help": "Si eliges Sí, Nexi leerá páginas públicas relevantes de tu sitio y guardará una versión resumida de su contenido.",
+        "help": "Si eliges Sí, se leerán páginas públicas relevantes de tu sitio y se guardará una versión resumida para responder consultas.",
     },
     "whatsapp_demo": {
         "text": "¿Cuál es el número de WhatsApp desde el que probarás tu asistente?",
@@ -3929,7 +3929,7 @@ CORE_QUESTIONS = {
         "kind": "text_or_no",
     },
     "guardar_interesados": {
-        "text": "¿Quieres que Nexi guarde los datos de personas interesadas para poder contactarlas después?",
+        "text": "¿Quieres guardar datos de las personas interesadas para contactarlas después?",
         "kind": "choice",
         "options": [
             "Sí",
@@ -3939,10 +3939,10 @@ CORE_QUESTIONS = {
         ],
     },
     "handoff": {
-        "text": "¿Quieres que Nexi pueda derivar una conversación a una persona cuando sea necesario?",
+        "text": "¿Quieres permitir que una conversación se derive a una persona cuando sea necesario?",
         "kind": "choice",
-        "options": ["Sí, permitir derivaciones", "No, Nexi atenderá sin derivar"],
-        "help": "Si un cliente necesita atención humana, Nexi podrá pausar la conversación y avisar a la persona encargada.",
+        "options": ["Sí, permitir derivaciones", "No permitir derivaciones"],
+        "help": "Si un cliente necesita atención humana, la conversación podrá pausarse y se avisará a la persona encargada.",
     },
     "email_contacto": {
         "text": "¿Qué correo quieres usar para tu acceso al Portal Nexia?",
@@ -3950,12 +3950,12 @@ CORE_QUESTIONS = {
         "help": "Usaremos este correo para asociar tu acceso al Portal Nexia y también para enviarte avisos durante tu prueba gratuita. Este dato es privado y nunca se mostrará a tus clientes.",
     },
     "tono": {
-        "text": "¿Cómo quieres que se comunique Nexi?",
+        "text": "¿Cómo quieres que se comunique tu asistente?",
         "kind": "multi_choice",
         "options": ["Cercano", "Profesional", "Formal", "Amigable", "Directo y breve", "Puede usar emojis", "Sin emojis"],
     },
     "desconocido": {
-        "text": "Si Nexi no sabe una respuesta, ¿qué debe hacer?",
+        "text": "Si tu asistente no sabe una respuesta, ¿qué debe hacer?",
         "kind": "choice",
         "options": ["Decir que no cuenta con esa información", "Pedir más detalles", "Derivar a una persona"],
     },
