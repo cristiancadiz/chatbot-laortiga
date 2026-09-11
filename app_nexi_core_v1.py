@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.6.2-DEMOS-PUBLICAS-MENU"
+APP_VERSION = "2026-09-10-NEXI-V2.7-MOTOR-RESPUESTA-REFACTOR"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2775,7 +2775,16 @@ def guardar_mensaje(telefono, rol, mensaje, canal="whatsapp"):
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
-openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "8"))
+openai_client = (
+    OpenAI(
+        api_key=OPENAI_API_KEY,
+        timeout=OPENAI_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
+    if OPENAI_API_KEY
+    else None
+)
 
 
 def respuesta_general(texto):
@@ -4626,7 +4635,9 @@ def _core_route_intent(texto, datos):
         return "handoff"
 
     if _texto_parece_intencion_agenda(texto):
-        return "agenda" if _core_agent_enabled("agenda", datos) else "atencion"
+        # La intención es agenda aunque el negocio aún no haya conectado Calendar.
+        # La capa de ejecución decide si agenda realmente o informa que estará disponible pronto.
+        return "agenda"
 
     if any(x in t for x in (
         "precio", "precios", "cuanto cuesta", "cuánto cuesta", "cuanto cobran",
@@ -4648,10 +4659,18 @@ def _core_route_intent(texto, datos):
         return "seguimiento" if _core_agent_enabled("seguimiento", datos) else "atencion"
 
     if any(x in t for x in (
-        "que hacen", "qué hacen", "que ofrece", "qué ofrece", "servicios",
-        "productos", "horario", "horarios", "direccion", "dirección",
-        "donde estan", "dónde están", "web", "instagram", "contacto",
-        "politica", "política", "envio", "envío", "despacho",
+        "que hacen", "qué hacen", "que ofrece", "qué ofrece", "que ofrecen", "qué ofrecen",
+        "informacion de ustedes", "información de ustedes",
+        "informacion del negocio", "información del negocio",
+        "informacion de la empresa", "información de la empresa",
+        "quiero informacion", "quiero información",
+        "necesito informacion", "necesito información",
+        "cuentame de ustedes", "cuéntame de ustedes",
+        "sobre ustedes", "sobre la empresa", "sobre el negocio",
+        "a que se dedican", "a qué se dedican",
+        "servicios", "productos", "horario", "horarios", "direccion", "dirección",
+        "donde estan", "dónde están", "web", "instagram", "facebook", "redes",
+        "contacto", "politica", "política", "envio", "envío", "despacho",
     )):
         return "conocimiento"
 
@@ -4688,25 +4707,114 @@ def _core_agent_context(empresa_id, texto, public_profile=None):
     }
 
 
-def _core_respuesta_directa_conocimiento(texto, ctx):
+def _core_valor_publico(datos, *keys):
+    """Primer valor público no vacío entre varias claves."""
+    for key in keys:
+        valor = datos.get(key)
+        if isinstance(valor, (list, tuple)):
+            valor = ", ".join(str(x).strip() for x in valor if str(x).strip())
+        elif isinstance(valor, dict):
+            continue
+        valor = str(valor or "").strip()
+        if valor:
+            return valor
+    return ""
+
+
+def _core_respuesta_estructurada(texto, datos, empresa=None, asistente=None):
     """
-    Fast path para preguntas simples cuya respuesta ya está en el perfil.
-    Evita usar OpenAI cuando no aporta valor.
+    Capa rápida y determinista para consultas frecuentes.
+    No llama a OpenAI ni consulta conocimiento web.
+    Retorna None solo cuando la consulta realmente necesita razonamiento/redacción.
     """
     t = _core_norm(texto)
-    datos = ctx.get("datos") or {}
+    datos = dict(datos or {})
+    empresa = str(
+        empresa
+        or datos.get("nombre_negocio")
+        or datos.get("empresa_nombre")
+        or cfg("empresa_nombre", "este negocio")
+        or "este negocio"
+    ).strip()
+    asistente = str(
+        asistente
+        or datos.get("nombre_asistente")
+        or datos.get("asistente_nombre")
+        or cfg("asistente_nombre", "asistente virtual")
+        or "asistente virtual"
+    ).strip()
 
-    consulta_oferta = any(x in t for x in (
-        "que ofrecen", "qué ofrecen", "que ofrece", "qué ofrece",
-        "que hacen", "qué hacen", "servicios", "productos",
+    # Saludos simples: jamás necesitan IA.
+    if re.fullmatch(r"\s*(hola+|holi+|buenas|buenos dias|buenos días|buenas tardes|buenas noches|hey|alo|aló)\s*[!.?]*\s*", t):
+        return f"¡Hola! 👋 Soy {asistente}, el asistente virtual de {empresa}. ¿En qué te puedo ayudar?"
+
+    rubro = _core_valor_publico(datos, "rubro", "tipo_negocio")
+    descripcion = _core_valor_publico(
+        datos, "descripcion_empresa", "descripcion", "proposito", "propósito"
+    )
+    oferta = _core_valor_publico(
+        datos, "productos_servicios", "servicios_productos", "servicios", "productos"
+    )
+    objetivo = _core_valor_publico(datos, "objetivo")
+    web = _core_valor_publico(datos, "web", "sitio_web", "website")
+    instagram = _core_valor_publico(datos, "instagram")
+    facebook = _core_valor_publico(datos, "facebook")
+
+    pregunta_general = any(x in t for x in (
+        "informacion de ustedes", "información de ustedes",
+        "informacion del negocio", "información del negocio",
+        "informacion de la empresa", "información de la empresa",
+        "quiero informacion", "quiero información",
+        "necesito informacion", "necesito información",
+        "cuentame de ustedes", "cuéntame de ustedes",
+        "sobre ustedes", "sobre la empresa", "sobre el negocio",
+        "a que se dedican", "a qué se dedican",
+        "que hacen", "qué hacen",
     ))
-    if consulta_oferta:
-        oferta = str(datos.get("productos_servicios") or "").strip()
+    if pregunta_general:
+        partes = []
+        if descripcion:
+            partes.append(descripcion)
+        elif rubro:
+            partes.append(f"{empresa} es un negocio del rubro {rubro}.")
         if oferta:
-            return f"Ofrecemos {oferta}. Si quieres, te cuento más sobre alguno en particular."
+            partes.append(f"Ofrecemos {oferta}.")
+        elif objetivo and not partes:
+            partes.append(objetivo)
+        if partes:
+            return " ".join(partes) + " ¿Hay algo en particular que quieras conocer?"
+        return (
+            f"Puedo ayudarte con información sobre {empresa}, sus servicios y cómo funciona. "
+            "¿Qué te gustaría saber?"
+        )
+
+    pregunta_oferta = any(x in t for x in (
+        "que ofrecen", "qué ofrecen", "que ofrece", "qué ofrece",
+        "servicios", "productos", "que venden", "qué venden",
+    ))
+    if pregunta_oferta and oferta:
+        return f"Ofrecemos {oferta}. Si quieres, te doy más información sobre alguno en particular."
+
+    # Datos públicos simples, solo si fueron configurados.
+    if any(x in t for x in ("sitio web", "pagina web", "página web", "web")) and web:
+        return f"Nuestro sitio web es {web}."
+
+    if "instagram" in t and instagram:
+        return f"Puedes encontrarnos en Instagram: {instagram}."
+
+    if "facebook" in t and facebook:
+        return f"Puedes encontrarnos en Facebook: {facebook}."
 
     return None
 
+
+def _core_respuesta_directa_conocimiento(texto, ctx):
+    return _core_respuesta_estructurada(
+        texto,
+        ctx.get("datos") or {},
+        empresa=ctx.get("empresa"),
+        asistente=ctx.get("asistente"),
+    )
 
 def _core_agent_llm(agent, texto, ctx, instrucciones):
     """Motor común para agentes. Una sola llamada de IA por turno."""
@@ -4753,7 +4861,6 @@ CONOCIMIENTO WEB RELEVANTE:
                 {"role": "system", "content": system},
                 {"role": "user", "content": str(texto or "")},
             ],
-            timeout=12.0,
         )
         print(f"NEXI PERF openai agent={agent} tiempo={_time.perf_counter()-t0:.3f}s")
         return (r.choices[0].message.content or "").strip() or "No tengo suficiente información para responder eso."
@@ -5019,10 +5126,11 @@ def _core_log_orchestration(empresa_id, token, canal, texto, agente):
 
 def _core_orchestrate(empresa_id, texto, token=None, canal="web"):
     """
-    Orquestador central optimizado:
-    - una sola lectura del perfil por turno;
-    - conocimiento web cacheado;
-    - métricas de latencia por etapa.
+    Orquestador de producción:
+    1) carga perfil una sola vez;
+    2) clasifica intención sin IA;
+    3) responde en forma estructurada cuando los datos ya bastan;
+    4) recién entonces arma contexto web y llama a OpenAI como fallback.
     """
     import time as _time
     total0 = _time.perf_counter()
@@ -5037,12 +5145,48 @@ def _core_orchestrate(empresa_id, texto, token=None, canal="web"):
 
     if agente == "handoff":
         agente = "atencion"
-
     if not _core_agent_enabled(agente, datos):
         agente = "atencion"
 
+    empresa = str(
+        datos.get("nombre_negocio")
+        or datos.get("empresa_nombre")
+        or cfg("empresa_nombre", "este negocio")
+        or "este negocio"
+    ).strip()
+    asistente = str(
+        datos.get("nombre_asistente")
+        or datos.get("asistente_nombre")
+        or cfg("asistente_nombre", "asistente virtual")
+        or "asistente virtual"
+    ).strip()
+
+    # FAST PATH global: evita OpenAI Y evita consulta de conocimiento web.
     t0 = _time.perf_counter()
-    ctx = _core_agent_context(empresa_id, texto, public_profile=(perfil, datos))
+    directa = _core_respuesta_estructurada(
+        texto, datos, empresa=empresa, asistente=asistente
+    )
+    fast_s = _time.perf_counter() - t0
+
+    if directa:
+        agente_real = "conocimiento" if agente in {"atencion", "conocimiento"} else agente
+        t0 = _time.perf_counter()
+        _core_log_orchestration(empresa_id, token, canal, texto, agente_real)
+        audit_s = _time.perf_counter() - t0
+        total_s = _time.perf_counter() - total0
+        print("NEXI ORCHESTRATOR:", empresa_id, canal, "->", agente_real, "(FAST)")
+        print(
+            f"NEXI PERF TOTAL={total_s:.3f}s perfil={perfil_s:.3f}s "
+            f"router={router_s:.3f}s fast={fast_s:.3f}s contexto=0.000s "
+            f"agente=0.000s auditoria={audit_s:.3f}s openai=NO"
+        )
+        return directa, agente_real
+
+    # Solo las consultas no resolubles con datos estructurados llegan aquí.
+    t0 = _time.perf_counter()
+    ctx = _core_agent_context(
+        empresa_id, texto, public_profile=(perfil, datos)
+    )
     contexto_s = _time.perf_counter() - t0
 
     fn = CORE_AGENT_REGISTRY.get(agente, _core_agent_atencion)
@@ -5050,20 +5194,18 @@ def _core_orchestrate(empresa_id, texto, token=None, canal="web"):
     respuesta = fn(empresa_id, texto, ctx=ctx)
     agente_s = _time.perf_counter() - t0
 
-    # Auditoría se mantiene, pero se mide separadamente.
     t0 = _time.perf_counter()
     _core_log_orchestration(empresa_id, token, canal, texto, agente)
     audit_s = _time.perf_counter() - t0
 
     total_s = _time.perf_counter() - total0
-    print("NEXI ORCHESTRATOR:", empresa_id, canal, "->", agente)
+    print("NEXI ORCHESTRATOR:", empresa_id, canal, "->", agente, "(AI FALLBACK)")
     print(
         f"NEXI PERF TOTAL={total_s:.3f}s perfil={perfil_s:.3f}s "
-        f"router={router_s:.3f}s contexto={contexto_s:.3f}s "
+        f"router={router_s:.3f}s fast={fast_s:.3f}s contexto={contexto_s:.3f}s "
         f"agente={agente_s:.3f}s auditoria={audit_s:.3f}s"
     )
     return respuesta, agente
-
 
 def _core_responder_demo_web(token, empresa_id, texto):
     """Simulador web con handoff persistente."""
