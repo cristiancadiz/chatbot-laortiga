@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.9.0-CONFIG-AUTOGESTION"
+APP_VERSION = "2026-09-11-NEXI-V2.9.1-ESTADO-VISUAL-MENU"
 load_dotenv()
 
 app = Flask(__name__)
@@ -979,11 +979,20 @@ def router_codigo_desde_texto(texto):
 
 
 def _router_item_demo(nombre):
-    """Título Twilio <=24 caracteres manteniendo visible '/ Demo'."""
+    """Título Twilio <=24 caracteres con estado visual de demo."""
     nombre = str(nombre or "Negocio Nexia").strip() or "Negocio Nexia"
+    prefijo = "⚪ "
     sufijo = " / Demo"
-    max_nombre = max(1, 24 - len(sufijo))
-    return f"{nombre[:max_nombre].rstrip()}{sufijo}"
+    max_nombre = max(1, 24 - len(prefijo) - len(sufijo))
+    return f"{prefijo}{nombre[:max_nombre].rstrip()}{sufijo}"
+
+
+def _router_item_produccion(nombre):
+    """Título Twilio <=24 caracteres con estado visual de producción."""
+    nombre = str(nombre or "Negocio Nexia").strip() or "Negocio Nexia"
+    prefijo = "🟢 "
+    max_nombre = max(1, 24 - len(prefijo))
+    return f"{prefijo}{nombre[:max_nombre].rstrip()}"
 
 
 def _router_descripcion_demo(datos):
@@ -1230,13 +1239,18 @@ def router_opciones_menu(telefono, pagina=0):
         except Exception:
             pass
 
+        origen_propio = str(propio.get("origen") or "demo").lower()
         todas.append({
             "id": "nexi:mi_asistente",
-            "item": "Probar mi asistente",
-            "description": f"Continuar con {nombre_propio}"[:72],
+            "item": ("🟢 Mi asistente" if origen_propio == "pagado" else "⚪ Mi asistente"),
+            "description": (
+                f"Producción · {nombre_propio}"
+                if origen_propio == "pagado"
+                else f"Demo · {nombre_propio}"
+            )[:72],
             "empresa_id": empresa_id_propio,
             "motor": "core",
-            "origen": propio.get("origen") or "demo",
+            "origen": origen_propio,
             "demo_access": propio.get("demo_access"),
         })
     else:
@@ -1251,8 +1265,8 @@ def router_opciones_menu(telefono, pagina=0):
 
     todas.append({
         "id": "nexi:diego",
-        "item": "Diego Estilista",
-        "description": "Peluquería y estilismo",
+        "item": _router_item_produccion("Diego Estilista"),
+        "description": "Producción · Peluquería y estilismo",
         "empresa_id": str(DIEGO_EMPRESA_ID or ""),
         "motor": "legacy",
         "origen": "diego",
@@ -1262,11 +1276,11 @@ def router_opciones_menu(telefono, pagina=0):
         nombre = str(e.get("nombre") or "Negocio Nexia").strip()
         todas.append({
             "id": f"nexi:empresa:{e['empresa_id']}",
-            "item": nombre[:24],
+            "item": _router_item_produccion(nombre),
             "description": (
-                "Soluciones de automatización"
+                "Producción · Soluciones de automatización"
                 if nombre.strip().upper() == "NEXIA"
-                else f"Conversar con {nombre}"
+                else f"Producción · Conversar con {nombre}"
             )[:72],
             "empresa_id": e["empresa_id"],
             "motor": "core",
@@ -1285,7 +1299,7 @@ def router_opciones_menu(telefono, pagina=0):
         todas.append({
             "id": f"nexi:prueba:{eid}",
             "item": _router_item_demo(nombre),
-            "description": str(demo.get("description") or "Asistente en prueba de Nexia")[:72],
+            "description": ("Demo · " + str(demo.get("description") or "Asistente en prueba de Nexia"))[:72],
             "empresa_id": eid,
             "motor": "core",
             "origen": "demo",
