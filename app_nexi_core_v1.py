@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.7.2-AJUSTES-COPY"
+APP_VERSION = "2026-09-11-NEXI-V2.7.3-ONBOARDING-SIMPLIFICADO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -3649,9 +3649,6 @@ CORE_COMMON_FIELDS = [
     "rubro",
     "productos_servicios",
     "objetivo",
-    "canales_actuales",
-    "canales_deseados",
-    "presencia_digital",
     "personas_atencion",
 ]
 
@@ -3696,22 +3693,6 @@ CORE_QUESTIONS = {
             "Automatizar otro proceso",
         ],
         "help": "Puedes elegir más de una opción.",
-    },
-    "canales_actuales": {
-        "text": "¿Por qué medios te contactan hoy tus clientes?",
-        "kind": "multi_choice",
-        "options": ["WhatsApp", "Instagram"],
-        "help": "Esto nos ayuda a entender dónde ocurre hoy la atención.",
-    },
-    "canales_deseados": {
-        "text": "¿En qué canales quieres atender a tus clientes?",
-        "kind": "multi_choice",
-        "options": ["WhatsApp", "Instagram"],
-    },
-    "presencia_digital": {
-        "text": "Agrega tu sitio web y redes sociales públicas.",
-        "kind": "digital_presence",
-        "help": "La web puede usarse como fuente de conocimiento si lo autorizas. Las redes sociales se guardan como canales públicos para responder cuando un cliente las consulte.",
     },
     "personas_atencion": {
         "text": "¿Cuántas personas atienden actualmente consultas o clientes?",
