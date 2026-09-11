@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.8.0-DIRECCION-MAPS"
+APP_VERSION = "2026-09-11-NEXI-V2.8.3-MENU-NUEVOS-USUARIOS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -709,7 +709,8 @@ ROUTER_MENU_COMMANDS = {
     "cambiar de negocio", "cambiar empresa", "recepcion", "recepción",
 }
 ROUTER_DIEGO_COMMANDS = {"diego", "diego estilista", "hablar con diego"}
-ROUTER_DEMO_COMMANDS = {"mi demo", "demo", "mi prueba", "prueba", "probar mi demo", "probar demo", "probar mi prueba"}
+ROUTER_DEMO_COMMANDS = {"mi demo", "demo", "mi prueba", "prueba", "probar mi demo", "probar demo", "probar mi prueba", "probar mi asistente", "mi asistente"}
+NEXIA_PRUEBA_URL = os.getenv("NEXIA_PRUEBA_URL", "https://nexia-tech.com/prueba.html").strip()
 
 # V2.3: el menú de recepción de WhatsApp se construye dinámicamente con
 # empresas pagadas/activas. Twilio permite hasta 10 elementos por list-picker.
@@ -777,6 +778,75 @@ def router_demo_access_sin_activar(telefono):
         return row
     except Exception as e:
         print("NEXI ROUTER DEMO LOOKUP ERROR:", repr(e))
+        return None
+
+
+
+def router_asistente_propio(telefono):
+    """
+    Devuelve el asistente asociado al WhatsApp del creador/cliente.
+    - Si conserva una demo activa, devuelve esa misma demo.
+    - Si la demo se convirtió en Nexia 500/1000, reutiliza el mismo empresa_id.
+    - Nunca crea otra empresa ni otra prueba.
+    """
+    # Camino 1: demo activa real.
+    demo = router_demo_access_sin_activar(telefono)
+    if demo:
+        empresa_id = str(demo.get("empresa_id") or "").strip()
+        if empresa_id:
+            return {
+                "empresa_id": empresa_id,
+                "motor": "core",
+                "origen": "demo",
+                "demo_access": demo,
+            }
+
+    headers = _router_headers()
+    ident = _router_identificador(telefono)
+    if not headers or not ident:
+        return None
+
+    try:
+        # Una demo convertida a plan pagado deja demo_accesos inactivo,
+        # pero la fila histórica conserva la relación WhatsApp -> empresa.
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/demo_accesos",
+            headers=headers,
+            params={
+                "select": "empresa_id,canal,identificador_cliente,activo,inicio,fin,updated_at,created_at",
+                "canal": "eq.whatsapp",
+                "identificador_cliente": f"eq.{ident}",
+                "order": "updated_at.desc.nullslast,created_at.desc",
+                "limit": "1",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows = r.json() if r.content else []
+        if not rows:
+            return None
+
+        acceso = dict(rows[0])
+        empresa_id = str(acceso.get("empresa_id") or "").strip()
+        if not empresa_id:
+            return None
+
+        plan = estado_suscripcion_empresa(empresa_id)
+        tipo = str(plan.get("tipo_plan") or "").strip().lower()
+        estado = str(plan.get("estado") or "").strip().lower()
+        vigente = plan.get("vigente")
+
+        if tipo in {"nexia_500", "nexia_1000"} and estado == "activo" and vigente is not False:
+            return {
+                "empresa_id": empresa_id,
+                "motor": "core",
+                "origen": "pagado",
+                "plan": plan,
+            }
+
+        return None
+    except Exception as e:
+        print("NEXI ROUTER MI ASISTENTE LOOKUP ERROR:", repr(e))
         return None
 
 
@@ -1129,19 +1199,50 @@ def router_empresas_pagadas_activas():
 
 
 def router_opciones_menu(telefono, pagina=0):
-    """Genera el menú global: Diego, empresas pagadas y demos públicas activas."""
+    """Genera el menú global: acceso propio, Diego, empresas pagadas y demos públicas."""
     pagadas = router_empresas_pagadas_activas()
     demos = router_demos_publicas_activas()
     pagina = max(0, int(pagina or 0))
 
-    todas = [{
+    todas = []
+
+    propio = router_asistente_propio(telefono)
+    if propio:
+        empresa_id_propio = str(propio.get("empresa_id") or "").strip()
+        nombre_propio = "Mi asistente"
+        try:
+            cfg_propia = cargar_empresa_config(empresa_id_propio, canal="whatsapp", provider="router")
+            nombre_propio = str(cfg_propia.get("empresa_nombre") or "Mi asistente").strip() or "Mi asistente"
+        except Exception:
+            pass
+
+        todas.append({
+            "id": "nexi:mi_asistente",
+            "item": "Probar mi asistente",
+            "description": f"Continuar con {nombre_propio}"[:72],
+            "empresa_id": empresa_id_propio,
+            "motor": "core",
+            "origen": propio.get("origen") or "demo",
+            "demo_access": propio.get("demo_access"),
+        })
+    else:
+        # Usuario nuevo: el mismo menú de WhatsApp lo lleva al onboarding.
+        todas.append({
+            "id": "nexi:nueva_prueba",
+            "item": "Probar Nexia gratis",
+            "description": "Crea tu asistente y pruébalo gratis",
+            "motor": "core",
+            "origen": "nueva_prueba",
+        })
+
+    todas.append({
         "id": "nexi:diego",
         "item": "Diego Estilista",
         "description": "Peluquería y estilismo",
         "empresa_id": str(DIEGO_EMPRESA_ID or ""),
         "motor": "legacy",
         "origen": "diego",
-    }]
+    })
 
     for e in pagadas:
         nombre = str(e.get("nombre") or "Negocio Nexia").strip()
@@ -1899,6 +2000,41 @@ def router_superior_resolver(telefono, texto):
         router_contexto_borrar(telefono)
         return {"accion": "menu", "pagina": pagina}
 
+    if raw_texto.lower() == "nexi:mi_asistente":
+        propio = router_asistente_propio(telefono)
+        if not propio:
+            return {
+                "accion": "menu",
+                "respuesta": (
+                    "Todavía no tienes un asistente asociado a este WhatsApp.\n\n"
+                    f"Puedes crear tu prueba gratis aquí:\n{NEXIA_PRUEBA_URL}"
+                ),
+            }
+
+        empresa_id = str(propio.get("empresa_id") or "").strip()
+        origen = str(propio.get("origen") or "demo").strip().lower()
+        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen=origen) or {}
+        row.update({
+            "accion": "seleccionado",
+            "empresa_id": empresa_id,
+            "motor": "core",
+            "origen": origen,
+            "telefono": telefono,
+        })
+        if origen == "demo":
+            row["demo_access"] = propio.get("demo_access") or {"empresa_id": empresa_id}
+        return row
+
+    if raw_texto.lower() == "nexi:nueva_prueba":
+        return {
+            "accion": "menu",
+            "respuesta": (
+                "🚀 Crea tu asistente Nexia gratis.\n\n"
+                "Tendrás 50 mensajes o 24 horas para probarlo, lo que ocurra primero.\n\n"
+                f"👉 {NEXIA_PRUEBA_URL}"
+            ),
+        }
+
     if raw_texto.lower() == "nexi:diego":
         row = router_contexto_guardar(telefono, DIEGO_EMPRESA_ID, motor="legacy", origen="diego") or {}
         row.update({"accion": "seleccionado", "empresa_id": DIEGO_EMPRESA_ID, "motor": "legacy", "telefono": telefono})
@@ -1960,15 +2096,18 @@ def router_superior_resolver(telefono, texto):
         return row
 
     if t in {normalizar_texto(x) for x in ROUTER_DEMO_COMMANDS}:
-        demo = router_demo_access_sin_activar(telefono)
-        if not demo:
+        propio = router_asistente_propio(telefono)
+        if not propio:
             return {
                 "accion": "menu",
-                "respuesta": "No encontré una prueba activa asociada a este WhatsApp.\n\n" + router_menu_superior(telefono),
+                "respuesta": "No encontré una prueba o plan activo asociado a este WhatsApp.\n\n" + router_menu_superior(telefono),
             }
-        empresa_id = str(demo.get("empresa_id") or "")
-        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="demo") or {}
-        row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": "core", "demo_access": demo, "telefono": telefono})
+        empresa_id = str(propio.get("empresa_id") or "")
+        origen = str(propio.get("origen") or "demo").lower()
+        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen=origen) or {}
+        row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": "core", "origen": origen, "telefono": telefono})
+        if origen == "demo":
+            row["demo_access"] = propio.get("demo_access") or {"empresa_id": empresa_id}
         return row
 
     # Fallback por número si el cliente escribe en vez de tocar: usa el orden de la primera página.
@@ -4570,12 +4709,49 @@ def _core_whatsapp_destino():
 
 
 def _core_whatsapp_info(empresa_id=None):
-    destino=_core_whatsapp_destino()
+    """
+    Acceso directo a la prueba por WhatsApp.
+    No depende de haber preguntado el WhatsApp del creador en onboarding.
+    Usa un código de Router ligado al mismo empresa_id para continuar exactamente
+    la misma demo/configuración.
+    """
+    destino = _core_whatsapp_destino()
+    empresa_id = str(empresa_id or "").strip()
+
+    if not destino or not empresa_id:
+        return {
+            "enabled": False,
+            "destination": (f"+{destino}" if destino else None),
+            "wa_url": None,
+            "empresa_id": empresa_id or None,
+            "codigo_acceso": None,
+        }
+
+    codigo = None
+    try:
+        codigo, _ = _portal_destino_asistente(empresa_id)
+    except Exception as e:
+        print("CORE WHATSAPP DIRECT ACCESS WARN:", repr(e))
+
+    if not codigo:
+        # Fallback estable; si la tabla de destinos aún no está disponible,
+        # el botón se oculta para no enviar al usuario a una ruta incorrecta.
+        return {
+            "enabled": False,
+            "destination": f"+{destino}",
+            "wa_url": None,
+            "empresa_id": empresa_id,
+            "codigo_acceso": None,
+        }
+
+    texto = f"NEXI {codigo}"
     return {
-        "enabled": bool(destino),
-        "destination": (f"+{destino}" if destino else None),
-        "wa_url": (f"https://wa.me/{destino}" if destino else None),
-        "empresa_id": str(empresa_id or "") or None,
+        "enabled": True,
+        "destination": f"+{destino}",
+        "wa_url": f"https://wa.me/{destino}?text={quote(texto)}",
+        "empresa_id": empresa_id,
+        "codigo_acceso": codigo,
+        "mensaje_acceso": texto,
     }
 
 
