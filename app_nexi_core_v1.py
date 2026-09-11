@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.7.3-ONBOARDING-SIMPLIFICADO"
+APP_VERSION = "2026-09-11-NEXI-V2.7.4-FAST-VENTAS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -4825,6 +4825,12 @@ def _core_respuesta_estructurada(texto, datos, empresa=None, asistente=None):
         "precio", "precios", "cuanto cuesta", "cuánto cuesta", "cuanto cobran",
         "cuánto cobran", "valor", "valores", "plan", "planes", "tarifa", "tarifas",
     ))
+    pregunta_compra = any(x in t for x in (
+        "quiero comprar", "quiero contratar", "me interesa contratar",
+        "me interesa comprar", "como contrato", "cómo contrato",
+        "como compro", "cómo compro", "quiero un bot", "necesito un bot",
+        "adquirir", "contratar el servicio", "comprar el servicio",
+    ))
     if pregunta_precio:
         # Nexia tiene sus planes públicos definidos en el propio backend.
         if es_empresa_nexia():
@@ -4842,6 +4848,27 @@ def _core_respuesta_estructurada(texto, datos, empresa=None, asistente=None):
         return (
             "Los valores no están publicados en la información disponible. "
             "Puedo contarte qué servicios ofrecemos o ayudarte a solicitar una cotización."
+        )
+
+    if pregunta_compra:
+        if es_empresa_nexia():
+            p500 = NEXIA_PLANES.get("nexia_500") or {}
+            p1000 = NEXIA_PLANES.get("nexia_1000") or {}
+            if p500.get("precio") and p1000.get("precio"):
+                return (
+                    "¡Claro! Puedes contratar Nexia directamente. "
+                    f"Tenemos Nexia 500 por ${int(p500['precio']):,} CLP y "
+                    f"Nexia 1000 por ${int(p1000['precio']):,} CLP. "
+                    "Si quieres, te ayudo a elegir el plan que mejor se ajusta a tu negocio."
+                ).replace(",", ".")
+        if oferta:
+            return (
+                f"Claro. Ofrecemos {_cerrar_frase(oferta)} "
+                "Si te interesa contratar, puedo orientarte con el siguiente paso."
+            )
+        return (
+            "Claro. Puedo ayudarte a conocer el servicio y orientarte para contratar. "
+            "Cuéntame brevemente qué necesitas."
         )
 
     pregunta_general = _core_intencion_info_negocio(texto)
@@ -5247,7 +5274,7 @@ def _core_orchestrate(empresa_id, texto, token=None, canal="web"):
     # FAST PATH global: evita OpenAI Y evita consulta de conocimiento web.
     t0 = _time.perf_counter()
     directa = None
-    if agente in {"atencion", "conocimiento"}:
+    if agente in {"atencion", "conocimiento", "ventas"}:
         directa = _core_respuesta_estructurada(
             texto, datos, empresa=empresa, asistente=asistente
         )
