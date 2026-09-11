@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.7.5-DIAGNOSTICO-OPENAI"
+APP_VERSION = "2026-09-11-NEXI-V2.7.6-OPENAI-LOW-LATENCY"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2775,6 +2775,10 @@ def guardar_mensaje(telefono, rol, mensaje, canal="whatsapp"):
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+# Nexia Core usa un modelo más nuevo y rápido para respuestas conversacionales.
+# Se mantiene separado del modelo legacy para no alterar Diego ni otros flujos.
+OPENAI_CORE_MODEL = os.getenv("OPENAI_CORE_MODEL", "gpt-5.4-mini").strip()
+OPENAI_CORE_REASONING_EFFORT = os.getenv("OPENAI_CORE_REASONING_EFFORT", "none").strip().lower()
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "8"))
 openai_client = (
     OpenAI(
@@ -4976,8 +4980,9 @@ CONOCIMIENTO WEB RELEVANTE:
     print(
         "NEXI OPENAI START:",
         f"agent={agent}",
-        f"model={OPENAI_MODEL}",
+        f"model={OPENAI_CORE_MODEL}",
         f"timeout={OPENAI_TIMEOUT_SECONDS}s",
+        f"reasoning={OPENAI_CORE_REASONING_EFFORT}",
         f"system_chars={system_chars}",
         f"user_chars={user_chars}",
         f"perfil_chars={perfil_chars}",
@@ -4988,7 +4993,8 @@ CONOCIMIENTO WEB RELEVANTE:
     t0 = _time.perf_counter()
     try:
         r = openai_client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=OPENAI_CORE_MODEL,
+            reasoning_effort=OPENAI_CORE_REASONING_EFFORT,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_text},
@@ -5016,7 +5022,7 @@ CONOCIMIENTO WEB RELEVANTE:
         print(
             "NEXI OPENAI OK:",
             f"agent={agent}",
-            f"model={OPENAI_MODEL}",
+            f"model={OPENAI_CORE_MODEL}",
             f"tiempo={elapsed:.3f}s",
             f"prompt_tokens={prompt_tokens}",
             f"completion_tokens={completion_tokens}",
@@ -5037,9 +5043,10 @@ CONOCIMIENTO WEB RELEVANTE:
         print(
             "NEXI OPENAI ERROR:",
             f"agent={agent}",
-            f"model={OPENAI_MODEL}",
+            f"model={OPENAI_CORE_MODEL}",
             f"tiempo={elapsed:.3f}s",
             f"timeout_config={OPENAI_TIMEOUT_SECONDS}s",
+            f"reasoning={OPENAI_CORE_REASONING_EFFORT}",
             f"error_type={error_type}",
             f"cause_type={causa_type or 'n/a'}",
             f"system_chars={system_chars}",
