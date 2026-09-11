@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.7-MOTOR-RESPUESTA-REFACTOR"
+APP_VERSION = "2026-09-11-NEXI-V2.7.1-INTENCIONES-GENERALES"
 load_dotenv()
 
 app = Flask(__name__)
@@ -4624,6 +4624,60 @@ def _core_agent_enabled(agent, datos):
     return True
 
 
+def _core_intencion_info_negocio(texto):
+    """
+    Detecta intención general de conocer el negocio sin depender de frases exactas.
+    Ejemplos cubiertos:
+    - quiero saber de ustedes
+    - quisiera conocer más de la empresa
+    - necesito información del negocio
+    - me cuentas sobre ustedes
+    - qué hacen / a qué se dedican
+    - quiénes son / qué es esta empresa
+    """
+    t = _core_norm(texto)
+    if not t:
+        return False
+
+    # Si la consulta tiene una intención especializada clara, no la convertimos
+    # en "información general". El router especializado conserva prioridad.
+    especializadas = (
+        "precio", "precios", "cuanto cuesta", "cuánto cuesta", "cotizar",
+        "cotizacion", "cotización", "comprar", "contratar",
+        "agendar", "reservar", "reserva", "cita", "turno",
+        "problema", "error", "falla", "soporte", "reclamo",
+        "seguimiento", "estado de mi",
+    )
+    if any(x in t for x in especializadas):
+        return False
+
+    patrones = (
+        # "quiero saber de ustedes", "quisiera conocer la empresa"
+        r"\b(quiero|quisiera|necesito|deseo|me gustaria|me gustaría|podria|podría)\b.{0,35}\b(saber|conocer|informacion|información|info|datos|detalles)\b.{0,35}\b(de|del|sobre|acerca de)?\s*(ustedes|empresa|negocio|marca)\b",
+
+        # "quiero saber más", "quiero conocer más de ustedes"
+        r"\b(quiero|quisiera|necesito|me gustaria|me gustaría)\b.{0,25}\b(saber|conocer)\b.{0,20}\b(mas|más)\b(?:.{0,25}\b(ustedes|empresa|negocio|marca)\b)?",
+
+        # "dame información de la empresa", "cuéntame sobre ustedes"
+        r"\b(dame|entregame|entrégame|cuentame|cuéntame|explicame|explícame)\b.{0,30}\b(informacion|información|info|sobre|acerca|ustedes|empresa|negocio|marca)\b",
+
+        # "información de ustedes / del negocio / sobre la empresa"
+        r"\b(informacion|información|info|datos|detalles)\b.{0,20}\b(de|del|sobre|acerca de)\b.{0,15}\b(ustedes|empresa|negocio|marca)\b",
+
+        # "qué hacen", "a qué se dedican", "quiénes son"
+        r"\b(que|qué)\b.{0,8}\b(hacen|son|ofrecen)\b",
+        r"\b(a que|a qué)\b.{0,12}\b(se dedican|dedican)\b",
+        r"\b(quienes|quiénes)\b.{0,8}\b(son)\b",
+
+        # "qué es esta empresa / este negocio"
+        r"\b(que|qué)\b.{0,8}\b(es)\b.{0,12}\b(esta|este|la|el)?\s*(empresa|negocio|marca)\b",
+
+        # "sobre ustedes", "acerca del negocio" como consulta corta
+        r"^\s*(quiero\s+)?(saber\s+)?(mas\s+|más\s+)?(sobre|acerca de)\s+(ustedes|la empresa|el negocio|la marca)\s*[?.!]*$",
+    )
+    return any(re.search(p, t, flags=re.IGNORECASE) for p in patrones)
+
+
 def _core_route_intent(texto, datos):
     """
     Router barato y determinista.
@@ -4657,6 +4711,9 @@ def _core_route_intent(texto, datos):
         "mi solicitud", "mi pedido", "mi caso",
     )):
         return "seguimiento" if _core_agent_enabled("seguimiento", datos) else "atencion"
+
+    if _core_intencion_info_negocio(texto):
+        return "conocimiento"
 
     if any(x in t for x in (
         "que hacen", "qué hacen", "que ofrece", "qué ofrece", "que ofrecen", "qué ofrecen",
@@ -4760,17 +4817,7 @@ def _core_respuesta_estructurada(texto, datos, empresa=None, asistente=None):
     instagram = _core_valor_publico(datos, "instagram")
     facebook = _core_valor_publico(datos, "facebook")
 
-    pregunta_general = any(x in t for x in (
-        "informacion de ustedes", "información de ustedes",
-        "informacion del negocio", "información del negocio",
-        "informacion de la empresa", "información de la empresa",
-        "quiero informacion", "quiero información",
-        "necesito informacion", "necesito información",
-        "cuentame de ustedes", "cuéntame de ustedes",
-        "sobre ustedes", "sobre la empresa", "sobre el negocio",
-        "a que se dedican", "a qué se dedican",
-        "que hacen", "qué hacen",
-    ))
+    pregunta_general = _core_intencion_info_negocio(texto)
     if pregunta_general:
         partes = []
         if descripcion:
@@ -5163,9 +5210,11 @@ def _core_orchestrate(empresa_id, texto, token=None, canal="web"):
 
     # FAST PATH global: evita OpenAI Y evita consulta de conocimiento web.
     t0 = _time.perf_counter()
-    directa = _core_respuesta_estructurada(
-        texto, datos, empresa=empresa, asistente=asistente
-    )
+    directa = None
+    if agente in {"atencion", "conocimiento"}:
+        directa = _core_respuesta_estructurada(
+            texto, datos, empresa=empresa, asistente=asistente
+        )
     fast_s = _time.perf_counter() - t0
 
     if directa:
@@ -5174,7 +5223,7 @@ def _core_orchestrate(empresa_id, texto, token=None, canal="web"):
         _core_log_orchestration(empresa_id, token, canal, texto, agente_real)
         audit_s = _time.perf_counter() - t0
         total_s = _time.perf_counter() - total0
-        print("NEXI ORCHESTRATOR:", empresa_id, canal, "->", agente_real, "(FAST)")
+        print("NEXI ORCHESTRATOR:", empresa_id, canal, "->", agente_real, "(FAST STRUCTURED)")
         print(
             f"NEXI PERF TOTAL={total_s:.3f}s perfil={perfil_s:.3f}s "
             f"router={router_s:.3f}s fast={fast_s:.3f}s contexto=0.000s "
