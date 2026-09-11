@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.7.4-FAST-VENTAS"
+APP_VERSION = "2026-09-11-NEXI-V2.7.5-DIAGNOSTICO-OPENAI"
 load_dotenv()
 
 app = Flask(__name__)
@@ -4963,19 +4963,92 @@ CONOCIMIENTO WEB RELEVANTE:
 {web}
 """
     import time as _time
+
+    # Diagnóstico OpenAI: solo métricas, nunca imprime prompts ni datos del cliente.
+    user_text = str(texto or "")
+    system_chars = len(system)
+    user_chars = len(user_text)
+    perfil_chars = len(perfil_json)
+    web_chars = len(web)
+    total_chars = system_chars + user_chars
+    tokens_aprox = max(1, round(total_chars / 4))
+
+    print(
+        "NEXI OPENAI START:",
+        f"agent={agent}",
+        f"model={OPENAI_MODEL}",
+        f"timeout={OPENAI_TIMEOUT_SECONDS}s",
+        f"system_chars={system_chars}",
+        f"user_chars={user_chars}",
+        f"perfil_chars={perfil_chars}",
+        f"web_chars={web_chars}",
+        f"tokens_aprox={tokens_aprox}",
+    )
+
     t0 = _time.perf_counter()
     try:
         r = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": system},
-                {"role": "user", "content": str(texto or "")},
+                {"role": "user", "content": user_text},
             ],
         )
-        print(f"NEXI PERF openai agent={agent} tiempo={_time.perf_counter()-t0:.3f}s")
-        return (r.choices[0].message.content or "").strip() or "No tengo suficiente información para responder eso."
+        elapsed = _time.perf_counter() - t0
+
+        usage = getattr(r, "usage", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
+        completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
+        total_tokens = getattr(usage, "total_tokens", None) if usage else None
+
+        choice = r.choices[0] if getattr(r, "choices", None) else None
+        finish_reason = getattr(choice, "finish_reason", None) if choice else None
+        contenido = (
+            getattr(getattr(choice, "message", None), "content", None)
+            if choice else None
+        ) or ""
+        request_id = (
+            getattr(r, "_request_id", None)
+            or getattr(r, "request_id", None)
+            or ""
+        )
+
+        print(
+            "NEXI OPENAI OK:",
+            f"agent={agent}",
+            f"model={OPENAI_MODEL}",
+            f"tiempo={elapsed:.3f}s",
+            f"prompt_tokens={prompt_tokens}",
+            f"completion_tokens={completion_tokens}",
+            f"total_tokens={total_tokens}",
+            f"output_chars={len(contenido)}",
+            f"finish_reason={finish_reason}",
+            f"request_id={request_id or 'n/a'}",
+        )
+        print(f"NEXI PERF openai agent={agent} tiempo={elapsed:.3f}s")
+        return contenido.strip() or "No tengo suficiente información para responder eso."
+
     except Exception as e:
-        print(f"NEXI PERF openai_error agent={agent} tiempo={_time.perf_counter()-t0:.3f}s")
+        elapsed = _time.perf_counter() - t0
+        error_type = type(e).__name__
+        causa = getattr(e, "__cause__", None)
+        causa_type = type(causa).__name__ if causa else None
+
+        print(
+            "NEXI OPENAI ERROR:",
+            f"agent={agent}",
+            f"model={OPENAI_MODEL}",
+            f"tiempo={elapsed:.3f}s",
+            f"timeout_config={OPENAI_TIMEOUT_SECONDS}s",
+            f"error_type={error_type}",
+            f"cause_type={causa_type or 'n/a'}",
+            f"system_chars={system_chars}",
+            f"user_chars={user_chars}",
+            f"perfil_chars={perfil_chars}",
+            f"web_chars={web_chars}",
+            f"tokens_aprox={tokens_aprox}",
+        )
+        print(f"NEXI PERF openai_error agent={agent} tiempo={elapsed:.3f}s")
         print("NEXI AGENT ERROR:", agent, repr(e))
         return "No pude procesar esa consulta en este momento. Intenta nuevamente."
 
