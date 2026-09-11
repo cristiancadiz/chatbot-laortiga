@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.7.6-OPENAI-LOW-LATENCY"
+APP_VERSION = "2026-09-11-NEXI-V2.7.7-OPENAI-COMPAT"
 load_dotenv()
 
 app = Flask(__name__)
@@ -4994,7 +4994,6 @@ CONOCIMIENTO WEB RELEVANTE:
     try:
         r = openai_client.chat.completions.create(
             model=OPENAI_CORE_MODEL,
-            reasoning_effort=OPENAI_CORE_REASONING_EFFORT,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_text},
