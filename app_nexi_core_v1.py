@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.7.7-OPENAI-COMPAT"
+APP_VERSION = "2026-09-11-NEXI-V2.8.0-DIRECCION-MAPS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -142,11 +142,14 @@ MERCADOPAGO_WEBHOOK_URL = os.getenv(
     "MERCADOPAGO_WEBHOOK_URL", f"{PUBLIC_BACKEND_URL}/webhooks/mercadopago"
 ).strip()
 
+NEXIA_PLAN_DURACION_DIAS_DEFAULT = int(os.getenv("NEXIA_PLAN_DURACION_DIAS", "30"))
+
 NEXIA_PLANES = {
     "nexia_500": {
         "codigo": "nexia_500",
         "nombre": "Nexia 500",
         "mensajes": 500,
+        "duracion_dias": NEXIA_PLAN_DURACION_DIAS_DEFAULT,
         "precio": 19990,
         "precio_antes": 29990,
         "moneda": "CLP",
@@ -155,6 +158,7 @@ NEXIA_PLANES = {
         "codigo": "nexia_1000",
         "nombre": "Nexia 1000",
         "mensajes": 1000,
+        "duracion_dias": NEXIA_PLAN_DURACION_DIAS_DEFAULT,
         "precio": 39990,
         "precio_antes": 49990,
         "moneda": "CLP",
@@ -211,11 +215,10 @@ def backend_headers():
 
 
 # ============================================================
-# NEXIA SAAS - PLANES, DEMO 50 MENSAJES TOTALES / 24 HORAS
+# NEXIA SAAS - PLANES POR MENSAJES + VIGENCIA
 # ============================================================
-# Una demo termina cuando ocurre primero:
-#   1) se consumen 50 mensajes totales (recibidos + enviados); o
-#   2) pasan 24 horas desde su activación.
+# Demo: 50 mensajes totales o 24 horas, lo que ocurra primero.
+# Nexia 500 / 1000: mensajes del plan o 30 días, lo que ocurra primero.
 #
 # Las respuestas manuales de un ejecutivo enviadas desde Portal Nexia NO
 # consumen demo porque este control solo se ejecuta en los webhooks del bot.
@@ -311,7 +314,35 @@ def estado_suscripcion_empresa(empresa_id=None):
         out["controlado"] = True
         limite = int(out.get("limite_mensajes") or out.get("limite_respuestas") or 0)
         usadas = int(out.get("mensajes_usados") or out.get("respuestas_usadas") or 0)
-        out["mensajes_restantes"] = max(0, limite - usadas) if limite else None
+        restantes = max(0, limite - usadas) if limite else None
+        out["mensajes_restantes"] = restantes
+
+        tipo = str(out.get("tipo_plan") or "").lower()
+        estado = str(out.get("estado") or "activo").lower()
+        vigente = estado == "activo"
+        motivo_fin = None
+
+        if tipo == "demo":
+            fin = _parse_iso(out.get("demo_fin"))
+            if fin and datetime.now(pytz.UTC) >= fin.astimezone(pytz.UTC):
+                vigente = False
+                motivo_fin = "tiempo"
+            elif restantes is not None and restantes <= 0:
+                vigente = False
+                motivo_fin = "limite"
+
+        elif tipo in {"nexia_500", "nexia_1000"}:
+            fin = _parse_iso(out.get("periodo_fin"))
+            if fin and datetime.now(pytz.UTC) >= fin.astimezone(pytz.UTC):
+                vigente = False
+                motivo_fin = "tiempo"
+            elif restantes is not None and restantes <= 0:
+                vigente = False
+                motivo_fin = "limite"
+
+        out["vigente"] = vigente
+        out["motivo_fin"] = motivo_fin
+        out["estado_efectivo"] = "activo" if vigente else "finalizado"
         return out
     except Exception as e:
         print("NEXIA PLAN STATUS ERROR:", repr(e))
@@ -393,9 +424,14 @@ def mensaje_plan_finalizado(control=None):
     tipo = str(control.get("tipo_plan") or "").strip().lower()
     motivo = str(control.get("motivo") or "").strip().lower()
     if tipo in {"nexia_500", "nexia_1000"}:
+        if motivo == "tiempo":
+            return (
+                "Tu período mensual de Nexia ya finalizó. "
+                "Puedes renovar tu plan desde Portal Nexia para continuar."
+            )
         return (
             "Has utilizado todos los mensajes disponibles de tu plan Nexia. "
-            "Puedes comprar una nueva bolsa desde Portal Nexia para continuar."
+            "Puedes renovar tu plan desde Portal Nexia para continuar."
         )
     return mensaje_demo_finalizada(motivo)
 
@@ -1039,7 +1075,7 @@ def router_empresas_pagadas_activas():
             f"{SUPABASE_URL}/rest/v1/suscripciones_empresa",
             headers=headers,
             params={
-                "select": "empresa_id,tipo_plan,estado,updated_at",
+                "select": "*",
                 "estado": "eq.activo",
                 "tipo_plan": "in.(nexia_500,nexia_1000)",
                 "order": "updated_at.asc",
@@ -1050,7 +1086,15 @@ def router_empresas_pagadas_activas():
         rp.raise_for_status()
         planes = rp.json() if rp.content else []
         ids = []
+        ahora = datetime.now(pytz.UTC)
         for p in planes:
+            fin = _parse_iso(p.get("periodo_fin"))
+            if fin and ahora >= fin.astimezone(pytz.UTC):
+                continue
+            limite = int(p.get("limite_mensajes") or 0)
+            usados = int(p.get("mensajes_usados") or 0)
+            if limite and usados >= limite:
+                continue
             eid = str(p.get("empresa_id") or "").strip()
             if eid and eid != str(DIEGO_EMPRESA_ID or "").strip() and eid not in ids:
                 ids.append(eid)
@@ -3655,6 +3699,7 @@ CORE_COMMON_FIELDS = [
     "nombre_negocio",
     "nombre_asistente",
     "rubro",
+    "direccion_fisica",
     "productos_servicios",
     "objetivo",
     "personas_atencion",
@@ -3680,10 +3725,15 @@ CORE_QUESTIONS = {
         "text": "Cuéntame brevemente, ¿a qué se dedica tu negocio o actividad?",
         "kind": "long_text",
     },
+    "direccion_fisica": {
+        "text": "¿Tu negocio tiene una dirección física donde atiende clientes?",
+        "kind": "physical_address",
+        "help": "Si atiendes presencialmente, agrega la dirección. También puedes pegar el enlace exacto de Google Maps si ya lo tienes.",
+    },
     "productos_servicios": {
         "text": "¿Qué productos o servicios ofrece tu negocio?",
-        "kind": "long_text",
-        "help": "Puedes escribirlos brevemente. Si tienes una página web con esta información, después podrás permitir que Nexi la use para aprender sobre tu negocio.",
+        "kind": "service_catalog",
+        "help": "Agrega uno por uno. El precio es opcional: si no lo publicas, déjalo vacío.",
     },
     "objetivo": {
         "text": "¿Qué quieres que Nexi haga por tu negocio?",
@@ -4414,6 +4464,42 @@ def _core_create_company_from_session(session):
     )
     cr.raise_for_status()
 
+    # Catálogo estructurado del onboarding: se convierte en servicios reales de la empresa.
+    catalogo = datos.get("catalogo_productos_servicios") or []
+    if isinstance(catalogo, list) and catalogo:
+        servicios_payload = []
+        for idx, item in enumerate(catalogo[:100], 1):
+            if not isinstance(item, dict):
+                continue
+            nombre_servicio = str(item.get("nombre") or "").strip()
+            if not nombre_servicio:
+                continue
+            precio_texto = str(item.get("precio") or "").strip()
+            digitos = re.sub(r"\D", "", precio_texto)
+            precio_num = int(digitos) if digitos else 0
+            servicios_payload.append({
+                "empresa_id": empresa_id,
+                "codigo": f"onboarding_{idx}",
+                "numero": idx,
+                "nombre": nombre_servicio[:180],
+                "categoria": "Productos y servicios",
+                "precio": precio_num,
+                "precio_texto": precio_texto or "Valor por confirmar",
+                "detalle": "",
+                "aliases": [],
+                "duracion_minutos": agenda_duracion_min,
+                "orden": idx,
+                "activo": True,
+            })
+        if servicios_payload:
+            sr = requests.post(
+                f"{SUPABASE_URL}/rest/v1/servicios",
+                headers=_core_headers("return=minimal"),
+                json=servicios_payload,
+                timeout=SUPABASE_TIMEOUT,
+            )
+            sr.raise_for_status()
+
     profile={
         "empresa_id":empresa_id,
         "onboarding_token":token,
@@ -4818,6 +4904,29 @@ def _core_respuesta_estructurada(texto, datos, empresa=None, asistente=None):
     web = _core_valor_publico(datos, "web", "sitio_web", "website")
     instagram = _core_valor_publico(datos, "instagram")
     facebook = _core_valor_publico(datos, "facebook")
+    direccion = _core_valor_publico(datos, "direccion", "direccion_completa")
+    google_maps_url = _core_valor_publico(datos, "google_maps_url")
+    atiende_direccion = bool(datos.get("atiende_direccion_fisica"))
+
+    pregunta_ubicacion = any(x in t for x in (
+        "direccion", "dirección", "donde estan", "dónde están", "donde quedan",
+        "dónde quedan", "ubicacion", "ubicación", "como llego", "cómo llego",
+        "local", "tienda fisica", "tienda física", "atienden presencial",
+        "atencion presencial", "atención presencial",
+    ))
+    if pregunta_ubicacion:
+        if atiende_direccion and direccion:
+            respuesta = f"Sí 😊 Atendemos presencialmente en {direccion}."
+            referencia = _core_valor_publico(datos, "referencia_direccion")
+            if referencia:
+                respuesta += f" Referencia: {referencia}."
+            if google_maps_url:
+                respuesta += f"\n\n📍 Google Maps: {google_maps_url}"
+            return respuesta
+        return (
+            "Este negocio no tiene una dirección física de atención publicada. "
+            "La atención se realiza a través de sus canales disponibles."
+        )
 
     def _texto_descriptivo(valor):
         valor = str(valor or "").strip()
@@ -5834,6 +5943,78 @@ def core_onboarding_answer(token):
                 return core_json({"ok":False,"error":"La presencia digital debe enviarse como campos estructurados"},400)
             limpio={k:str(v or "").strip() for k,v in value.items() if str(v or "").strip()}
             datos[key]=limpio or {"sin_presencia": "true"}
+
+        elif key == "direccion_fisica" and isinstance(value, dict):
+            tiene = bool(value.get("tiene_direccion"))
+            if not tiene:
+                datos["direccion_fisica"] = {
+                    "tiene_direccion": False,
+                    "direccion": "",
+                    "comuna": "",
+                    "referencia": "",
+                    "google_maps_url": "",
+                }
+                datos["atiende_direccion_fisica"] = False
+                datos["direccion"] = ""
+                datos["comuna"] = ""
+                datos["referencia_direccion"] = ""
+                datos["google_maps_url"] = ""
+            else:
+                direccion = str(value.get("direccion") or "").strip()
+                comuna = str(value.get("comuna") or "").strip()
+                referencia = str(value.get("referencia") or "").strip()
+                maps_url = str(value.get("google_maps_url") or "").strip()
+
+                if not direccion:
+                    return core_json({"ok":False,"error":"Ingresa la dirección donde atiendes clientes"},400)
+
+                direccion_completa = ", ".join(x for x in (direccion, comuna) if x)
+                if maps_url and not re.match(r"^https?://", maps_url, flags=re.IGNORECASE):
+                    return core_json({"ok":False,"error":"El enlace de Google Maps debe comenzar con http:// o https://"},400)
+
+                if not maps_url:
+                    maps_url = "https://www.google.com/maps/search/?api=1&query=" + quote(
+                        direccion_completa, safe=""
+                    )
+
+                datos["direccion_fisica"] = {
+                    "tiene_direccion": True,
+                    "direccion": direccion,
+                    "comuna": comuna,
+                    "referencia": referencia,
+                    "direccion_completa": direccion_completa,
+                    "google_maps_url": maps_url,
+                }
+                datos["atiende_direccion_fisica"] = True
+                datos["direccion"] = direccion_completa
+                datos["comuna"] = comuna
+                datos["referencia_direccion"] = referencia
+                datos["google_maps_url"] = maps_url
+
+        elif key == "productos_servicios" and isinstance(value, (dict, list)):
+            items = value.get("items") if isinstance(value, dict) else value
+            if not isinstance(items, list):
+                return core_json({"ok":False,"error":"Los productos o servicios deben enviarse como una lista"},400)
+
+            catalogo = []
+            for item in items[:100]:
+                if not isinstance(item, dict):
+                    continue
+                nombre = str(item.get("nombre") or item.get("name") or "").strip()
+                precio = str(item.get("precio") or item.get("price") or "").strip()
+                if not nombre:
+                    continue
+                catalogo.append({"nombre": nombre[:180], "precio": precio[:80]})
+
+            if not catalogo:
+                return core_json({"ok":False,"error":"Agrega al menos un producto o servicio"},400)
+
+            datos["catalogo_productos_servicios"] = catalogo
+            datos[key] = "; ".join(
+                f"{x['nombre']} — {x['precio']}" if x.get("precio") else x["nombre"]
+                for x in catalogo
+            )
+
         else:
             value=str(value).strip()
             if not value:return core_json({"ok":False,"error":"La respuesta está vacía"},400)
@@ -7223,6 +7404,142 @@ def portal_me():
     })
 
 
+
+def _portal_codigo_asistente(empresa_id):
+    """Código estable para abrir desde Portal el asistente exacto de una empresa."""
+    limpio = re.sub(r"[^0-9a-fA-F]", "", str(empresa_id or ""))
+    return ("PORTAL" + limpio[:12]).upper()
+
+
+def _portal_destino_asistente(empresa_id):
+    """
+    Crea/actualiza un destino de Router para el mismo empresa_id.
+    No crea una empresa nueva ni una nueva demo.
+    """
+    empresa_id = str(empresa_id or "").strip()
+    headers = backend_headers()
+    if not empresa_id or not headers:
+        raise RuntimeError("Empresa/Supabase no configurados")
+
+    er = requests.get(
+        f"{SUPABASE_URL}/rest/v1/empresas",
+        headers=headers,
+        params={"select":"id,nombre,activo", "id":f"eq.{empresa_id}", "limit":"1"},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    er.raise_for_status()
+    empresas = er.json() if er.content else []
+    if not empresas or not bool(empresas[0].get("activo", True)):
+        raise RuntimeError("Empresa no disponible")
+
+    nombre = str(empresas[0].get("nombre") or "Negocio Nexia").strip()
+    codigo = _portal_codigo_asistente(empresa_id)
+    payload = {
+        "codigo": codigo,
+        "empresa_id": empresa_id,
+        "nombre_publico": nombre,
+        "motor": "core",
+        "activo": True,
+        "visible_menu": False,
+        "updated_at": datetime.now(pytz.UTC).isoformat(),
+    }
+    rr = requests.post(
+        f"{SUPABASE_URL}/rest/v1/nexi_router_destinos",
+        headers={**headers, "Prefer":"resolution=merge-duplicates,return=representation"},
+        params={"on_conflict":"codigo"},
+        json=payload,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if _router_tabla_no_disponible(rr):
+        raise RuntimeError("Falta instalar nexi_router_destinos")
+    rr.raise_for_status()
+    return codigo, nombre
+
+
+@app.route("/portal/mi-asistente", methods=["GET", "OPTIONS"])
+def portal_mi_asistente():
+    """
+    Devuelve un acceso directo al MISMO asistente de la empresa del usuario.
+    Funciona para demo activa y para Nexia 500/1000.
+    Nunca crea otra empresa ni otra prueba.
+    """
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
+
+    empresa_id = str(perfil.get("empresa_id") or "").strip()
+    if not empresa_id:
+        return portal_json({"ok": False, "error": "Tu usuario no tiene una empresa asociada"}, 409)
+
+    plan = estado_suscripcion_empresa(empresa_id)
+    tipo = str(plan.get("tipo_plan") or "legacy").strip().lower()
+    estado = str(plan.get("estado") or "activo").strip().lower()
+    limite = int(plan.get("limite_mensajes") or plan.get("limite_respuestas") or 0)
+    usados = int(plan.get("mensajes_usados") or plan.get("respuestas_usadas") or 0)
+    restantes = max(0, limite - usados) if limite else None
+
+    permitido = estado == "activo" and tipo in {"demo", "nexia_500", "nexia_1000", "legacy"}
+    motivo = None
+
+    if tipo in {"nexia_500", "nexia_1000"} and plan.get("vigente") is False:
+        permitido = False
+        motivo = str(plan.get("motivo_fin") or "tiempo")
+
+    if tipo == "demo":
+        fin = _parse_iso(plan.get("demo_fin"))
+        if fin and datetime.now(pytz.UTC) >= fin.astimezone(pytz.UTC):
+            permitido = False
+            motivo = "tiempo"
+        elif restantes is not None and restantes <= 0:
+            permitido = False
+            motivo = "limite"
+
+    if tipo in {"nexia_500", "nexia_1000"} and restantes is not None and restantes <= 0:
+        permitido = False
+        motivo = "limite"
+
+    if not permitido:
+        return portal_json({
+            "ok": False,
+            "codigo": "ASISTENTE_SIN_CUPO",
+            "error": (
+                "Tu prueba ya finalizó. Puedes reactivarla o contratar un plan para continuar con el mismo asistente."
+                if tipo == "demo"
+                else "Tu plan no tiene mensajes disponibles. Recarga mensajes para continuar con el mismo asistente."
+            ),
+            "plan": plan,
+            "motivo": motivo,
+        }, 409)
+
+    try:
+        codigo, nombre = _portal_destino_asistente(empresa_id)
+    except Exception as e:
+        print("PORTAL MI ASISTENTE ERROR:", repr(e))
+        return portal_json({"ok": False, "error": "No pude preparar el acceso al asistente"}, 500)
+
+    numero = re.sub(r"\D", "", str(TWILIO_WHATSAPP_FROM or ""))
+    if not numero:
+        return portal_json({"ok": False, "error": "WhatsApp principal no configurado"}, 500)
+
+    texto = f"NEXI {codigo}"
+    whatsapp_url = f"https://wa.me/{numero}?text={quote(texto)}"
+
+    return portal_json({
+        "ok": True,
+        "empresa_id": empresa_id,
+        "empresa": nombre,
+        "tipo_plan": tipo,
+        "estado": estado,
+        "mensajes_restantes": restantes,
+        "codigo_acceso": codigo,
+        "whatsapp_url": whatsapp_url,
+        "mensaje": "Abrirás el mismo asistente asociado a tu empresa; no se crea una nueva prueba.",
+    })
+
+
 @app.route("/portal/conversaciones", methods=["GET", "OPTIONS"])
 def portal_conversaciones():
     """
@@ -7727,7 +8044,7 @@ def portal_admin_plan(empresa_id):
         if request.method == "GET":
             return portal_json({"ok": True, "plan": estado_suscripcion_empresa(empresa_id)})
         data = request.get_json(silent=True) or {}
-        allowed = {"tipo_plan", "estado", "limite_mensajes", "mensajes_usados", "demo_inicio", "demo_fin"}
+        allowed = {"tipo_plan", "estado", "limite_mensajes", "mensajes_usados", "demo_inicio", "demo_fin", "periodo_inicio", "periodo_fin"}
         payload = {k: data[k] for k in allowed if k in data}
         payload["empresa_id"] = empresa_id
         payload["updated_at"] = datetime.now(pytz.UTC).isoformat()
@@ -7765,6 +8082,7 @@ def _plan_publico(plan):
         "codigo": plan["codigo"],
         "nombre": plan["nombre"],
         "mensajes": int(plan["mensajes"]),
+        "duracion_dias": int(plan.get("duracion_dias") or NEXIA_PLAN_DURACION_DIAS_DEFAULT),
         "precio": int(plan["precio"]),
         "precio_antes": int(plan["precio_antes"]),
         "moneda": plan["moneda"],
@@ -7841,19 +8159,14 @@ def _activar_plan_desde_pago(pago, payment_data):
     if not empresa_id:
         raise RuntimeError("Pago sin empresa_id")
 
-    actual = estado_suscripcion_empresa(empresa_id)
-    usados = int(actual.get("mensajes_usados") or 0)
-    limite_actual = int(actual.get("limite_mensajes") or 0)
-    tipo_actual = str(actual.get("tipo_plan") or "").lower()
-
-    # Al convertir demo, se entregan exactamente los mensajes comprados.
-    # En una recarga de cliente pagado, se conservan los mensajes restantes.
-    if tipo_actual == "demo":
-        nuevo_limite = usados + int(plan["mensajes"])
-    else:
-        nuevo_limite = max(limite_actual, usados) + int(plan["mensajes"])
-
-    ahora = datetime.now(pytz.UTC).isoformat()
+    # Cada compra/renovación abre un período mensual nuevo.
+    # El plan termina al consumir su bolsa o al cumplir 30 días, lo que ocurra primero.
+    ahora_dt = datetime.now(pytz.UTC)
+    periodo_fin_dt = ahora_dt + timedelta(days=int(plan.get("duracion_dias") or NEXIA_PLAN_DURACION_DIAS_DEFAULT))
+    ahora = ahora_dt.isoformat()
+    periodo_fin = periodo_fin_dt.isoformat()
+    nuevo_limite = int(plan["mensajes"])
+    usados = 0
     headers = backend_headers()
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/suscripciones_empresa",
@@ -7865,6 +8178,9 @@ def _activar_plan_desde_pago(pago, payment_data):
             "estado": "activo",
             "limite_mensajes": nuevo_limite,
             "mensajes_usados": usados,
+            "periodo_inicio": ahora,
+            "periodo_fin": periodo_fin,
+            "demo_inicio": None,
             "demo_fin": None,
             "updated_at": ahora,
         },
@@ -8384,7 +8700,24 @@ def portal_consumo():
             params["empresa_id"] = f"eq.{perfil.get('empresa_id')}"
         r = requests.get(f"{SUPABASE_URL}/rest/v1/suscripciones_empresa", headers=headers, params=params, timeout=SUPABASE_TIMEOUT)
         r.raise_for_status()
-        return portal_json({"ok": True, "planes": r.json() if r.content else []})
+        filas = r.json() if r.content else []
+        ahora = datetime.now(pytz.UTC)
+        for fila in filas:
+            limite = int(fila.get("limite_mensajes") or 0)
+            usados = int(fila.get("mensajes_usados") or 0)
+            fila["mensajes_restantes"] = max(0, limite - usados) if limite else None
+            tipo = str(fila.get("tipo_plan") or "").lower()
+            fin = _parse_iso(fila.get("periodo_fin") if tipo in {"nexia_500","nexia_1000"} else fila.get("demo_fin"))
+            vigente = str(fila.get("estado") or "activo").lower() == "activo"
+            if fin and ahora >= fin.astimezone(pytz.UTC):
+                vigente = False
+                fila["motivo_fin"] = "tiempo"
+            elif limite and usados >= limite:
+                vigente = False
+                fila["motivo_fin"] = "limite"
+            fila["vigente"] = vigente
+            fila["estado_efectivo"] = "activo" if vigente else "finalizado"
+        return portal_json({"ok": True, "planes": filas})
     except Exception as e:
         return portal_json({"ok": False, "error": str(e)[:300]}, 500)
 
