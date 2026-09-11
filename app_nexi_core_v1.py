@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.7.1-INTENCIONES-GENERALES"
+APP_VERSION = "2026-09-11-NEXI-V2.7.2-AJUSTES-COPY"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1811,7 +1811,7 @@ def router_bienvenida_contexto(route):
             f"✅ Entraste a *{empresa} / Demo*\n"
             f"Estás conversando con {asistente}, su asistente virtual. "
             "¿En qué te puedo ayudar?\n\n"
-            "Escribe *MENU* cuando quieras cambiar de negocio."
+            "_Escribe MENU cuando quieras salir o cambiar de negocio._"
         )
 
         # Solo el creador de la demo ve instrucciones administrativas.
@@ -1827,7 +1827,7 @@ def router_bienvenida_contexto(route):
     return (
         f"Listo 🙌 Estás conversando con {empresa}.\n"
         f"Soy {asistente}, su asistente virtual. ¿En qué te puedo ayudar?\n\n"
-        "Escribe *MENU* cuando quieras cambiar de negocio."
+        "_Escribe MENU cuando quieras salir o cambiar de negocio._"
     )
 
 
@@ -3704,7 +3704,7 @@ CORE_QUESTIONS = {
         "help": "Esto nos ayuda a entender dónde ocurre hoy la atención.",
     },
     "canales_deseados": {
-        "text": "¿Dónde quieres que Nexi atienda a tus clientes?",
+        "text": "¿En qué canales quieres atender a tus clientes?",
         "kind": "multi_choice",
         "options": ["WhatsApp", "Instagram"],
     },
