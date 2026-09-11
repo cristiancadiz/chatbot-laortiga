@@ -4655,6 +4655,9 @@ def _core_intencion_info_negocio(texto):
 
         # "sobre ustedes", "acerca del negocio" como consulta corta
         r"^\s*(quiero\s+)?(saber\s+)?(mas\s+|más\s+)?(sobre|acerca de)\s+(ustedes|la empresa|el negocio|la marca)\s*[?.!]*$",
+
+        # "cómo trabajan", "cómo funciona la empresa/el servicio/la plataforma"
+        r"\b(como|cómo)\b.{0,15}\b(trabajan|trabaja|funciona|funcionan|operan|opera)\b(?:.{0,25}\b(ustedes|empresa|negocio|servicio|plataforma|solucion|solución)\b)?",
     )
     return any(re.search(p, t, flags=re.IGNORECASE) for p in patrones)
 
@@ -4746,7 +4749,7 @@ def _core_agent_context(empresa_id, texto, public_profile=None):
 
 
 def _core_valor_publico(datos, *keys):
-    """Primer valor público no vacío entre varias claves."""
+    """Primer valor público no vacío entre varias claves, ignorando textos de preguntas."""
     for key in keys:
         valor = datos.get(key)
         if isinstance(valor, (list, tuple)):
@@ -4754,8 +4757,18 @@ def _core_valor_publico(datos, *keys):
         elif isinstance(valor, dict):
             continue
         valor = str(valor or "").strip()
-        if valor:
-            return valor
+        if not valor:
+            continue
+
+        # Evita exponer como respuesta una pregunta/placeholder del propio onboarding.
+        pregunta = (CORE_QUESTIONS.get(key) or {}).get("text") if "CORE_QUESTIONS" in globals() else None
+        placeholder = (CORE_QUESTIONS.get(key) or {}).get("placeholder") if "CORE_QUESTIONS" in globals() else None
+        if pregunta and _core_norm(valor) == _core_norm(pregunta):
+            continue
+        if placeholder and _core_norm(valor) == _core_norm(placeholder):
+            continue
+
+        return valor
     return ""
 
 
@@ -4798,19 +4811,55 @@ def _core_respuesta_estructurada(texto, datos, empresa=None, asistente=None):
     instagram = _core_valor_publico(datos, "instagram")
     facebook = _core_valor_publico(datos, "facebook")
 
+    def _texto_descriptivo(valor):
+        valor = str(valor or "").strip()
+        return bool(valor and (len(valor) >= 90 or ". " in valor or valor.count(",") >= 2))
+
+    def _cerrar_frase(valor):
+        valor = str(valor or "").strip()
+        if not valor:
+            return ""
+        return valor if valor.endswith((".", "!", "?")) else valor + "."
+
+    pregunta_precio = any(x in t for x in (
+        "precio", "precios", "cuanto cuesta", "cuánto cuesta", "cuanto cobran",
+        "cuánto cobran", "valor", "valores", "plan", "planes", "tarifa", "tarifas",
+    ))
+    if pregunta_precio:
+        # Nexia tiene sus planes públicos definidos en el propio backend.
+        if es_empresa_nexia():
+            p500 = NEXIA_PLANES.get("nexia_500") or {}
+            p1000 = NEXIA_PLANES.get("nexia_1000") or {}
+            if p500.get("precio") and p1000.get("precio"):
+                return (
+                    f"Tenemos dos planes: Nexia 500 por ${int(p500['precio']):,} CLP "
+                    f"y Nexia 1000 por ${int(p1000['precio']):,} CLP. "
+                    "Cada uno incluye la cantidad de mensajes indicada en el plan."
+                ).replace(",", ".")
+        precio_publico = _core_valor_publico(datos, "precios", "precio", "valores", "tarifas", "planes")
+        if precio_publico:
+            return f"Estos son los valores disponibles: {precio_publico}"
+        return (
+            "Los valores no están publicados en la información disponible. "
+            "Puedo contarte qué servicios ofrecemos o ayudarte a solicitar una cotización."
+        )
+
     pregunta_general = _core_intencion_info_negocio(texto)
     if pregunta_general:
         partes = []
         if descripcion:
-            partes.append(descripcion)
+            partes.append(_cerrar_frase(descripcion))
         elif rubro:
-            partes.append(f"{empresa} es un negocio del rubro {rubro}.")
+            if _texto_descriptivo(rubro):
+                partes.append(_cerrar_frase(rubro))
+            else:
+                partes.append(f"{empresa} se dedica a {rubro}.")
         if oferta:
-            partes.append(f"Ofrecemos {oferta}.")
+            partes.append(f"Ofrecemos {_cerrar_frase(oferta)}")
         elif objetivo and not partes:
-            partes.append(objetivo)
+            partes.append(_cerrar_frase(objetivo))
         if partes:
-            return " ".join(partes) + " ¿Hay algo en particular que quieras conocer?"
+            return " ".join(partes).strip() + " ¿Hay algo en particular que quieras conocer?"
         return (
             f"Puedo ayudarte con información sobre {empresa}, sus servicios y cómo funciona. "
             "¿Qué te gustaría saber?"
@@ -4820,8 +4869,14 @@ def _core_respuesta_estructurada(texto, datos, empresa=None, asistente=None):
         "que ofrecen", "qué ofrecen", "que ofrece", "qué ofrece",
         "servicios", "productos", "que venden", "qué venden",
     ))
-    if pregunta_oferta and oferta:
-        return f"Ofrecemos {oferta}. Si quieres, te doy más información sobre alguno en particular."
+    if pregunta_oferta:
+        if oferta:
+            return f"Ofrecemos {_cerrar_frase(oferta)} Si quieres, te doy más información sobre alguno en particular."
+        if descripcion:
+            return _cerrar_frase(descripcion) + " Si quieres, te explico alguno de nuestros servicios en particular."
+        if rubro and _texto_descriptivo(rubro):
+            return _cerrar_frase(rubro) + " Si quieres, te explico alguno de nuestros servicios en particular."
+        return "Todavía no hay un catálogo de productos o servicios publicado para este negocio."
 
     # Datos públicos simples, solo si fueron configurados.
     if any(x in t for x in ("sitio web", "pagina web", "página web", "web")) and web:
