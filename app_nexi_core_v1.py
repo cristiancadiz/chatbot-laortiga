@@ -1104,7 +1104,11 @@ def router_opciones_menu(telefono, pagina=0):
         todas.append({
             "id": f"nexi:empresa:{e['empresa_id']}",
             "item": nombre[:24],
-            "description": f"Conversar con {nombre}"[:72],
+            "description": (
+                "Soluciones de automatización"
+                if nombre.strip().upper() == "NEXIA"
+                else f"Conversar con {nombre}"
+            )[:72],
             "empresa_id": e["empresa_id"],
             "motor": "core",
             "origen": "pagado",
