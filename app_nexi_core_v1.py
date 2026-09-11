@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-10-NEXI-V2.5.2-AGENDA-LEGACY-INTERACTIVO-FIX"
+APP_VERSION = "2026-09-10-NEXI-V2.6.2-DEMOS-PUBLICAS-MENU"
 load_dotenv()
 
 app = Flask(__name__)
@@ -872,6 +872,163 @@ def router_codigo_desde_texto(texto):
     return m.group(1).upper() if m else None
 
 
+def _router_item_demo(nombre):
+    """Título Twilio <=24 caracteres manteniendo visible '/ Demo'."""
+    nombre = str(nombre or "Negocio Nexia").strip() or "Negocio Nexia"
+    sufijo = " / Demo"
+    max_nombre = max(1, 24 - len(sufijo))
+    return f"{nombre[:max_nombre].rstrip()}{sufijo}"
+
+
+def _router_descripcion_demo(datos):
+    """Descripción pública corta sin datos privados del creador."""
+    datos = dict(datos or {})
+    candidatos = (
+        datos.get("rubro"),
+        datos.get("productos_servicios"),
+        datos.get("objetivo"),
+    )
+    for valor in candidatos:
+        if isinstance(valor, (list, tuple)):
+            valor = ", ".join(str(x) for x in valor if str(x).strip())
+        valor = str(valor or "").strip()
+        if valor:
+            return valor[:72]
+    return "Asistente en prueba de Nexia"
+
+
+def router_demos_publicas_activas():
+    """
+    Devuelve todas las demos activas/no vencidas para el menú global.
+    No expone teléfono, correo ni datos privados del creador.
+    """
+    headers = _router_headers()
+    if not headers:
+        return []
+
+    try:
+        # 1. Accesos demo activos. Se deduplican por empresa_id.
+        rd = requests.get(
+            f"{SUPABASE_URL}/rest/v1/demo_accesos",
+            headers=headers,
+            params={
+                "select": "empresa_id,activo,inicio,fin,created_at",
+                "activo": "eq.true",
+                "order": "created_at.desc",
+                "limit": "500",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        rd.raise_for_status()
+        accesos = rd.json() if rd.content else []
+
+        ahora = datetime.now(pytz.UTC)
+        ids = []
+        acceso_por_empresa = {}
+        for row in accesos:
+            eid = str(row.get("empresa_id") or "").strip()
+            if not eid or eid in acceso_por_empresa:
+                continue
+            fin = _parse_iso(row.get("fin"))
+            if fin and ahora >= fin.astimezone(pytz.UTC):
+                continue
+            ids.append(eid)
+            acceso_por_empresa[eid] = dict(row)
+
+        if not ids:
+            return []
+
+        # 2. Solo suscripciones que siguen siendo DEMO + ACTIVO.
+        rs = requests.get(
+            f"{SUPABASE_URL}/rest/v1/suscripciones_empresa",
+            headers=headers,
+            params={
+                "select": "empresa_id,tipo_plan,estado",
+                "empresa_id": f"in.({','.join(ids)})",
+                "tipo_plan": "eq.demo",
+                "estado": "eq.activo",
+                "limit": "500",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        rs.raise_for_status()
+        subs = rs.json() if rs.content else []
+        demo_ids = {
+            str(x.get("empresa_id") or "").strip()
+            for x in subs
+            if str(x.get("empresa_id") or "").strip()
+        }
+        ids = [eid for eid in ids if eid in demo_ids]
+        if not ids:
+            return []
+
+        # 3. Nombre público de empresa.
+        re_ = requests.get(
+            f"{SUPABASE_URL}/rest/v1/empresas",
+            headers=headers,
+            params={
+                "select": "id,nombre,activo",
+                "id": f"in.({','.join(ids)})",
+                "activo": "eq.true",
+                "limit": "500",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        re_.raise_for_status()
+        empresas = re_.json() if re_.content else []
+        empresa_por_id = {str(e.get("id") or ""): e for e in empresas}
+
+        # 4. Rubro / actividad pública desde el perfil Core.
+        rp = requests.get(
+            f"{SUPABASE_URL}/rest/v1/nexi_core_perfiles",
+            headers=headers,
+            params={
+                "select": "empresa_id,datos",
+                "empresa_id": f"in.({','.join(ids)})",
+                "limit": "500",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        rp.raise_for_status()
+        perfiles = rp.json() if rp.content else []
+        datos_por_id = {
+            str(p.get("empresa_id") or ""): dict(p.get("datos") or {})
+            for p in perfiles
+            if str(p.get("empresa_id") or "").strip()
+        }
+
+        out = []
+        for eid in ids:
+            empresa = empresa_por_id.get(eid)
+            if not empresa:
+                continue
+            nombre = str(empresa.get("nombre") or "Negocio Nexia").strip() or "Negocio Nexia"
+            datos = datos_por_id.get(eid) or {}
+            out.append({
+                "empresa_id": eid,
+                "nombre": nombre,
+                "description": _router_descripcion_demo(datos),
+                "motor": "core",
+                "origen": "demo",
+                "demo_access": acceso_por_empresa.get(eid) or {"empresa_id": eid},
+            })
+        return out
+    except Exception as e:
+        print("NEXI ROUTER DEMOS PUBLICAS ERROR:", repr(e))
+        return []
+
+
+def router_demo_publica_por_empresa(empresa_id):
+    """Valida que una demo concreta siga visible/activa."""
+    empresa_id = str(empresa_id or "").strip()
+    if not empresa_id:
+        return None
+    for demo in router_demos_publicas_activas():
+        if str(demo.get("empresa_id") or "") == empresa_id:
+            return demo
+    return None
+
+
 def router_empresas_pagadas_activas():
     """Devuelve empresas pagadas y activas visibles en recepción. Diego se agrega aparte."""
     headers = _router_headers()
@@ -928,15 +1085,15 @@ def router_empresas_pagadas_activas():
 
 
 def router_opciones_menu(telefono, pagina=0):
-    """Genera una página de opciones clickeables. La prueba propia queda al final."""
+    """Genera el menú global: Diego, empresas pagadas y demos públicas activas."""
     pagadas = router_empresas_pagadas_activas()
-    demo = router_demo_access_sin_activar(telefono)
+    demos = router_demos_publicas_activas()
     pagina = max(0, int(pagina or 0))
 
     todas = [{
         "id": "nexi:diego",
         "item": "Diego Estilista",
-        "description": "Hablar con el asistente de Diego",
+        "description": "Peluquería y estilismo",
         "empresa_id": str(DIEGO_EMPRESA_ID or ""),
         "motor": "legacy",
         "origen": "diego",
@@ -953,16 +1110,21 @@ def router_opciones_menu(telefono, pagina=0):
             "origen": "pagado",
         })
 
-    if demo:
-        # Solo la prueba del mismo WhatsApp, siempre como última opción global.
+    # Las demos activas son visibles para cualquier usuario del número compartido.
+    # Se identifican claramente con "/ Demo".
+    for demo in demos:
+        eid = str(demo.get("empresa_id") or "").strip()
+        if not eid:
+            continue
+        nombre = str(demo.get("nombre") or "Negocio Nexia").strip()
         todas.append({
-            "id": f"nexi:prueba:{demo.get('empresa_id')}",
-            "item": "Mi prueba Nexia",
-            "description": "Abrir mi prueba gratuita",
-            "empresa_id": str(demo.get("empresa_id") or ""),
+            "id": f"nexi:prueba:{eid}",
+            "item": _router_item_demo(nombre),
+            "description": str(demo.get("description") or "Asistente en prueba de Nexia")[:72],
+            "empresa_id": eid,
             "motor": "core",
             "origen": "demo",
-            "demo_access": demo,
+            "demo_access": demo.get("demo_access") or {"empresa_id": eid},
         })
 
     # Página: 9 opciones + "Ver más" cuando aún quedan; última página hasta 10.
@@ -1632,14 +1794,36 @@ def _es_fin_plan_para_pago(respuesta):
 def router_bienvenida_contexto(route):
     empresa_id = str((route or {}).get("empresa_id") or "").strip()
     motor = str((route or {}).get("motor") or "core").lower()
+    origen = str((route or {}).get("origen") or "").lower()
+    telefono = str((route or {}).get("telefono") or "")
     if not empresa_id:
         return router_menu_superior("")
     activar_por_empresa(empresa_id, canal="whatsapp", provider="router")
     if motor == "legacy":
-        reset_estado(str((route or {}).get("telefono") or ""))
+        reset_estado(telefono)
         return mensaje_bienvenida()
+
     empresa = str(cfg("empresa_nombre", "este negocio") or "este negocio").strip()
     asistente = str(cfg("asistente_nombre", "asistente virtual") or "asistente virtual").strip()
+
+    if origen == "demo":
+        base = (
+            f"✅ Entraste a *{empresa} / Demo*\n"
+            f"Estás conversando con {asistente}, su asistente virtual. "
+            "¿En qué te puedo ayudar?\n\n"
+            "Escribe *MENU* cuando quieras cambiar de negocio."
+        )
+
+        # Solo el creador de la demo ve instrucciones administrativas.
+        propia = router_demo_access_sin_activar(telefono)
+        if propia and str(propia.get("empresa_id") or "") == empresa_id:
+            base += (
+                "\n\n📲 Puedes compartir este mismo número con tus clientes y pedirles "
+                f"que seleccionen *{empresa} / Demo* en el menú. "
+                "Desde el *Portal Nexia* podrás revisar las conversaciones y tomar la atención cuando quieras."
+            )
+        return base
+
     return (
         f"Listo 🙌 Estás conversando con {empresa}.\n"
         f"Soy {asistente}, su asistente virtual. ¿En qué te puedo ayudar?\n\n"
@@ -1686,12 +1870,21 @@ def router_superior_resolver(telefono, texto):
 
     m_prueba = re.fullmatch(r"(?i)nexi:prueba:([0-9a-f-]{36})", raw_texto)
     if m_prueba:
-        demo = router_demo_access_sin_activar(telefono)
         empresa_id = m_prueba.group(1)
-        if not demo or str(demo.get("empresa_id") or "") != empresa_id:
-            return {"accion": "menu", "respuesta": "No encontré una prueba activa asociada a este WhatsApp.\n\n" + router_menu_superior(telefono)}
+        demo = router_demo_publica_por_empresa(empresa_id)
+        if not demo:
+            return {
+                "accion": "menu",
+                "respuesta": "Esta demo ya no está disponible.\n\n" + router_menu_superior(telefono),
+            }
         row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="demo") or {}
-        row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": "core", "demo_access": demo, "telefono": telefono})
+        row.update({
+            "accion": "seleccionado",
+            "empresa_id": empresa_id,
+            "motor": "core",
+            "demo_access": demo.get("demo_access") or {"empresa_id": empresa_id},
+            "telefono": telefono,
+        })
         return row
 
     if t in {normalizar_texto(x) for x in ROUTER_MENU_COMMANDS}:
@@ -1703,10 +1896,13 @@ def router_superior_resolver(telefono, texto):
         actual = dict(actual)
         actual["accion"] = "ruta"
         if str(actual.get("origen") or "") == "demo":
-            actual["demo_access"] = router_demo_access_sin_activar(telefono)
-            if not actual.get("demo_access"):
+            demo_publica = router_demo_publica_por_empresa(actual.get("empresa_id"))
+            if not demo_publica:
                 router_contexto_borrar(telefono)
                 return {"accion": "menu", "pagina": 0}
+            actual["demo_access"] = demo_publica.get("demo_access") or {
+                "empresa_id": actual.get("empresa_id")
+            }
         return actual
 
     # Compatibilidad textual: Diego por nombre/1 y prueba por palabras explícitas.
@@ -2919,14 +3115,69 @@ def pedir_servicio():
     return "Claro 😊 ¿Qué servicio quieres agendar?\n\n" + mostrar_servicios()
 
 
+def _frases_intencion_agenda():
+    """Frases frecuentes en español/Chile para pedir, consultar o gestionar una reserva."""
+    return (
+        # intención directa
+        "agendar", "agendar hora", "agendar una hora", "agendar cita", "agendar una cita",
+        "agendar turno", "agendar una reserva", "quiero agendar", "quiero reservar",
+        "quiero una reserva", "quiero una cita", "quiero un turno", "quiero una hora",
+        "necesito agendar", "necesito reservar", "necesito una cita", "necesito una hora",
+        "me gustaria agendar", "me gustaría agendar", "me gustaria reservar", "me gustaría reservar",
+        "deseo agendar", "deseo reservar", "puedo agendar", "puedo reservar",
+        "se puede agendar", "se puede reservar", "como agendo", "cómo agendo",
+        "como reservo", "cómo reservo", "hacer una reserva", "hacer reserva",
+        "crear una reserva", "reservar hora", "reservar una hora", "reservar cita",
+        "sacar hora", "pedir hora", "tomar hora", "solicitar hora", "solicitar una hora",
+        "pedir una cita", "sacar una cita", "tomar una cita", "pedir turno", "sacar turno",
+        "reservar turno",
+
+        # disponibilidad / consulta de agenda
+        "hora disponible", "horas disponibles", "tienen horas", "tienes horas",
+        "hay horas", "hay disponibilidad", "tienen disponibilidad", "tienes disponibilidad",
+        "cuando hay hora", "cuándo hay hora", "cuando tienen hora", "cuándo tienen hora",
+        "cuando tienes hora", "cuándo tienes hora", "proxima hora", "próxima hora",
+        "proximas horas", "próximas horas", "ver disponibilidad", "consultar disponibilidad",
+        "ver agenda", "agenda disponible", "disponibilidad de agenda",
+
+        # lenguaje coloquial
+        "quiero atenderme", "necesito atenderme", "me quiero atender",
+        "quiero pedir hora", "necesito pedir hora", "quiero sacar hora",
+        "quiero tomar hora", "me das una hora", "me puede dar una hora",
+        "me pueden dar una hora", "dame una hora", "necesito una hora para",
+        "quiero ir", "cuando puedo ir", "cuándo puedo ir",
+
+        # acciones de reserva ya iniciada
+        "cambiar mi hora", "cambiar la hora", "cambiar mi cita", "reagendar",
+        "reagendar hora", "reagendar cita", "mover mi hora", "mover la hora",
+        "cancelar reserva", "cancelar hora", "cancelar cita", "anular reserva",
+        "anular hora", "anular cita",
+    )
+
+
+def _texto_parece_intencion_agenda(texto):
+    t = normalizar_texto(texto)
+    if not t:
+        return False
+
+    if any(frase in t for frase in _frases_intencion_agenda()):
+        return True
+
+    # Patrones flexibles para frases que no coinciden literalmente.
+    patrones = (
+        r"\b(quiero|necesito|deseo|quisiera|podria|podría|puedo)\b.{0,30}\b(agendar|reservar|hora|cita|turno)\b",
+        r"\b(agendar|reservar|pedir|sacar|tomar|solicitar)\b.{0,20}\b(hora|cita|turno|reserva)\b",
+        r"\b(hay|tienen|tienes)\b.{0,20}\b(hora|horas|disponibilidad|agenda)\b",
+        r"\b(cuando|cuándo)\b.{0,30}\b(hora|horas|disponible|disponibilidad|atenderme|ir)\b",
+        r"\b(reagendar|reprogramar|mover|cambiar|cancelar|anular)\b.{0,25}\b(hora|cita|turno|reserva)\b",
+    )
+    return any(re.search(p, t) for p in patrones)
+
+
 def intencion_agendar(texto):
     if not negocio_usa_reservas():
         return False
-    t = normalizar_texto(texto)
-    return any(x in t for x in (
-        "agendar", "reservar", "reserva", "hora", "cita", "turno",
-        "disponibilidad", "quiero cortarme", "quiero un corte", "sacar hora",
-    ))
+    return _texto_parece_intencion_agenda(texto)
 
 
 def pregunta_servicios(texto):
@@ -3172,6 +3423,20 @@ def email_valido(texto):
     return bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", (texto or "").strip()))
 
 
+def formatear_whatsapp_reserva(valor):
+    """Formatea el número capturado desde WhatsApp para mostrarlo en la reserva."""
+    raw = str(valor or "").strip()
+    raw = raw.replace("whatsapp:", "").strip()
+    digits = re.sub(r"\D", "", raw)
+
+    if digits.startswith("56") and len(digits) == 11:
+        # 56950064242 -> +56 9 5006 4242
+        return f"+56 {digits[2]} {digits[3:7]} {digits[7:11]}"
+    if digits:
+        return f"+{digits}" if raw.startswith("+") or digits.startswith("56") else digits
+    return raw
+
+
 def procesar_agenda(estado, texto):
     t = normalizar_texto(texto)
 
@@ -3285,6 +3550,7 @@ def procesar_agenda(estado, texto):
             f"💰 Valor: {servicio['precio_texto']}\n"
             f"📅 {formatear_fecha(fecha)}\n"
             f"👤 {estado['nombre']}\n"
+            f"📱 WhatsApp: {formatear_whatsapp_reserva(estado.get('telefono'))}\n"
             f"📧 {estado['correo']}\n"
             + ((f"📍 {cfg('direccion')}\n") if str(cfg("direccion", "") or "").strip() else "")
             + "\nSi todo está correcto, escribe *CONFIRMAR*."
@@ -3326,13 +3592,17 @@ def procesar_agenda(estado, texto):
             google_event_id=resultado.get("evento_id"),
         )
 
-        reset_estado(telefono)
+        # Core usa una clave de sesión aislada por empresa; legacy usa teléfono.
+        # Reiniciamos la clave correcta para que una reserva terminada no deje
+        # pasos antiguos activos al siguiente mensaje.
+        reset_estado(estado.get("_session_key") or telefono)
         return (
             "✅ *¡Reserva confirmada!*\n\n"
             f"✂️ Servicio: {servicio['nombre']}\n"
             f"💰 Valor: {servicio['precio_texto']}\n"
             f"📅 {fecha_txt}\n"
             f"👤 {nombre}\n"
+            f"📱 WhatsApp: {formatear_whatsapp_reserva(telefono)}\n"
             f"📧 {correo}\n"
             + ((f"📍 {cfg('direccion')}\n") if str(cfg("direccion", "") or "").strip() else "")
             + f"⏱️ Duración: {cfg_int('duracion_reserva', DEFAULT_DURACION_RESERVA)} minutos\n\n"
@@ -4009,24 +4279,39 @@ def _core_guardar_conocimiento_web(empresa_id, url):
 
 
 def _core_conocimiento_web(empresa_id, consulta):
-    try:
-        r=requests.get(
-            f"{SUPABASE_URL}/rest/v1/nexi_core_conocimiento",
-            headers=_core_headers(),
-            params={
-                "select":"url,titulo,contenido,resumen",
-                "empresa_id":f"eq.{empresa_id}",
-                "activo":"eq.true",
-                "fuente":"eq.web",
-                "limit":"12",
-            },
-            timeout=SUPABASE_TIMEOUT,
-        )
-        r.raise_for_status()
-        rows=r.json() if r.content else []
-    except Exception as e:
-        print("CORE WEB KNOWLEDGE READ ERROR:",repr(e))
-        return ""
+    """
+    Recupera conocimiento web. Las filas se cachean por empresa; el ranking
+    por consulta se hace en memoria. Así evitamos un GET a Supabase por mensaje.
+    """
+    import time as _time
+    empresa_id = str(empresa_id or "").strip()
+    cache_key = f"core_web_rows:{empresa_id}"
+    rows = _cache_get(cache_key)
+
+    if rows is None:
+        t0 = _time.perf_counter()
+        try:
+            r=requests.get(
+                f"{SUPABASE_URL}/rest/v1/nexi_core_conocimiento",
+                headers=_core_headers(),
+                params={
+                    "select":"url,titulo,contenido,resumen",
+                    "empresa_id":f"eq.{empresa_id}",
+                    "activo":"eq.true",
+                    "fuente":"eq.web",
+                    "limit":"12",
+                },
+                timeout=SUPABASE_TIMEOUT,
+            )
+            r.raise_for_status()
+            rows=r.json() if r.content else []
+            _cache_set(cache_key, rows)
+            print(f"NEXI PERF conocimiento_supabase={_time.perf_counter()-t0:.3f}s rows={len(rows)}")
+        except Exception as e:
+            print("CORE WEB KNOWLEDGE READ ERROR:",repr(e))
+            return ""
+    else:
+        print(f"NEXI PERF conocimiento_cache=HIT rows={len(rows)}")
 
     if not rows:
         return ""
@@ -4293,7 +4578,13 @@ CORE_AGENT_NAMES = {
 
 
 def _core_public_profile(empresa_id):
-    """Perfil seguro para agentes: elimina datos privados del creador/ejecutivo."""
+    """Perfil seguro para agentes, cacheado por empresa para reducir viajes a Supabase."""
+    empresa_id = str(empresa_id or "").strip()
+    cache_key = f"core_public_profile:{empresa_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached.get("perfil") or {}, dict(cached.get("datos") or {})
+
     perfil = _core_profile(empresa_id) or {}
     datos = dict(perfil.get("datos") or {})
     for privado in (
@@ -4305,7 +4596,9 @@ def _core_public_profile(empresa_id):
         "web_knowledge",
     ):
         datos.pop(privado, None)
-    return perfil, datos
+
+    _cache_set(cache_key, {"perfil": perfil, "datos": datos})
+    return perfil, dict(datos)
 
 
 def _core_agent_enabled(agent, datos):
@@ -4332,10 +4625,7 @@ def _core_route_intent(texto, datos):
     if _core_es_handoff(texto):
         return "handoff"
 
-    if any(x in t for x in (
-        "agendar", "agenda", "reservar", "reserva", "hora disponible",
-        "pedir hora", "cita", "turno", "disponibilidad",
-    )):
+    if _texto_parece_intencion_agenda(texto):
         return "agenda" if _core_agent_enabled("agenda", datos) else "atencion"
 
     if any(x in t for x in (
@@ -4368,11 +4658,27 @@ def _core_route_intent(texto, datos):
     return "atencion"
 
 
-def _core_agent_context(empresa_id, texto):
-    perfil, datos = _core_public_profile(empresa_id)
+def _core_agent_context(empresa_id, texto, public_profile=None):
+    """
+    Construye contexto reutilizando el perfil que ya cargó el orquestador.
+    Evita consultar el mismo perfil dos veces en un turno.
+    """
+    import time as _time
+    t0 = _time.perf_counter()
+    if public_profile is None:
+        perfil, datos = _core_public_profile(empresa_id)
+    else:
+        perfil, datos = public_profile
+
     empresa = cfg("empresa_nombre", "Nexia")
     asistente = cfg("asistente_nombre", "Nexi")
+
+    tk = _time.perf_counter()
     conocimiento_web = _core_conocimiento_web(empresa_id, texto)
+    print(
+        f"NEXI PERF contexto_total={_time.perf_counter()-t0:.3f}s "
+        f"conocimiento={_time.perf_counter()-tk:.3f}s"
+    )
     return {
         "perfil": perfil,
         "datos": datos,
@@ -4380,6 +4686,26 @@ def _core_agent_context(empresa_id, texto):
         "asistente": asistente,
         "conocimiento_web": conocimiento_web,
     }
+
+
+def _core_respuesta_directa_conocimiento(texto, ctx):
+    """
+    Fast path para preguntas simples cuya respuesta ya está en el perfil.
+    Evita usar OpenAI cuando no aporta valor.
+    """
+    t = _core_norm(texto)
+    datos = ctx.get("datos") or {}
+
+    consulta_oferta = any(x in t for x in (
+        "que ofrecen", "qué ofrecen", "que ofrece", "qué ofrece",
+        "que hacen", "qué hacen", "servicios", "productos",
+    ))
+    if consulta_oferta:
+        oferta = str(datos.get("productos_servicios") or "").strip()
+        if oferta:
+            return f"Ofrecemos {oferta}. Si quieres, te cuento más sobre alguno en particular."
+
+    return None
 
 
 def _core_agent_llm(agent, texto, ctx, instrucciones):
@@ -4418,6 +4744,8 @@ PERFIL PÚBLICO DEL NEGOCIO:
 CONOCIMIENTO WEB RELEVANTE:
 {web}
 """
+    import time as _time
+    t0 = _time.perf_counter()
     try:
         r = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
@@ -4425,9 +4753,12 @@ CONOCIMIENTO WEB RELEVANTE:
                 {"role": "system", "content": system},
                 {"role": "user", "content": str(texto or "")},
             ],
+            timeout=12.0,
         )
+        print(f"NEXI PERF openai agent={agent} tiempo={_time.perf_counter()-t0:.3f}s")
         return (r.choices[0].message.content or "").strip() or "No tengo suficiente información para responder eso."
     except Exception as e:
+        print(f"NEXI PERF openai_error agent={agent} tiempo={_time.perf_counter()-t0:.3f}s")
         print("NEXI AGENT ERROR:", agent, repr(e))
         return "No pude procesar esa consulta en este momento. Intenta nuevamente."
 
@@ -4449,6 +4780,12 @@ def _core_agent_atencion(empresa_id, texto, ctx=None):
 
 def _core_agent_conocimiento(empresa_id, texto, ctx=None):
     ctx = ctx or _core_agent_context(empresa_id, texto)
+
+    directa = _core_respuesta_directa_conocimiento(texto, ctx)
+    if directa:
+        print("NEXI PERF fast_path=conocimiento")
+        return directa
+
     return _core_agent_llm(
         "conocimiento",
         texto,
@@ -4682,25 +5019,49 @@ def _core_log_orchestration(empresa_id, token, canal, texto, agente):
 
 def _core_orchestrate(empresa_id, texto, token=None, canal="web"):
     """
-    Orquestador central.
-    Decide una capacidad/agente, prepara contexto y delega.
+    Orquestador central optimizado:
+    - una sola lectura del perfil por turno;
+    - conocimiento web cacheado;
+    - métricas de latencia por etapa.
     """
-    _, datos = _core_public_profile(empresa_id)
+    import time as _time
+    total0 = _time.perf_counter()
+
+    t0 = _time.perf_counter()
+    perfil, datos = _core_public_profile(empresa_id)
+    perfil_s = _time.perf_counter() - t0
+
+    t0 = _time.perf_counter()
     agente = _core_route_intent(texto, datos)
+    router_s = _time.perf_counter() - t0
 
     if agente == "handoff":
-        # El handoff real se procesa antes de llegar aquí.
         agente = "atencion"
 
     if not _core_agent_enabled(agente, datos):
         agente = "atencion"
 
-    fn = CORE_AGENT_REGISTRY.get(agente, _core_agent_atencion)
-    ctx = _core_agent_context(empresa_id, texto)
-    respuesta = fn(empresa_id, texto, ctx=ctx)
+    t0 = _time.perf_counter()
+    ctx = _core_agent_context(empresa_id, texto, public_profile=(perfil, datos))
+    contexto_s = _time.perf_counter() - t0
 
+    fn = CORE_AGENT_REGISTRY.get(agente, _core_agent_atencion)
+    t0 = _time.perf_counter()
+    respuesta = fn(empresa_id, texto, ctx=ctx)
+    agente_s = _time.perf_counter() - t0
+
+    # Auditoría se mantiene, pero se mide separadamente.
+    t0 = _time.perf_counter()
     _core_log_orchestration(empresa_id, token, canal, texto, agente)
+    audit_s = _time.perf_counter() - t0
+
+    total_s = _time.perf_counter() - total0
     print("NEXI ORCHESTRATOR:", empresa_id, canal, "->", agente)
+    print(
+        f"NEXI PERF TOTAL={total_s:.3f}s perfil={perfil_s:.3f}s "
+        f"router={router_s:.3f}s contexto={contexto_s:.3f}s "
+        f"agente={agente_s:.3f}s auditoria={audit_s:.3f}s"
+    )
     return respuesta, agente
 
 
@@ -4891,6 +5252,22 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
     agenda_session_key = f"core:{empresa_id}:{_normalizar_identificador_demo(telefono, 'whatsapp')}"
     agenda_estado = get_estado(agenda_session_key)
     agenda_activa = str(agenda_estado.get("paso") or "inicio") != "inicio"
+
+    # V2.5.3: una consulta explícita por servicios debe interrumpir un paso viejo
+    # de agenda (por ejemplo, seleccionar_hora) y volver a la selección de servicio.
+    # Esto evita que "quiero conocer sus servicios" reutilice horas de una reserva anterior.
+    if agenda_activa and pregunta_servicios(texto):
+        agenda_estado["paso"] = "servicio"
+        agenda_estado["servicio"] = None
+        agenda_estado["fecha_hora"] = None
+        agenda_estado["horas_ofrecidas"] = []
+        agenda_activa = True
+        print(
+            "NEXI CORE AGENDA REINICIO POR CONSULTA SERVICIOS:",
+            empresa_id,
+            _normalizar_identificador_demo(telefono, "whatsapp"),
+        )
+
     agente_previsto = _core_route_intent(texto, datos_perfil)
     agenda_solicitada = agente_previsto == "agenda"
 
@@ -5012,6 +5389,15 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
                 "paso=",
                 get_estado(agenda_session_key).get("paso"),
             )
+        elif agente_previsto == "agenda":
+            # La empresa configuró agenda pero todavía no conectó un Calendar real.
+            # Nunca inventamos disponibilidad ni confirmamos reservas.
+            respuesta = (
+                "📅 Muy pronto podrás agendar directamente desde aquí.\n"
+                "En breve integraremos el calendario a nuestros servicios para habilitar la reserva online."
+            )
+            agente_usado = "agenda"
+            print("NEXI CORE AGENDA SIN CALENDAR:", empresa_id)
         else:
             respuesta, agente_usado = _core_orchestrate(empresa_id, texto, token=token, canal="whatsapp")
 
