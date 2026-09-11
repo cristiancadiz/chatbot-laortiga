@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.8.5-DEMOS-PUBLICAS-CTA-FIX"
+APP_VERSION = "2026-09-11-NEXI-V2.8.6-PRECIOS-CATALOGO-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -5203,6 +5203,27 @@ def _core_respuesta_estructurada(texto, datos, empresa=None, asistente=None):
         precio_publico = _core_valor_publico(datos, "precios", "precio", "valores", "tarifas", "planes")
         if precio_publico:
             return f"Estos son los valores disponibles: {precio_publico}"
+
+        # El onboarding guarda servicios/precios dentro de productos_servicios
+        # y también puede conservar el catálogo estructurado.
+        catalogo = datos.get("catalogo_productos_servicios")
+        if isinstance(catalogo, list):
+            items_con_precio = []
+            for item in catalogo:
+                if not isinstance(item, dict):
+                    continue
+                nombre = str(item.get("nombre") or "").strip()
+                precio = str(item.get("precio") or "").strip()
+                if nombre and precio:
+                    items_con_precio.append(f"{nombre}: {precio}")
+            if items_con_precio:
+                return "Estos son los valores disponibles: " + "; ".join(items_con_precio)
+
+        # Compatibilidad con perfiles donde productos_servicios ya viene
+        # como texto del tipo "Servicio — 5.990".
+        if oferta and re.search(r"(\$\s*\d|\b\d{1,3}(?:[\.\,]\d{3})+\b|\b\d+\s*(?:clp|usd|uf)\b)", oferta, flags=re.IGNORECASE):
+            return f"Estos son los valores disponibles: {oferta}"
+
         return (
             "Los valores no están publicados en la información disponible. "
             "Puedo contarte qué servicios ofrecemos o ayudarte a solicitar una cotización."
