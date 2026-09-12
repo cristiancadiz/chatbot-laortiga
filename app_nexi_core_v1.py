@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-12-NEXI-V3.3.1-INSTAGRAM-TENANT-MENU-FIX"
+APP_VERSION = "2026-09-12-NEXI-V3.4.0-OMNICANAL-WHATSAPP-INSTAGRAM"
 load_dotenv()
 
 app = Flask(__name__)
@@ -934,9 +934,10 @@ def router_asistente_propio(telefono):
         return None
 
 
-def router_contexto_obtener(telefono):
+def router_contexto_obtener(identificador, canal="whatsapp"):
     headers = _router_headers()
-    ident = _router_identificador(telefono)
+    canal = str(canal or "whatsapp").strip().lower()
+    ident = _router_identificador(identificador) if canal == "whatsapp" else str(identificador or "").strip()
     if not headers or not ident:
         return None
     try:
@@ -945,7 +946,7 @@ def router_contexto_obtener(telefono):
             headers=headers,
             params={
                 "select": "*",
-                "canal": "eq.whatsapp",
+                "canal": f"eq.{canal}",
                 "identificador_cliente": f"eq.{ident}",
                 "activo": "eq.true",
                 "limit": "1",
@@ -963,23 +964,23 @@ def router_contexto_obtener(telefono):
         if updated and NEXIA_ROUTER_CONTEXTO_HORAS > 0:
             edad_horas = (datetime.now(pytz.UTC) - updated.astimezone(pytz.UTC)).total_seconds() / 3600
             if edad_horas >= NEXIA_ROUTER_CONTEXTO_HORAS:
-                router_contexto_borrar(telefono)
+                router_contexto_borrar(identificador, canal=canal)
                 return None
         return row
     except Exception as e:
-        print("NEXI ROUTER CONTEXTO GET ERROR:", repr(e))
+        print("NEXI ROUTER CONTEXTO GET ERROR:", canal, repr(e))
         return None
 
-
-def router_contexto_guardar(telefono, empresa_id, motor="core", origen="menu", codigo=None):
+def router_contexto_guardar(identificador, empresa_id, motor="core", origen="menu", codigo=None, canal="whatsapp"):
     headers = _router_headers("resolution=merge-duplicates,return=representation")
-    ident = _router_identificador(telefono)
+    canal = str(canal or "whatsapp").strip().lower()
+    ident = _router_identificador(identificador) if canal == "whatsapp" else str(identificador or "").strip()
     empresa_id = str(empresa_id or "").strip()
     if not headers or not ident or not empresa_id:
         return None
     ahora = datetime.now(pytz.UTC).isoformat()
     payload = {
-        "canal": "whatsapp",
+        "canal": canal,
         "identificador_cliente": ident,
         "empresa_id": empresa_id,
         "motor": str(motor or "core").lower(),
@@ -1002,20 +1003,20 @@ def router_contexto_guardar(telefono, empresa_id, motor="core", origen="menu", c
         rows = r.json() if r.content else []
         return rows[0] if rows else payload
     except Exception as e:
-        print("NEXI ROUTER CONTEXTO SAVE ERROR:", repr(e))
+        print("NEXI ROUTER CONTEXTO SAVE ERROR:", canal, repr(e))
         return payload
 
-
-def router_contexto_borrar(telefono):
+def router_contexto_borrar(identificador, canal="whatsapp"):
     headers = _router_headers("return=minimal")
-    ident = _router_identificador(telefono)
+    canal = str(canal or "whatsapp").strip().lower()
+    ident = _router_identificador(identificador) if canal == "whatsapp" else str(identificador or "").strip()
     if not headers or not ident:
         return False
     try:
         r = requests.patch(
             f"{SUPABASE_URL}/rest/v1/nexi_router_sesiones",
             headers=headers,
-            params={"canal": "eq.whatsapp", "identificador_cliente": f"eq.{ident}"},
+            params={"canal": f"eq.{canal}", "identificador_cliente": f"eq.{ident}"},
             json={"activo": False, "updated_at": datetime.now(pytz.UTC).isoformat()},
             timeout=SUPABASE_TIMEOUT,
         )
@@ -1024,9 +1025,8 @@ def router_contexto_borrar(telefono):
         r.raise_for_status()
         return True
     except Exception as e:
-        print("NEXI ROUTER CONTEXTO CLEAR ERROR:", repr(e))
+        print("NEXI ROUTER CONTEXTO CLEAR ERROR:", canal, repr(e))
         return False
-
 
 def router_destino_por_codigo(codigo):
     """Resuelve links/botones de clientes: wa.me/...?...text=NEXI%20CODIGO."""
@@ -1305,7 +1305,7 @@ def router_empresas_pagadas_activas():
         return []
 
 
-def router_opciones_menu(telefono, pagina=0):
+def router_opciones_menu(telefono, pagina=0, canal="whatsapp"):
     """Genera el menú global: acceso propio, Diego, empresas pagadas y demos públicas."""
     pagadas = router_empresas_pagadas_activas()
     demos = router_demos_publicas_activas()
@@ -1313,12 +1313,12 @@ def router_opciones_menu(telefono, pagina=0):
 
     todas = []
 
-    propio = router_asistente_propio(telefono)
+    propio = router_asistente_propio(telefono) if str(canal or 'whatsapp').lower() == 'whatsapp' else None
     if propio:
         empresa_id_propio = str(propio.get("empresa_id") or "").strip()
         nombre_propio = "Mi asistente"
         try:
-            cfg_propia = cargar_empresa_config(empresa_id_propio, canal="whatsapp", provider="router")
+            cfg_propia = cargar_empresa_config(empresa_id_propio, canal=canal, provider="router")
             nombre_propio = str(cfg_propia.get("empresa_nombre") or "Mi asistente").strip() or "Mi asistente"
         except Exception:
             pass
@@ -1409,14 +1409,92 @@ def router_opciones_menu(telefono, pagina=0):
     return restantes[:10]
 
 
-def router_menu_superior(telefono, pagina=0):
+def router_menu_superior(telefono, pagina=0, canal="whatsapp"):
     """Fallback textual del menú. Twilio usa list-picker cuando puede."""
-    opciones = router_opciones_menu(telefono, pagina=pagina)
+    opciones = router_opciones_menu(telefono, pagina=pagina, canal=canal)
     lineas = ["Hola 👋 Bienvenido a Nexia.", "¿Con quién quieres hablar?", ""]
     for i, op in enumerate(opciones, 1):
         lineas.append(f"{i}. {op.get('item') or 'Opción'}")
     lineas += ["", "Toca una opción del menú. También puedes escribir *MENU* cuando quieras cambiar de negocio."]
     return "\n".join(lineas)
+
+
+
+def router_opciones_instagram(identificador):
+    """
+    Instagram no depende del list-picker de Twilio.
+    Devuelve todas las opciones visibles en una sola lista numerada.
+    """
+    out = []
+    pagina = 0
+    vistos = set()
+    while pagina < 20:
+        page = router_opciones_menu(identificador, pagina=pagina, canal="instagram")
+        if not page:
+            break
+        hay_mas = False
+        for op in page:
+            op_id = str(op.get("id") or "")
+            if op_id.startswith("nexi:pagina:"):
+                hay_mas = True
+                continue
+            if op_id and op_id not in vistos:
+                vistos.add(op_id)
+                out.append(op)
+        if not hay_mas:
+            break
+        pagina += 1
+    return out
+
+
+def router_menu_instagram(identificador):
+    opciones = router_opciones_instagram(identificador)
+    lineas = [
+        "Hola 👋 Bienvenido a Nexia.",
+        "¿Con quién quieres hablar?",
+        "",
+    ]
+    for i, op in enumerate(opciones, 1):
+        item = str(op.get("item") or f"Opción {i}")
+        desc = str(op.get("description") or "").strip()
+        lineas.append(f"{i}. {item}" + (f" — {desc}" if desc else ""))
+    lineas += [
+        "",
+        "Responde con el número de la opción.",
+        "También puedes escribir *MENU* cuando quieras cambiar de negocio.",
+    ]
+    return "\n".join(lineas)
+
+
+def router_instagram_resolver(identificador, texto):
+    """
+    Misma recepción lógica que WhatsApp, adaptada a texto de Instagram.
+    """
+    raw = str(texto or "").strip()
+    norm = normalizar_texto(raw)
+
+    if norm in {normalizar_texto(x) for x in ROUTER_MENU_COMMANDS} or norm == "menu":
+        router_contexto_borrar(identificador, canal="instagram")
+        return {"accion":"menu","respuesta":router_menu_instagram(identificador)}
+
+    # Si no hay contexto y escribe un número, lo resolvemos contra la misma
+    # lista de negocios/demos visible en WhatsApp.
+    if re.fullmatch(r"\d{1,3}", norm):
+        idx = int(norm) - 1
+        opciones = router_opciones_instagram(identificador)
+        if 0 <= idx < len(opciones):
+            op_id = str(opciones[idx].get("id") or "")
+            return router_superior_resolver(
+                identificador,
+                op_id,
+                canal="instagram",
+            )
+
+    return router_superior_resolver(
+        identificador,
+        raw,
+        canal="instagram",
+    )
 
 
 def _router_twilio_credenciales():
@@ -2137,7 +2215,7 @@ def router_vincular_demo_a_whatsapp(empresa_id, telefono):
         return False
 
 
-def router_superior_resolver(telefono, texto):
+def router_superior_resolver(telefono, texto, canal="whatsapp"):
     """Devuelve accion=menu|seleccionado|ruta y la empresa/motor cuando corresponda."""
     if not NEXIA_ROUTER_SUPERIOR_ACTIVO:
         demo = router_demo_access_sin_activar(telefono)
@@ -2154,11 +2232,11 @@ def router_superior_resolver(telefono, texto):
             pagina = int(raw_texto.rsplit(":", 1)[1])
         except Exception:
             pagina = 0
-        router_contexto_borrar(telefono)
+        router_contexto_borrar(telefono, canal=canal)
         return {"accion": "menu", "pagina": pagina}
 
-    if raw_texto.lower() == "nexi:mi_asistente":
-        propio = router_asistente_propio(telefono)
+    if raw_texto.lower() == "nexi:mi_asistente" and canal == "whatsapp":
+        propio = router_asistente_propio(telefono) if canal == "whatsapp" else None
         if not propio:
             return {
                 "accion": "menu",
@@ -2170,7 +2248,7 @@ def router_superior_resolver(telefono, texto):
 
         empresa_id = str(propio.get("empresa_id") or "").strip()
         origen = str(propio.get("origen") or "demo").strip().lower()
-        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen=origen) or {}
+        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen=origen, canal=canal) or {}
         row.update({
             "accion": "seleccionado",
             "empresa_id": empresa_id,
@@ -2183,7 +2261,7 @@ def router_superior_resolver(telefono, texto):
         return row
 
     if raw_texto.lower() == "nexi:nueva_prueba":
-        router_contexto_borrar(telefono)
+        router_contexto_borrar(telefono, canal=canal)
         return {
             "accion": "mensaje",
             "respuesta": (
@@ -2195,7 +2273,7 @@ def router_superior_resolver(telefono, texto):
         }
 
     if raw_texto.lower() == "nexi:diego":
-        row = router_contexto_guardar(telefono, DIEGO_EMPRESA_ID, motor="legacy", origen="diego") or {}
+        row = router_contexto_guardar(telefono, DIEGO_EMPRESA_ID, motor="legacy", origen="diego", canal=canal) or {}
         row.update({"accion": "seleccionado", "empresa_id": DIEGO_EMPRESA_ID, "motor": "legacy", "telefono": telefono})
         return row
 
@@ -2206,8 +2284,8 @@ def router_superior_resolver(telefono, texto):
         visibles = {e["empresa_id"]: e for e in router_empresas_pagadas_activas()}
         destino = visibles.get(empresa_id)
         if not destino:
-            return {"accion": "menu", "respuesta": "Ese negocio ya no está disponible.\n\n" + router_menu_superior(telefono)}
-        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="pagado") or {}
+            return {"accion": "menu", "respuesta": "Ese negocio ya no está disponible.\n\n" + router_menu_superior(telefono, canal=canal)}
+        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="pagado", canal=canal) or {}
         row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": "core", "telefono": telefono})
         return row
 
@@ -2218,9 +2296,9 @@ def router_superior_resolver(telefono, texto):
         if not demo:
             return {
                 "accion": "menu",
-                "respuesta": "Esta demo ya no está disponible.\n\n" + router_menu_superior(telefono),
+                "respuesta": "Esta demo ya no está disponible.\n\n" + router_menu_superior(telefono, canal=canal),
             }
-        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="demo") or {}
+        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="demo", canal=canal) or {}
         row.update({
             "accion": "seleccionado",
             "empresa_id": empresa_id,
@@ -2231,17 +2309,17 @@ def router_superior_resolver(telefono, texto):
         return row
 
     if t in {normalizar_texto(x) for x in ROUTER_MENU_COMMANDS}:
-        router_contexto_borrar(telefono)
+        router_contexto_borrar(telefono, canal=canal)
         return {"accion": "menu", "pagina": 0}
 
-    actual = router_contexto_obtener(telefono)
+    actual = router_contexto_obtener(telefono, canal=canal)
     if actual:
         actual = dict(actual)
         actual["accion"] = "ruta"
         if str(actual.get("origen") or "") == "demo":
             demo_publica = router_demo_publica_por_empresa(actual.get("empresa_id"))
             if not demo_publica:
-                router_contexto_borrar(telefono)
+                router_contexto_borrar(telefono, canal=canal)
                 return {"accion": "menu", "pagina": 0}
             actual["demo_access"] = demo_publica.get("demo_access") or {
                 "empresa_id": actual.get("empresa_id")
@@ -2250,20 +2328,20 @@ def router_superior_resolver(telefono, texto):
 
     # Compatibilidad textual: Diego por nombre/1 y prueba por palabras explícitas.
     if t == "1" or t in {normalizar_texto(x) for x in ROUTER_DIEGO_COMMANDS}:
-        row = router_contexto_guardar(telefono, DIEGO_EMPRESA_ID, motor="legacy", origen="diego") or {}
+        row = router_contexto_guardar(telefono, DIEGO_EMPRESA_ID, motor="legacy", origen="diego", canal=canal) or {}
         row.update({"accion": "seleccionado", "empresa_id": DIEGO_EMPRESA_ID, "motor": "legacy", "telefono": telefono})
         return row
 
     if t in {normalizar_texto(x) for x in ROUTER_DEMO_COMMANDS}:
-        propio = router_asistente_propio(telefono)
+        propio = router_asistente_propio(telefono) if canal == "whatsapp" else None
         if not propio:
             return {
                 "accion": "menu",
-                "respuesta": "No encontré una prueba o plan activo asociado a este WhatsApp.\n\n" + router_menu_superior(telefono),
+                "respuesta": "No encontré una prueba o plan activo asociado a este WhatsApp.\n\n" + router_menu_superior(telefono, canal=canal),
             }
         empresa_id = str(propio.get("empresa_id") or "")
         origen = str(propio.get("origen") or "demo").lower()
-        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen=origen) or {}
+        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen=origen, canal=canal) or {}
         row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": "core", "origen": origen, "telefono": telefono})
         if origen == "demo":
             row["demo_access"] = propio.get("demo_access") or {"empresa_id": empresa_id}
@@ -2272,7 +2350,7 @@ def router_superior_resolver(telefono, texto):
     # Fallback por número si el cliente escribe en vez de tocar: usa el orden de la primera página.
     if re.fullmatch(r"\d{1,2}", t):
         idx = int(t) - 1
-        opciones = router_opciones_menu(telefono, pagina=0)
+        opciones = router_opciones_menu(telefono, pagina=0, canal=canal)
         if 0 <= idx < len(opciones):
             op = opciones[idx]
             return router_superior_resolver(telefono, op.get("id") or "")
@@ -2281,14 +2359,14 @@ def router_superior_resolver(telefono, texto):
     if codigo:
         destino = router_destino_por_codigo(codigo)
         if not destino:
-            return {"accion": "menu", "respuesta": "Ese acceso no está disponible o ya no es válido.\n\n" + router_menu_superior(telefono)}
+            return {"accion": "menu", "respuesta": "Ese acceso no está disponible o ya no es válido.\n\n" + router_menu_superior(telefono, canal=canal)}
         empresa_id = str(destino.get("empresa_id") or "")
         motor = str(destino.get("motor") or "core").lower()
 
-        if motor == "core":
+        if motor == "core" and canal == "whatsapp":
             router_vincular_demo_a_whatsapp(empresa_id, telefono)
 
-        row = router_contexto_guardar(telefono, empresa_id, motor=motor, origen="codigo", codigo=codigo) or {}
+        row = router_contexto_guardar(telefono, empresa_id, motor=motor, origen="codigo", codigo=codigo, canal=canal) or {}
         row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": motor, "codigo": codigo, "telefono": telefono})
         return row
 
@@ -2296,11 +2374,11 @@ def router_superior_resolver(telefono, texto):
     return {"accion": "menu", "pagina": 0}
 
 
-def router_activar_ruta(route, provider):
+def router_activar_ruta(route, provider, canal="whatsapp"):
     empresa_id = str((route or {}).get("empresa_id") or "").strip()
     if not empresa_id:
         raise RuntimeError("Router sin empresa_id")
-    activar_por_empresa(empresa_id, canal="whatsapp", provider=provider)
+    activar_por_empresa(empresa_id, canal=canal, provider=provider)
     return empresa_id
 
 
@@ -8192,51 +8270,7 @@ def _core_responder_instagram(empresa_id, cliente_id, texto, username=None):
     nombre_instagram = f"@{username}" if username else None
     session_key = f"core:{empresa_id}:instagram:{cliente_id}"
 
-    # MENU en Instagram: confirma el tenant real y reinicia el contexto
-    # conversacional de esta persona sin cambiar de empresa.
-    texto_normalizado = normalizar_texto(texto)
-    if texto_normalizado in ROUTER_MENU_COMMANDS or texto_normalizado == "menu":
-        try:
-            set_estado(session_key, {"paso":"inicio"})
-        except Exception:
-            pass
-
-        empresa_nombre = str(
-            cfg("empresa_nombre", "")
-            or cfg("negocio_nombre", "")
-            or (perfil.get("empresa_nombre") if isinstance(perfil, dict) else "")
-            or "este negocio"
-        ).strip()
-
-        respuesta_menu = (
-            f"🏠 Menú de {empresa_nombre}\n\n"
-            "Puedes preguntarme por:\n"
-            "• productos o servicios\n"
-            "• precios y disponibilidad\n"
-            "• agenda o reservas\n"
-            "• estado de pedidos, si hay ecommerce conectado\n"
-            "• hablar con una persona, si está habilitado\n\n"
-            "Escribe tu consulta y te ayudo."
-        )
-
-        guardar_mensaje(session_key, "user", texto, canal="instagram")
-        guardar_mensaje_supabase(
-            cliente_id,
-            "entrante",
-            texto,
-            nombre_contacto=nombre_instagram,
-            canal="instagram",
-        )
-        guardar_mensaje(session_key, "assistant", respuesta_menu, canal="instagram")
-        guardar_mensaje_supabase(
-            cliente_id,
-            "saliente",
-            respuesta_menu,
-            nombre_contacto=nombre_instagram,
-            canal="instagram",
-        )
-        print("NEXI INSTAGRAM MENU:", empresa_id, empresa_nombre, cliente_id)
-        return respuesta_menu
+    # MENU y selección de negocio se resuelven antes, en el router omnicanal.
 
     # Historial local + Portal.
     guardar_mensaje(session_key, "user", texto, canal="instagram")
@@ -8657,6 +8691,78 @@ def instagram_webhook_eventos():
                     continue
 
                 try:
+                    # ------------------------------------------------------------
+                    # NEXIA V3.4: MISMA RECEPCIÓN/ROUTER EN WHATSAPP E INSTAGRAM
+                    # ------------------------------------------------------------
+                    route = router_instagram_resolver(sender_id, texto)
+
+                    if route.get("accion") == "menu":
+                        respuesta_menu = str(route.get("respuesta") or router_menu_instagram(sender_id))
+                        guardar_mensaje(f"instagram:{sender_id}", "user", texto, canal="instagram")
+                        guardar_mensaje_supabase(
+                            sender_id,
+                            "entrante",
+                            texto,
+                            nombre_contacto=(f"@{username.lstrip('@')}" if username else None),
+                            canal="instagram",
+                        )
+                        guardar_mensaje(f"instagram:{sender_id}", "assistant", respuesta_menu, canal="instagram")
+                        guardar_mensaje_supabase(
+                            sender_id,
+                            "saliente",
+                            respuesta_menu,
+                            nombre_contacto=(f"@{username.lstrip('@')}" if username else None),
+                            canal="instagram",
+                        )
+                        enviar_instagram_texto(sender_id, respuesta_menu)
+                        continue
+
+                    if route.get("accion") == "mensaje":
+                        respuesta_directa = str(route.get("respuesta") or "").strip()
+                        if respuesta_directa:
+                            enviar_instagram_texto(sender_id, respuesta_directa)
+                        continue
+
+                    if route.get("accion") in {"seleccionado", "ruta"}:
+                        empresa_route = str(route.get("empresa_id") or "").strip()
+                        motor_route = str(route.get("motor") or "core").strip().lower()
+
+                        if not empresa_route:
+                            enviar_instagram_texto(sender_id, router_menu_instagram(sender_id))
+                            continue
+
+                        # Instagram usa el mismo Nexia Core. Para destinos legacy,
+                        # activamos la empresa y respondemos con Core si existe perfil.
+                        activar_por_empresa(empresa_route, canal="instagram", provider="meta")
+
+                        if route.get("accion") == "seleccionado":
+                            try:
+                                cfg_sel = cargar_empresa_config(
+                                    empresa_route,
+                                    canal="instagram",
+                                    provider="meta",
+                                )
+                                nombre_sel = str(cfg_sel.get("empresa_nombre") or "el negocio").strip()
+                            except Exception:
+                                nombre_sel = "el negocio"
+
+                            bienvenida = (
+                                f"Listo 🙌 Estás conversando con {nombre_sel}.\n"
+                                "Puedes escribir tu consulta normalmente."
+                            )
+                            enviar_instagram_texto(sender_id, bienvenida)
+
+                        # Desde aquí, misma lógica de negocio que WhatsApp/Nexia Core.
+                        respuesta = _core_responder_instagram(
+                            empresa_route,
+                            sender_id,
+                            texto if route.get("accion") == "ruta" else "hola",
+                            username=username,
+                        )
+                        if respuesta:
+                            enviar_instagram_texto(sender_id, respuesta)
+                        continue
+
                     if obtener_modo_atencion(sender_id, "instagram") == "ejecutivo":
                         nombre_instagram = (
                             f"@{username.lstrip('@')}" if username else None
@@ -8737,6 +8843,31 @@ def instagram_diagnostico_ruta():
             "entry_id":entry_id,
             "error":str(e),
         },409
+
+
+
+@app.route("/instagram/diagnostico-router", methods=["GET"])
+def instagram_diagnostico_router():
+    sender_id = str(request.args.get("sender_id") or "").strip()
+    if not sender_id:
+        return {"ok":False,"error":"Falta sender_id"},400
+    sesion = router_contexto_obtener(sender_id, canal="instagram")
+    opciones = router_opciones_instagram(sender_id)
+    return {
+        "ok":True,
+        "sender_id":sender_id,
+        "sesion":sesion,
+        "opciones":[
+            {
+                "n":i+1,
+                "id":op.get("id"),
+                "item":op.get("item"),
+                "empresa_id":op.get("empresa_id"),
+                "motor":op.get("motor"),
+            }
+            for i,op in enumerate(opciones)
+        ],
+    },200
 
 
 
