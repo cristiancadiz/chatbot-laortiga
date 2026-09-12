@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-12-NEXI-V3.4.0-OMNICANAL-WHATSAPP-INSTAGRAM"
+APP_VERSION = "2026-09-12-NEXI-V3.4.1-ECOMMERCE-CACHE-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -6415,7 +6415,16 @@ def _ecommerce_get_config(empresa_id, use_cache=True):
 
 
 def _ecommerce_clear_cache(empresa_id):
-    _cache_set(f"ecommerce_config:{empresa_id}", {}, ttl=1)
+    """
+    Invalida la cache ecommerce usando la misma estructura de TENANT_CACHE.
+    _cache_set() no acepta ttl, por eso eliminamos la clave directamente.
+    """
+    key = f"ecommerce_config:{empresa_id}"
+    try:
+        with TENANT_CACHE_LOCK:
+            TENANT_CACHE.pop(key, None)
+    except Exception as e:
+        print("NEXI ECOMMERCE CACHE CLEAR ERROR:", repr(e))
 
 
 def _ecommerce_money(value, currency="CLP"):
