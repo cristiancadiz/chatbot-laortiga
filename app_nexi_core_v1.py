@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-12-NEXI-V3.3.0-INSTAGRAM-NEXIA-CORE"
+APP_VERSION = "2026-09-12-NEXI-V3.3.1-INSTAGRAM-TENANT-MENU-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -98,6 +98,7 @@ INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN")
 INSTAGRAM_VERIFY_TOKEN = os.getenv("INSTAGRAM_VERIFY_TOKEN", "NEXIA_IG_WEBHOOK_2026")
 INSTAGRAM_APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET")
 INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "17841476077966070")
+INSTAGRAM_EMPRESA_ID = os.getenv("INSTAGRAM_EMPRESA_ID", "").strip()
 INSTAGRAM_GRAPH_VERSION = os.getenv("INSTAGRAM_GRAPH_VERSION", "v26.0")
 INSTAGRAM_API_BASE = os.getenv("INSTAGRAM_API_BASE", "https://graph.instagram.com").rstrip("/")
 
@@ -550,18 +551,99 @@ def cargar_empresa_config(empresa_id,canal=None,provider=None,canal_config=None)
     out=dict(base);out["canal"]=canal;out["provider"]=provider;out["canal_config"]=dict(canal_config or {});return out
 
 def resolver_tenant(canal,provider,identificador_externo):
-    canal=str(canal or "").lower().strip();provider=str(provider or "").lower().strip();externo=str(identificador_externo or "").strip()
-    if canal=="whatsapp":externo=re.sub(r"\D","",externo)
+    canal=str(canal or "").lower().strip()
+    provider=str(provider or "").lower().strip()
+    externo=str(identificador_externo or "").strip()
+
+    if canal=="whatsapp":
+        externo=re.sub(r"\D","",externo)
+
     headers=backend_headers()
+
+    # Sin backend configurado, conservamos compatibilidad legacy.
     if not headers:
-        out=tenant_default();out["canal"]=canal;out["provider"]=provider;return out
-    key=f"route:{canal}:{provider}:{externo}";row=_cache_get(key)
+        if canal=="instagram" and INSTAGRAM_EMPRESA_ID:
+            return cargar_empresa_config(
+                INSTAGRAM_EMPRESA_ID,
+                canal="instagram",
+                provider=provider or "meta",
+                canal_config={
+                    "canal":"instagram",
+                    "provider":provider or "meta",
+                    "identificador_externo":externo or INSTAGRAM_USER_ID,
+                    "sender":externo or INSTAGRAM_USER_ID,
+                },
+            )
+        out=tenant_default()
+        out["canal"]=canal
+        out["provider"]=provider
+        return out
+
+    key=f"route:{canal}:{provider}:{externo}"
+    row=_cache_get(key)
+
     if row is None:
-        r=requests.get(f"{SUPABASE_URL}/rest/v1/canales_empresa",headers=headers,params={"select":"*","canal":f"eq.{canal}","provider":f"eq.{provider}","identificador_externo":f"eq.{externo}","activo":"eq.true","limit":"1"},timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else []
+        r=requests.get(
+            f"{SUPABASE_URL}/rest/v1/canales_empresa",
+            headers=headers,
+            params={
+                "select":"*",
+                "canal":f"eq.{canal}",
+                "provider":f"eq.{provider}",
+                "identificador_externo":f"eq.{externo}",
+                "activo":"eq.true",
+                "limit":"1",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows=r.json() if r.content else []
+
         if not rows:
-            out=tenant_default();out["canal"]=canal;out["provider"]=provider;return out
-        row=rows[0];_cache_set(key,row)
-    return cargar_empresa_config(row["empresa_id"],canal=canal,provider=provider,canal_config=row)
+            # IMPORTANTE:
+            # Instagram ya no cae silenciosamente al tenant DEFAULT/Nexia.
+            # El Instagram legacy puede asociarse explícitamente con
+            # INSTAGRAM_EMPRESA_ID en Render mientras se crea su fila
+            # definitiva en canales_empresa.
+            if canal=="instagram" and provider=="meta" and INSTAGRAM_EMPRESA_ID:
+                print(
+                    "INSTAGRAM TENANT FALLBACK EXPLICITO:",
+                    externo,
+                    "->",
+                    INSTAGRAM_EMPRESA_ID,
+                )
+                return cargar_empresa_config(
+                    INSTAGRAM_EMPRESA_ID,
+                    canal="instagram",
+                    provider="meta",
+                    canal_config={
+                        "canal":"instagram",
+                        "provider":"meta",
+                        "identificador_externo":externo,
+                        "sender":externo or INSTAGRAM_USER_ID,
+                    },
+                )
+
+            if canal=="instagram":
+                raise RuntimeError(
+                    "Instagram sin empresa asociada. Crea la ruta en canales_empresa "
+                    "o configura INSTAGRAM_EMPRESA_ID en Render."
+                )
+
+            out=tenant_default()
+            out["canal"]=canal
+            out["provider"]=provider
+            return out
+
+        row=rows[0]
+        _cache_set(key,row)
+
+    return cargar_empresa_config(
+        row["empresa_id"],
+        canal=canal,
+        provider=provider,
+        canal_config=row,
+    )
 
 def activar_por_canal(canal,provider,identificador_externo):set_tenant(resolver_tenant(canal,provider,identificador_externo))
 def activar_por_empresa(empresa_id,canal=None,provider=None,canal_config=None):set_tenant(cargar_empresa_config(empresa_id,canal=canal,provider=provider,canal_config=canal_config))
@@ -8110,6 +8192,52 @@ def _core_responder_instagram(empresa_id, cliente_id, texto, username=None):
     nombre_instagram = f"@{username}" if username else None
     session_key = f"core:{empresa_id}:instagram:{cliente_id}"
 
+    # MENU en Instagram: confirma el tenant real y reinicia el contexto
+    # conversacional de esta persona sin cambiar de empresa.
+    texto_normalizado = normalizar_texto(texto)
+    if texto_normalizado in ROUTER_MENU_COMMANDS or texto_normalizado == "menu":
+        try:
+            set_estado(session_key, {"paso":"inicio"})
+        except Exception:
+            pass
+
+        empresa_nombre = str(
+            cfg("empresa_nombre", "")
+            or cfg("negocio_nombre", "")
+            or (perfil.get("empresa_nombre") if isinstance(perfil, dict) else "")
+            or "este negocio"
+        ).strip()
+
+        respuesta_menu = (
+            f"🏠 Menú de {empresa_nombre}\n\n"
+            "Puedes preguntarme por:\n"
+            "• productos o servicios\n"
+            "• precios y disponibilidad\n"
+            "• agenda o reservas\n"
+            "• estado de pedidos, si hay ecommerce conectado\n"
+            "• hablar con una persona, si está habilitado\n\n"
+            "Escribe tu consulta y te ayudo."
+        )
+
+        guardar_mensaje(session_key, "user", texto, canal="instagram")
+        guardar_mensaje_supabase(
+            cliente_id,
+            "entrante",
+            texto,
+            nombre_contacto=nombre_instagram,
+            canal="instagram",
+        )
+        guardar_mensaje(session_key, "assistant", respuesta_menu, canal="instagram")
+        guardar_mensaje_supabase(
+            cliente_id,
+            "saliente",
+            respuesta_menu,
+            nombre_contacto=nombre_instagram,
+            canal="instagram",
+        )
+        print("NEXI INSTAGRAM MENU:", empresa_id, empresa_nombre, cliente_id)
+        return respuesta_menu
+
     # Historial local + Portal.
     guardar_mensaje(session_key, "user", texto, canal="instagram")
     guardar_mensaje_supabase(
@@ -8584,9 +8712,32 @@ def instagram_diagnostico():
         "instagram_verify_token_configurado": bool(INSTAGRAM_VERIFY_TOKEN),
         "instagram_app_secret_configurado": bool(INSTAGRAM_APP_SECRET),
         "instagram_user_id": INSTAGRAM_USER_ID,
+        "instagram_empresa_id_configurado": INSTAGRAM_EMPRESA_ID or None,
         "instagram_graph_version": INSTAGRAM_GRAPH_VERSION,
         "webhook": "/instagram/webhook",
     }, 200
+
+
+@app.route("/instagram/diagnostico-ruta", methods=["GET"])
+def instagram_diagnostico_ruta():
+    entry_id = str(request.args.get("entry_id") or INSTAGRAM_USER_ID or "").strip()
+    try:
+        tenant = resolver_tenant("instagram","meta",entry_id)
+        return {
+            "ok":True,
+            "entry_id":entry_id,
+            "empresa_id":tenant.get("empresa_id"),
+            "empresa_nombre":tenant.get("empresa_nombre"),
+            "provider":tenant.get("provider"),
+            "canal":tenant.get("canal"),
+        },200
+    except Exception as e:
+        return {
+            "ok":False,
+            "entry_id":entry_id,
+            "error":str(e),
+        },409
+
 
 
 # ============================================================
