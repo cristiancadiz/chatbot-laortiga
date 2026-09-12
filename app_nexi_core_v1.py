@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-12-NEXI-V3.0.0-ECOMMERCE"
+APP_VERSION = "2026-09-12-NEXI-V3.1.0-CALENDAR-SYNC-BIDIRECCIONAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -2617,6 +2617,464 @@ def crear_evento(inicio, servicio_codigo, nombre, telefono, correo):
         return {"ok": False, "error": repr(e)}
 
 
+
+
+# ============================================================
+# NEXIA V3.1 - SINCRONIZACION GOOGLE CALENDAR <-> PORTAL
+# ============================================================
+
+CALENDAR_SYNC_DIAS_ATRAS = int(os.getenv("CALENDAR_SYNC_DIAS_ATRAS", "90"))
+CALENDAR_SYNC_DIAS_ADELANTE = int(os.getenv("CALENDAR_SYNC_DIAS_ADELANTE", "365"))
+CALENDAR_SYNC_MAX_RESULTS = int(os.getenv("CALENDAR_SYNC_MAX_RESULTS", "2500"))
+CALENDAR_SYNC_AUTO_PORTAL = str(os.getenv("CALENDAR_SYNC_AUTO_PORTAL", "true")).lower() in {"1","true","yes","si"}
+CALENDAR_CRON_SECRET = str(os.getenv("CALENDAR_CRON_SECRET") or "").strip()
+
+
+def _calendar_iso_to_local(value, tz_name=None):
+    if not value:
+        return None
+    tz = pytz.timezone(tz_name or timezone_actual())
+    value = str(value)
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            return tz.localize(datetime.strptime(value, "%Y-%m-%d"))
+        # Google suele devolver RFC3339.
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = tz.localize(dt)
+        return dt.astimezone(tz)
+    except Exception:
+        return None
+
+
+def _calendar_event_cliente(event):
+    private = ((event.get("extendedProperties") or {}).get("private") or {})
+    cliente = str(private.get("cliente") or "").strip()
+    if cliente:
+        return cliente
+    attendees = event.get("attendees") or []
+    for attendee in attendees:
+        if isinstance(attendee, dict):
+            display = str(attendee.get("displayName") or "").strip()
+            if display:
+                return display
+    summary = str(event.get("summary") or "").strip()
+    if " - " in summary:
+        return summary.rsplit(" - ", 1)[-1].strip()
+    return None
+
+
+def _calendar_event_servicio(event):
+    private = ((event.get("extendedProperties") or {}).get("private") or {})
+    codigo = str(private.get("servicio_codigo") or "").strip()
+    if codigo:
+        servicio = servicios_actuales().get(codigo) or {}
+        if servicio.get("nombre"):
+            return str(servicio.get("nombre")).strip()
+    summary = str(event.get("summary") or "").strip()
+    if " - " in summary:
+        return summary.rsplit(" - ", 1)[0].strip()
+    return summary or "Evento Calendar"
+
+
+def _calendar_event_telefono(event):
+    private = ((event.get("extendedProperties") or {}).get("private") or {})
+    tel = str(private.get("telefono") or "").strip()
+    if tel:
+        return re.sub(r"\D", "", normalizar_telefono(tel))
+    desc = str(event.get("description") or "")
+    m = re.search(r"(?:Tel[eé]fono|WhatsApp)\s*:\s*([+\d\s()-]{7,})", desc, flags=re.I)
+    if m:
+        return re.sub(r"\D", "", m.group(1))
+    return None
+
+
+def _calendar_event_correo(event):
+    private = ((event.get("extendedProperties") or {}).get("private") or {})
+    correo = str(private.get("correo") or "").strip()
+    if correo:
+        return correo
+    attendees = event.get("attendees") or []
+    for attendee in attendees:
+        if isinstance(attendee, dict):
+            email = str(attendee.get("email") or "").strip()
+            if email:
+                return email
+    return None
+
+
+def _calendar_event_payload(event, empresa_id):
+    event_id = str(event.get("id") or "").strip()
+    if not event_id:
+        return None
+
+    status_google = str(event.get("status") or "confirmed").strip().lower()
+    start_data = event.get("start") or {}
+    end_data = event.get("end") or {}
+    start_raw = start_data.get("dateTime") or start_data.get("date")
+    end_raw = end_data.get("dateTime") or end_data.get("date")
+
+    inicio = _calendar_iso_to_local(start_raw, start_data.get("timeZone") or timezone_actual())
+    fin = _calendar_iso_to_local(end_raw, end_data.get("timeZone") or timezone_actual())
+
+    # Los eventos cancelados de Google a veces vuelven sin start/end completos.
+    fecha = inicio.date().isoformat() if inicio else None
+    hora = inicio.strftime("%H:%M:%S") if inicio else None
+
+    private = ((event.get("extendedProperties") or {}).get("private") or {})
+    origen = str(private.get("origen") or "").strip() or "google_calendar"
+
+    estado = "cancelada" if status_google == "cancelled" else "confirmada"
+    if str(event.get("transparency") or "").lower() == "transparent" and estado != "cancelada":
+        estado = "confirmada"
+
+    return {
+        "empresa_id": str(empresa_id),
+        "telefono": _calendar_event_telefono(event),
+        "nombre_cliente": _calendar_event_cliente(event),
+        "servicio": _calendar_event_servicio(event),
+        "fecha": fecha,
+        "hora": hora,
+        "estado": estado,
+        "google_event_id": event_id,
+        "google_status": status_google,
+        "google_html_link": event.get("htmlLink"),
+        "calendar_updated_at": event.get("updated"),
+        "inicio_at": inicio.isoformat() if inicio else None,
+        "fin_at": fin.isoformat() if fin else None,
+        "correo": _calendar_event_correo(event),
+        "origen": origen,
+        "updated_at": datetime.now(pytz.UTC).isoformat(),
+    }
+
+
+def _reserva_por_google_event_id(empresa_id, google_event_id):
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/reservas",
+            headers=supabase_headers(),
+            params={
+                "select":"*",
+                "empresa_id":f"eq.{empresa_id}",
+                "google_event_id":f"eq.{google_event_id}",
+                "limit":"1",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows = r.json() if r.content else []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def _upsert_reserva_calendar(payload):
+    if not payload or not payload.get("empresa_id") or not payload.get("google_event_id"):
+        return False
+
+    existing = _reserva_por_google_event_id(payload["empresa_id"], payload["google_event_id"])
+    try:
+        if existing:
+            # Para cancelados sin fecha/hora, preserva los datos previos del Portal.
+            patch = dict(payload)
+            for k in ("fecha","hora","inicio_at","fin_at","telefono","nombre_cliente","correo","servicio"):
+                if patch.get(k) in (None, "") and existing.get(k) not in (None, ""):
+                    patch[k] = existing.get(k)
+            r = requests.patch(
+                f"{SUPABASE_URL}/rest/v1/reservas",
+                headers={**supabase_headers(), "Prefer":"return=minimal"},
+                params={"id":f"eq.{existing.get('id')}"},
+                json=patch,
+                timeout=SUPABASE_TIMEOUT,
+            )
+        else:
+            # Si es un cancelado completamente vacío que nunca conocimos, no ensucia agenda.
+            if payload.get("estado") == "cancelada" and not payload.get("fecha") and not payload.get("servicio"):
+                return True
+            r = requests.post(
+                f"{SUPABASE_URL}/rest/v1/reservas",
+                headers={**supabase_headers(), "Prefer":"resolution=merge-duplicates,return=minimal"},
+                params={"on_conflict":"empresa_id,google_event_id"},
+                json=payload,
+                timeout=SUPABASE_TIMEOUT,
+            )
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        detalle = ""
+        try:
+            detalle = f" | {r.status_code} {r.text[:600]}"
+        except Exception:
+            pass
+        print("CALENDAR SYNC UPSERT ERROR:", repr(e), detalle)
+        return False
+
+
+def sincronizar_google_calendar_empresa(empresa_id, dias_atras=None, dias_adelante=None):
+    """
+    Calendar -> Supabase/Portal.
+    Sincroniza eventos nuevos, cambios de hora y cancelaciones.
+    """
+    empresa_id = str(empresa_id or "").strip()
+    if not empresa_id:
+        return {"ok":False,"error":"empresa_id requerido"}
+
+    activar_por_empresa(empresa_id, canal="portal")
+
+    if not google_calendar_conexion(empresa_id) and not es_diego_calendar_legacy(empresa_id):
+        return {"ok":True,"conectado":False,"procesados":0,"actualizados":0}
+
+    ahora_utc = datetime.now(pytz.UTC)
+    atras = int(dias_atras if dias_atras is not None else CALENDAR_SYNC_DIAS_ATRAS)
+    adelante = int(dias_adelante if dias_adelante is not None else CALENDAR_SYNC_DIAS_ADELANTE)
+
+    time_min = (ahora_utc - timedelta(days=max(atras,0))).isoformat().replace("+00:00","Z")
+    time_max = (ahora_utc + timedelta(days=max(adelante,1))).isoformat().replace("+00:00","Z")
+
+    service = calendar_service()
+    calendar_id = google_calendar_id_actual()
+
+    page_token = None
+    procesados = 0
+    actualizados = 0
+    errores = 0
+
+    while True:
+        try:
+            req = service.events().list(
+                calendarId=calendar_id,
+                timeMin=time_min,
+                timeMax=time_max,
+                singleEvents=True,
+                showDeleted=True,
+                maxResults=min(max(CALENDAR_SYNC_MAX_RESULTS, 100), 2500),
+                pageToken=page_token,
+            )
+            data = req.execute()
+        except Exception as e:
+            print("CALENDAR SYNC LIST ERROR:", empresa_id, repr(e))
+            return {
+                "ok":False,
+                "conectado":True,
+                "procesados":procesados,
+                "actualizados":actualizados,
+                "errores":errores + 1,
+                "error":"No se pudo leer Google Calendar",
+            }
+
+        for event in data.get("items") or []:
+            procesados += 1
+            payload = _calendar_event_payload(event, empresa_id)
+            if not payload:
+                continue
+            if _upsert_reserva_calendar(payload):
+                actualizados += 1
+            else:
+                errores += 1
+
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+
+    # Estado de última sincronización en conexión.
+    try:
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/google_calendar_conexiones",
+            headers={**backend_headers(),"Prefer":"return=minimal"},
+            params={"empresa_id":f"eq.{empresa_id}"},
+            json={
+                "ultima_sincronizacion_at":datetime.now(pytz.UTC).isoformat(),
+                "ultima_sincronizacion_estado":"ok" if not errores else "parcial",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok":True,
+        "conectado":True,
+        "procesados":procesados,
+        "actualizados":actualizados,
+        "errores":errores,
+    }
+
+
+def _portal_reserva_actual(empresa_id, reserva_id):
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/reservas",
+        headers=supabase_headers(),
+        params={
+            "select":"*",
+            "id":f"eq.{reserva_id}",
+            "empresa_id":f"eq.{empresa_id}",
+            "limit":"1",
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows = r.json() if r.content else []
+    return rows[0] if rows else None
+
+
+@app.route("/portal/agenda/sincronizar", methods=["POST","OPTIONS"])
+def portal_agenda_sincronizar():
+    if request.method == "OPTIONS":
+        return portal_json({"ok":True},204)
+
+    perfil, empresa_id = _portal_empresa_propia()
+    if not perfil:
+        return portal_json({"ok":False,"error":"Sesión no autorizada"},401)
+    if not empresa_id:
+        return portal_json({"ok":False,"error":"Tu usuario no tiene empresa asociada"},409)
+
+    resultado = sincronizar_google_calendar_empresa(empresa_id)
+    return portal_json(resultado, 200 if resultado.get("ok") else 502)
+
+
+@app.route("/portal/agenda/reserva/<reserva_id>", methods=["PATCH","DELETE","OPTIONS"])
+def portal_agenda_editar_reserva(reserva_id):
+    if request.method == "OPTIONS":
+        return portal_json({"ok":True},204)
+
+    perfil, empresa_id = _portal_empresa_propia()
+    if not perfil:
+        return portal_json({"ok":False,"error":"Sesión no autorizada"},401)
+    if not empresa_id:
+        return portal_json({"ok":False,"error":"Tu usuario no tiene empresa asociada"},409)
+
+    activar_por_empresa(empresa_id, canal="portal")
+
+    try:
+        reserva = _portal_reserva_actual(empresa_id, reserva_id)
+    except Exception as e:
+        return portal_json({"ok":False,"error":"No se pudo leer la reserva"},500)
+
+    if not reserva:
+        return portal_json({"ok":False,"error":"Reserva no encontrada"},404)
+
+    event_id = str(reserva.get("google_event_id") or "").strip()
+    if not event_id:
+        return portal_json({"ok":False,"error":"La reserva no está vinculada a Google Calendar"},409)
+
+    if request.method == "DELETE":
+        try:
+            calendar_service().events().delete(
+                calendarId=google_calendar_id_actual(),
+                eventId=event_id,
+                sendUpdates="all",
+            ).execute()
+        except Exception as e:
+            # Si Google ya lo considera borrado/cancelado, igualmente reflejamos estado local.
+            print("PORTAL CALENDAR CANCEL ERROR:", repr(e))
+
+        try:
+            requests.patch(
+                f"{SUPABASE_URL}/rest/v1/reservas",
+                headers={**supabase_headers(),"Prefer":"return=minimal"},
+                params={"id":f"eq.{reserva_id}"},
+                json={
+                    "estado":"cancelada",
+                    "google_status":"cancelled",
+                    "updated_at":datetime.now(pytz.UTC).isoformat(),
+                },
+                timeout=SUPABASE_TIMEOUT,
+            ).raise_for_status()
+        except Exception as e:
+            return portal_json({"ok":False,"error":"Calendar se actualizó, pero no pude actualizar el Portal"},500)
+
+        return portal_json({"ok":True,"estado":"cancelada"})
+
+    data = request.get_json(silent=True) or {}
+    fecha = str(data.get("fecha") or reserva.get("fecha") or "").strip()
+    hora = str(data.get("hora") or reserva.get("hora") or "").strip()
+    servicio = str(data.get("servicio") or reserva.get("servicio") or "Reserva").strip()
+    nombre = str(data.get("nombre_cliente") or reserva.get("nombre_cliente") or "").strip()
+
+    if not fecha or not hora:
+        return portal_json({"ok":False,"error":"Fecha y hora son obligatorias"},400)
+
+    try:
+        hora = hora[:5]
+        naive = datetime.strptime(f"{fecha} {hora}", "%Y-%m-%d %H:%M")
+        inicio = zona_local().localize(naive)
+        fin = inicio + timedelta(minutes=cfg_int("duracion_reserva", DEFAULT_DURACION_RESERVA))
+
+        event = calendar_service().events().get(
+            calendarId=google_calendar_id_actual(),
+            eventId=event_id,
+        ).execute()
+
+        event["summary"] = f"{servicio} - {nombre}" if nombre else servicio
+        event["start"] = {"dateTime":inicio.isoformat(),"timeZone":timezone_actual()}
+        event["end"] = {"dateTime":fin.isoformat(),"timeZone":timezone_actual()}
+
+        resultado = calendar_service().events().update(
+            calendarId=google_calendar_id_actual(),
+            eventId=event_id,
+            body=event,
+            sendUpdates="all",
+        ).execute()
+
+        payload = _calendar_event_payload(resultado, empresa_id)
+        _upsert_reserva_calendar(payload)
+
+        return portal_json({
+            "ok":True,
+            "reserva":{
+                "id":reserva_id,
+                "fecha":payload.get("fecha"),
+                "hora":payload.get("hora"),
+                "estado":payload.get("estado"),
+            }
+        })
+    except Exception as e:
+        print("PORTAL CALENDAR UPDATE ERROR:", repr(e))
+        return portal_json({"ok":False,"error":"No pude actualizar la cita en Google Calendar"},502)
+
+
+@app.route("/internal/calendar-sync", methods=["POST"])
+def internal_calendar_sync():
+    """
+    Endpoint para Render Cron/otro scheduler.
+    Header requerido: X-Nexia-Cron-Secret.
+    """
+    if not CALENDAR_CRON_SECRET:
+        return portal_json({"ok":False,"error":"CALENDAR_CRON_SECRET no configurado"},503)
+
+    supplied = str(request.headers.get("X-Nexia-Cron-Secret") or "")
+    if not hmac.compare_digest(supplied, CALENDAR_CRON_SECRET):
+        return portal_json({"ok":False,"error":"No autorizado"},401)
+
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/google_calendar_conexiones",
+            headers=backend_headers(),
+            params={"select":"empresa_id","activo":"eq.true","limit":"500"},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows = r.json() if r.content else []
+    except Exception as e:
+        return portal_json({"ok":False,"error":"No se pudieron listar conexiones"},500)
+
+    resultados = []
+    for row in rows:
+        empresa_id = str(row.get("empresa_id") or "").strip()
+        if not empresa_id:
+            continue
+        try:
+            resultados.append({"empresa_id":empresa_id, **sincronizar_google_calendar_empresa(empresa_id)})
+        except Exception as e:
+            resultados.append({"empresa_id":empresa_id,"ok":False,"error":str(e)[:180]})
+
+    return portal_json({
+        "ok":True,
+        "empresas":len(resultados),
+        "resultados":resultados,
+    })
+
+
 # ============================================================
 # FECHAS Y HORAS NATURALES
 # ============================================================
@@ -2998,12 +3456,24 @@ def guardar_reserva_supabase(telefono, nombre_cliente, servicio_nombre, inicio, 
             "updated_at": ahora_local().isoformat(),
         }
 
-        r = requests.post(
-            f"{SUPABASE_URL}/rest/v1/reservas",
-            headers={**headers, "Prefer": "return=representation"},
-            json=nueva_reserva,
-            timeout=SUPABASE_TIMEOUT,
-        )
+        # Si Google ya devolvió event_id, el guardado es idempotente.
+        if google_event_id:
+            nueva_reserva["google_status"] = "confirmed"
+            nueva_reserva["origen"] = "whatsapp_nexia"
+            r = requests.post(
+                f"{SUPABASE_URL}/rest/v1/reservas",
+                headers={**headers, "Prefer": "resolution=merge-duplicates,return=representation"},
+                params={"on_conflict":"empresa_id,google_event_id"},
+                json=nueva_reserva,
+                timeout=SUPABASE_TIMEOUT,
+            )
+        else:
+            r = requests.post(
+                f"{SUPABASE_URL}/rest/v1/reservas",
+                headers={**headers, "Prefer": "return=representation"},
+                json=nueva_reserva,
+                timeout=SUPABASE_TIMEOUT,
+            )
         r.raise_for_status()
 
         filas = r.json() if r.content else []
@@ -9511,6 +9981,13 @@ def portal_agenda():
         return portal_json({"ok": False, "error": "Sesión no autorizada"}, 401)
     headers = supabase_headers()
     try:
+        # Para clientes normales, Agenda se reconcilia con Google Calendar antes de leer.
+        if CALENDAR_SYNC_AUTO_PORTAL and not es_superadmin(perfil) and perfil.get("empresa_id"):
+            try:
+                sincronizar_google_calendar_empresa(str(perfil.get("empresa_id")))
+            except Exception as sync_error:
+                print("PORTAL AGENDA AUTO SYNC ERROR:", repr(sync_error))
+
         filtros = {}
         if not es_superadmin(perfil):
             filtros["empresa_id"] = f"eq.{perfil.get('empresa_id')}"
