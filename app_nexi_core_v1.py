@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-12-NEXI-V3.1.0-CALENDAR-SYNC-BIDIRECCIONAL"
+APP_VERSION = "2026-09-12-NEXI-V3.1.1-ONBOARDING-ECOMMERCE-CONDICIONAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -4390,6 +4390,7 @@ CORE_COMMON_FIELDS = [
     "nombre_asistente",
     "rubro",
     "direccion_fisica",
+    "ecommerce_provider",
     "productos_servicios",
     "presencia_digital",
     "objetivo",
@@ -4420,6 +4421,12 @@ CORE_QUESTIONS = {
         "text": "¿Tu negocio tiene una dirección física donde atiende clientes?",
         "kind": "physical_address",
         "help": "Si atiendes presencialmente, agrega la dirección. También puedes pegar el enlace exacto de Google Maps si ya lo tienes.",
+    },
+    "ecommerce_provider": {
+        "text": "¿Tienes una tienda online?",
+        "kind": "ecommerce_provider",
+        "help": "Si usas Jumpseller o Shopify, Nexia tomará productos, precios y stock directamente desde la tienda cuando la conectes en el Portal.",
+        "options": ["Jumpseller", "Shopify", "Otra plataforma", "No tengo tienda online"],
     },
     "productos_servicios": {
         "text": "¿Qué productos o servicios ofrece tu negocio?",
@@ -4809,6 +4816,10 @@ def _core_parse_handoff_details(tipo, texto):
 
 def _core_secuencia(datos):
     seq=list(CORE_COMMON_FIELDS)
+
+    ecommerce_provider = _core_norm(datos.get("ecommerce_provider"))
+    if ecommerce_provider in {"jumpseller", "shopify"}:
+        seq = [k for k in seq if k != "productos_servicios"]
 
     presencia=_core_presencia(datos)
     sitio=str(presencia.get("web") or "").strip()
@@ -7294,6 +7305,20 @@ def core_onboarding_answer(token):
                 datos["referencia_direccion"] = referencia
                 datos["google_maps_url"] = maps_url
 
+        elif key == "ecommerce_provider":
+            provider = _core_norm(value)
+            if provider not in {"jumpseller", "shopify", "otra plataforma", "no tengo tienda online"}:
+                return core_json({"ok":False,"error":"Selecciona Jumpseller, Shopify, Otra plataforma o No tengo tienda online"},400)
+
+            datos["ecommerce_provider"] = provider
+            if provider in {"jumpseller", "shopify"}:
+                # La tienda conectada será la fuente principal de catálogo/precio/stock.
+                datos["catalogo_fuente"] = "ecommerce"
+                datos["productos_servicios"] = ""
+                datos["catalogo_productos_servicios"] = []
+            else:
+                datos["catalogo_fuente"] = "manual"
+
         elif key == "productos_servicios" and isinstance(value, (dict, list)):
             items = value.get("items") if isinstance(value, dict) else value
             if not isinstance(items, list):
@@ -7312,6 +7337,7 @@ def core_onboarding_answer(token):
             if not catalogo:
                 return core_json({"ok":False,"error":"Agrega al menos un producto o servicio"},400)
 
+            datos["catalogo_fuente"] = "manual"
             datos["catalogo_productos_servicios"] = catalogo
             datos[key] = "; ".join(
                 f"{x['nombre']} — {x['precio']}" if x.get("precio") else x["nombre"]
