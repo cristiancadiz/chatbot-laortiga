@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-12-NEXI-V3.1.1-ONBOARDING-ECOMMERCE-CONDICIONAL"
+APP_VERSION = "2026-09-12-NEXI-V3.2.0-CALENDARIO-PORTAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -9996,6 +9996,112 @@ def portal_cerrar_conversacion(conversacion_id):
         return portal_json({"ok": True, "modo": "bot", "estado_handoff": "cerrado"})
     except Exception as e:
         return portal_json({"ok": False, "error": str(e)[:300]}, 500)
+
+
+
+@app.route("/portal/agenda/eventos", methods=["GET", "OPTIONS"])
+def portal_agenda_eventos():
+    if request.method == "OPTIONS":
+        return portal_json({"ok":True},204)
+
+    perfil = portal_usuario_autorizado()
+    if not perfil:
+        return portal_json({"ok":False,"error":"Sesión no autorizada"},401)
+
+    try:
+        headers = supabase_headers()
+        params = {
+            "select":"id,empresa_id,telefono,nombre_cliente,servicio,fecha,hora,estado,google_event_id,google_status,google_html_link,inicio_at,fin_at,correo,origen",
+            "order":"fecha.asc,hora.asc",
+            "limit":"1000",
+        }
+
+        if not es_superadmin(perfil):
+            params["empresa_id"] = f"eq.{perfil.get('empresa_id')}"
+
+        start = str(request.args.get("start") or "").strip()[:10]
+        end = str(request.args.get("end") or "").strip()[:10]
+        estado = str(request.args.get("estado") or "").strip()
+        servicio = str(request.args.get("servicio") or "").strip()
+
+        if start:
+            params["fecha"] = f"gte.{start}"
+        if end:
+            # FullCalendar entrega end exclusivo; lo dejamos como lt.
+            params["and"] = f"(fecha.gte.{start or '1900-01-01'},fecha.lt.{end})"
+            params.pop("fecha", None)
+        if estado:
+            params["estado"] = f"eq.{estado}"
+        if servicio:
+            params["servicio"] = f"eq.{servicio}"
+
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/reservas",
+            headers=headers,
+            params=params,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows = r.json() if r.content else []
+
+        events = []
+        for row in rows:
+            fecha = str(row.get("fecha") or "").strip()
+            hora = str(row.get("hora") or "").strip()
+            if not fecha:
+                continue
+
+            start_iso = row.get("inicio_at")
+            end_iso = row.get("fin_at")
+
+            if not start_iso:
+                start_iso = f"{fecha}T{(hora[:5] if hora else '00:00')}:00"
+
+            if not end_iso:
+                try:
+                    base = datetime.fromisoformat(start_iso.replace("Z","+00:00"))
+                    if base.tzinfo is None:
+                        base = zona_local().localize(base)
+                    end_iso = (base + timedelta(minutes=cfg_int("duracion_reserva", DEFAULT_DURACION_RESERVA))).isoformat()
+                except Exception:
+                    end_iso = None
+
+            estado_row = str(row.get("estado") or "confirmada").lower()
+            title = str(row.get("servicio") or "Reserva")
+            cliente = str(row.get("nombre_cliente") or row.get("telefono") or "").strip()
+            if cliente:
+                title += f" · {cliente}"
+
+            events.append({
+                "id":str(row.get("id")),
+                "title":title,
+                "start":start_iso,
+                "end":end_iso,
+                "editable": bool(row.get("google_event_id")) and estado_row != "cancelada",
+                "classNames":[
+                    "nexia-event",
+                    f"estado-{re.sub(r'[^a-z0-9_-]+','-',estado_row)}"
+                ],
+                "extendedProps":{
+                    "cliente":row.get("nombre_cliente"),
+                    "telefono":row.get("telefono"),
+                    "correo":row.get("correo"),
+                    "servicio":row.get("servicio"),
+                    "estado":row.get("estado"),
+                    "origen":row.get("origen") or ("Google Calendar" if row.get("google_event_id") else "Nexia"),
+                    "google_event_id":row.get("google_event_id"),
+                    "google_html_link":row.get("google_html_link"),
+                    "google_status":row.get("google_status"),
+                    "fecha":row.get("fecha"),
+                    "hora":row.get("hora"),
+                }
+            })
+
+        return portal_json({"ok":True,"events":events})
+
+    except Exception as e:
+        print("PORTAL CALENDAR EVENTS ERROR:",repr(e))
+        return portal_json({"ok":False,"error":"No pude cargar los eventos del calendario"},500)
 
 
 @app.route("/portal/agenda", methods=["GET", "OPTIONS"])
