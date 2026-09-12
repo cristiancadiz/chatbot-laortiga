@@ -21,9 +21,11 @@ from openai import OpenAI
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
+from cryptography.fernet import Fernet, InvalidToken
+import base64
 
 
-APP_VERSION = "2026-09-12-NEXI-V2.9.3-WEB-RRSS-ONBOARDING"
+APP_VERSION = "2026-09-12-NEXI-V3.0.0-ECOMMERCE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -4919,6 +4921,7 @@ CORE_AGENT_NAMES = {
     "agenda": "Agenda",
     "soporte": "Soporte",
     "seguimiento": "Seguimiento",
+    "ecommerce": "Ecommerce",
 }
 
 
@@ -5037,6 +5040,9 @@ def _core_route_intent(texto, datos):
 
     if _core_es_handoff(texto):
         return "handoff"
+
+    if _ecommerce_intent(texto):
+        return "ecommerce"
 
     if _texto_parece_intencion_agenda(texto):
         # La intención es agenda aunque el negocio aún no haya conectado Calendar.
@@ -5685,6 +5691,538 @@ def _core_agent_seguimiento(empresa_id, texto, ctx=None):
     )
 
 
+
+# ============================================================
+# NEXIA V3.0 - ECOMMERCE ADAPTER
+# JUMPSELLER + SHOPIFY (LECTURA)
+# ============================================================
+
+ECOMMERCE_TIMEOUT = float(os.getenv("ECOMMERCE_TIMEOUT", "7"))
+SHOPIFY_API_VERSION = os.getenv("SHOPIFY_API_VERSION", "2026-07").strip()
+
+
+def _ecommerce_fernet():
+    raw = str(os.getenv("ECOMMERCE_ENCRYPTION_KEY") or "").strip()
+    if raw:
+        try:
+            return Fernet(raw.encode("utf-8"))
+        except Exception:
+            pass
+    secret = str(os.getenv("SECRET_KEY") or app.secret_key or "change-me-in-render").encode("utf-8")
+    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(secret).digest()))
+
+
+def _ecommerce_encrypt(value):
+    value = str(value or "")
+    return _ecommerce_fernet().encrypt(value.encode()).decode() if value else ""
+
+
+def _ecommerce_decrypt(value):
+    value = str(value or "")
+    if not value:
+        return ""
+    try:
+        return _ecommerce_fernet().decrypt(value.encode()).decode()
+    except Exception:
+        return ""
+
+
+def _ecommerce_clean_domain(value):
+    value = str(value or "").strip()
+    value = re.sub(r"^https?://", "", value, flags=re.I)
+    return value.strip("/")
+
+
+def _ecommerce_get_config(empresa_id, use_cache=True):
+    empresa_id = str(empresa_id or "").strip()
+    if not empresa_id:
+        return None
+    cache_key = f"ecommerce_config:{empresa_id}"
+    if use_cache:
+        c = _cache_get(cache_key)
+        if c is not None:
+            return c or None
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/ecommerce_integraciones",
+            headers=backend_headers(),
+            params={
+                "select":"*",
+                "empresa_id":f"eq.{empresa_id}",
+                "activo":"eq.true",
+                "limit":"1"
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows = r.json() if r.content else []
+        if not rows:
+            _cache_set(cache_key, {})
+            return None
+        row = dict(rows[0])
+        for src, dst in (
+            ("access_token_enc","access_token"),
+            ("login_key_enc","login_key"),
+            ("auth_token_enc","auth_token"),
+        ):
+            row[dst] = _ecommerce_decrypt(row.get(src))
+        _cache_set(cache_key, row)
+        return row
+    except Exception as e:
+        print("NEXI ECOMMERCE CONFIG ERROR:", repr(e))
+        return None
+
+
+def _ecommerce_clear_cache(empresa_id):
+    _cache_set(f"ecommerce_config:{empresa_id}", {}, ttl=1)
+
+
+def _ecommerce_money(value, currency="CLP"):
+    try:
+        n = float(value)
+        if str(currency or "CLP").upper() == "CLP":
+            return f"${int(round(n)):,}".replace(",", ".")
+        return f"{n:,.2f} {currency}"
+    except Exception:
+        return str(value or "")
+
+
+def _jumpseller_headers(cfg):
+    h = {"Accept":"application/json"}
+    if cfg.get("login_key") and cfg.get("auth_token"):
+        h["X-LOGIN-KEY"] = cfg["login_key"]
+        h["X-AUTH-TOKEN"] = cfg["auth_token"]
+    elif cfg.get("access_token"):
+        h["Authorization"] = f"Bearer {cfg['access_token']}"
+    return h
+
+
+def _jumpseller_products(cfg, query, limit=6):
+    r = requests.get(
+        "https://api.jumpseller.com/v1/products.json",
+        headers=_jumpseller_headers(cfg),
+        params={"limit":100},
+        timeout=ECOMMERCE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows = r.json() if r.content else []
+    q = _core_norm(query)
+    words = [w for w in q.split() if len(w) > 2]
+    out = []
+    for raw in rows:
+        prod = raw.get("product") if isinstance(raw, dict) and "product" in raw else raw
+        if not isinstance(prod, dict):
+            continue
+        hay = _core_norm(" ".join([
+            str(prod.get("name") or ""),
+            str(prod.get("description") or ""),
+            str(prod.get("sku") or ""),
+        ]))
+        if words and not all(w in hay for w in words):
+            continue
+        variants = prod.get("variants") or []
+        stock = None
+        vals = []
+        for v in variants:
+            if not isinstance(v, dict):
+                continue
+            raw_stock = v.get("stock")
+            if raw_stock is None:
+                raw_stock = v.get("stock_quantity")
+            try:
+                vals.append(int(raw_stock))
+            except Exception:
+                pass
+        if vals:
+            stock = sum(vals)
+        out.append({
+            "id":prod.get("id"),
+            "name":prod.get("name") or "Producto",
+            "price":prod.get("price"),
+            "currency":cfg.get("currency") or "CLP",
+            "stock":stock,
+            "sku":prod.get("sku"),
+            "url":prod.get("url") or prod.get("permalink"),
+            "provider":"jumpseller",
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _jumpseller_order(cfg, reference):
+    r = requests.get(
+        "https://api.jumpseller.com/v1/orders.json",
+        headers=_jumpseller_headers(cfg),
+        params={"limit":100},
+        timeout=ECOMMERCE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows = r.json() if r.content else []
+    ref = _core_norm(reference).replace("#","").strip()
+    for raw in rows:
+        order = raw.get("order") if isinstance(raw, dict) and "order" in raw else raw
+        if not isinstance(order, dict):
+            continue
+        candidates = [
+            order.get("id"), order.get("number"), order.get("order_number"), order.get("email")
+        ]
+        candidates = [_core_norm(x).replace("#","") for x in candidates if x not in (None,"")]
+        if ref in candidates:
+            return {
+                "number":order.get("number") or order.get("order_number") or order.get("id"),
+                "payment_status":order.get("payment_status") or order.get("status"),
+                "fulfillment_status":order.get("fulfillment_status") or order.get("shipping_status"),
+                "total":order.get("total"),
+                "currency":order.get("currency") or cfg.get("currency") or "CLP",
+                "tracking_number":order.get("shipping_tracking_number"),
+                "tracking_company":order.get("shipping_tracking_company"),
+                "provider":"jumpseller",
+            }
+    return None
+
+
+def _shopify_graphql(cfg, query, variables=None):
+    domain = _ecommerce_clean_domain(cfg.get("store_domain"))
+    if not domain:
+        raise RuntimeError("Dominio Shopify no configurado")
+    url = f"https://{domain}/admin/api/{SHOPIFY_API_VERSION}/graphql.json"
+    r = requests.post(
+        url,
+        headers={
+            "X-Shopify-Access-Token":cfg.get("access_token") or "",
+            "Content-Type":"application/json",
+            "Accept":"application/json",
+        },
+        json={"query":query,"variables":variables or {}},
+        timeout=ECOMMERCE_TIMEOUT,
+    )
+    r.raise_for_status()
+    body = r.json() if r.content else {}
+    if body.get("errors"):
+        raise RuntimeError(str(body["errors"])[:500])
+    return body.get("data") or {}
+
+
+def _shopify_products(cfg, query, limit=6):
+    gql = """
+    query NexiaProducts($first:Int!, $query:String!) {
+      products(first:$first, query:$query) {
+        nodes {
+          id title handle onlineStoreUrl totalInventory
+          variants(first:10) {
+            nodes { id title sku price availableForSale inventoryQuantity }
+          }
+        }
+      }
+    }
+    """
+    data = _shopify_graphql(
+        cfg, gql,
+        {"first":min(max(int(limit),1),20),"query":str(query or "").strip()}
+    )
+    out = []
+    for prod in ((data.get("products") or {}).get("nodes") or []):
+        variants = ((prod.get("variants") or {}).get("nodes") or [])
+        first = variants[0] if variants else {}
+        out.append({
+            "id":prod.get("id"),
+            "name":prod.get("title") or "Producto",
+            "price":first.get("price"),
+            "currency":cfg.get("currency") or "CLP",
+            "stock":prod.get("totalInventory"),
+            "sku":first.get("sku"),
+            "url":prod.get("onlineStoreUrl"),
+            "provider":"shopify",
+        })
+    return out
+
+
+def _shopify_order(cfg, reference):
+    ref = str(reference or "").strip()
+    q = f"email:{ref}" if "@" in ref else f"name:{ref}"
+    gql = """
+    query NexiaOrder($query:String!) {
+      orders(first:5, query:$query) {
+        nodes {
+          id name displayFinancialStatus displayFulfillmentStatus
+          currentTotalPriceSet { shopMoney { amount currencyCode } }
+          fulfillments { trackingInfo { number company url } }
+        }
+      }
+    }
+    """
+    data = _shopify_graphql(cfg, gql, {"query":q})
+    nodes = ((data.get("orders") or {}).get("nodes") or [])
+    if not nodes:
+        return None
+    order = nodes[0]
+    money = ((order.get("currentTotalPriceSet") or {}).get("shopMoney") or {})
+    tracking = []
+    for f in order.get("fulfillments") or []:
+        tracking.extend(f.get("trackingInfo") or [])
+    tr = tracking[0] if tracking else {}
+    return {
+        "number":order.get("name"),
+        "payment_status":order.get("displayFinancialStatus"),
+        "fulfillment_status":order.get("displayFulfillmentStatus"),
+        "total":money.get("amount"),
+        "currency":money.get("currencyCode") or cfg.get("currency") or "CLP",
+        "tracking_number":tr.get("number"),
+        "tracking_company":tr.get("company"),
+        "tracking_url":tr.get("url"),
+        "provider":"shopify",
+    }
+
+
+def ecommerce_search_products(empresa_id, query, limit=6):
+    cfg_e = _ecommerce_get_config(empresa_id)
+    if not cfg_e:
+        return []
+    provider = str(cfg_e.get("provider") or "").lower()
+    if provider == "jumpseller":
+        return _jumpseller_products(cfg_e, query, limit)
+    if provider == "shopify":
+        return _shopify_products(cfg_e, query, limit)
+    return []
+
+
+def ecommerce_get_order(empresa_id, reference):
+    cfg_e = _ecommerce_get_config(empresa_id)
+    if not cfg_e:
+        return None
+    provider = str(cfg_e.get("provider") or "").lower()
+    if provider == "jumpseller":
+        return _jumpseller_order(cfg_e, reference)
+    if provider == "shopify":
+        return _shopify_order(cfg_e, reference)
+    return None
+
+
+def _ecommerce_extract_ref(texto):
+    t = str(texto or "")
+    m = re.search(r"#?\b(\d{3,12})\b", t)
+    if m:
+        return m.group(1)
+    m = re.search(r"[\w.\-+]+@[\w.\-]+\.[A-Za-z]{2,}", t)
+    return m.group(0) if m else ""
+
+
+def _ecommerce_product_query(texto):
+    t = str(texto or "")
+    t = re.sub(
+        r"\b(tienen|tienes|hay|stock|disponible|disponibilidad|producto|productos|precio|precios|valor|valores|cuanto|cuánto|cuesta|quiero|busco|necesito|comprar|venden|vende|una|un|el|la|los|las|de|en)\b",
+        " ", t, flags=re.I
+    )
+    return re.sub(r"\s+"," ",t).strip(" ?!.,") or str(texto or "").strip()
+
+
+def _ecommerce_intent(texto):
+    t = _core_norm(texto)
+    return any(x in t for x in (
+        "stock","disponible","disponibilidad","sku","talla","color",
+        "producto","productos","catalogo","catálogo",
+        "mi pedido","pedido #","pedido numero","pedido número",
+        "estado del pedido","tracking","seguimiento de pedido",
+        "despacho de mi","envio de mi","envío de mi",
+    ))
+
+
+def _core_agent_ecommerce(empresa_id, texto, ctx=None):
+    cfg_e = _ecommerce_get_config(empresa_id)
+    if not cfg_e:
+        return (
+            "Este negocio todavía no tiene una tienda online conectada a Nexia. "
+            "Puedo ayudarte con la información general disponible."
+        )
+
+    t = _core_norm(texto)
+    wants_order = any(x in t for x in (
+        "pedido","orden","tracking","seguimiento","despacho de mi","envio de mi","envío de mi"
+    ))
+
+    if wants_order:
+        ref = _ecommerce_extract_ref(texto)
+        if not ref:
+            return "Para revisar tu pedido, indícame el número de pedido o el correo asociado a la compra."
+        try:
+            order = ecommerce_get_order(empresa_id, ref)
+        except Exception as e:
+            print("NEXI ECOMMERCE ORDER ERROR:", repr(e))
+            return "No pude consultar el pedido en este momento. Intenta nuevamente en unos minutos."
+        if not order:
+            return "No encontré un pedido con ese dato. Revisa el número o correo e inténtalo nuevamente."
+
+        parts = [f"Pedido {order.get('number') or ref}."]
+        if order.get("payment_status"):
+            parts.append(f"Pago: {order['payment_status']}.")
+        if order.get("fulfillment_status"):
+            parts.append(f"Despacho: {order['fulfillment_status']}.")
+        if order.get("total"):
+            parts.append(f"Total: {_ecommerce_money(order['total'], order.get('currency'))}.")
+        if order.get("tracking_number"):
+            tr = f"Seguimiento: {order['tracking_number']}"
+            if order.get("tracking_company"):
+                tr += f" ({order['tracking_company']})"
+            parts.append(tr + ".")
+        if order.get("tracking_url"):
+            parts.append(f"Tracking: {order['tracking_url']}")
+        return " ".join(parts)
+
+    query = _ecommerce_product_query(texto)
+    try:
+        products = ecommerce_search_products(empresa_id, query, 5)
+    except Exception as e:
+        print("NEXI ECOMMERCE PRODUCT ERROR:", repr(e))
+        return "No pude consultar la tienda en este momento. Intenta nuevamente en unos minutos."
+
+    if not products:
+        return "No encontré un producto que coincida con tu búsqueda en la tienda conectada."
+
+    lines = []
+    for prod in products[:5]:
+        line = f"• {prod.get('name') or 'Producto'}"
+        if prod.get("price") not in (None,""):
+            line += f" — {_ecommerce_money(prod['price'], prod.get('currency'))}"
+        if prod.get("stock") is not None:
+            try:
+                line += " — disponible" if int(prod["stock"]) > 0 else " — sin stock"
+            except Exception:
+                pass
+        if prod.get("url"):
+            line += f"\n  {prod['url']}"
+        lines.append(line)
+    return "Encontré esto en la tienda:\n" + "\n".join(lines)
+
+
+@app.route("/portal/integraciones/ecommerce", methods=["GET","POST","DELETE","OPTIONS"])
+def portal_integracion_ecommerce():
+    if request.method == "OPTIONS":
+        return portal_json({"ok":True},204)
+
+    perfil, empresa_id = _portal_empresa_propia()
+    if not perfil:
+        return portal_json({"ok":False,"error":"Sesión no autorizada"},401)
+    if not empresa_id:
+        return portal_json({"ok":False,"error":"Tu usuario no tiene una empresa asociada"},409)
+
+    try:
+        headers = backend_headers()
+
+        if request.method == "GET":
+            cfg_e = _ecommerce_get_config(empresa_id, use_cache=False)
+            if not cfg_e:
+                return portal_json({"ok":True,"conectado":False})
+            return portal_json({
+                "ok":True,
+                "conectado":True,
+                "provider":cfg_e.get("provider"),
+                "store_domain":cfg_e.get("store_domain"),
+                "store_url":cfg_e.get("store_url"),
+                "modo":"lectura",
+            })
+
+        if request.method == "DELETE":
+            r = requests.patch(
+                f"{SUPABASE_URL}/rest/v1/ecommerce_integraciones",
+                headers={**headers,"Prefer":"return=minimal"},
+                params={"empresa_id":f"eq.{empresa_id}"},
+                json={"activo":False,"updated_at":datetime.now(pytz.UTC).isoformat()},
+                timeout=SUPABASE_TIMEOUT,
+            )
+            r.raise_for_status()
+            _ecommerce_clear_cache(empresa_id)
+            return portal_json({"ok":True})
+
+        data = request.get_json(silent=True) or {}
+        provider = str(data.get("provider") or "").strip().lower()
+        if provider not in {"jumpseller","shopify"}:
+            return portal_json({"ok":False,"error":"Proveedor no válido"},400)
+
+        payload = {
+            "empresa_id":empresa_id,
+            "provider":provider,
+            "activo":True,
+            "updated_at":datetime.now(pytz.UTC).isoformat(),
+        }
+
+        if provider == "jumpseller":
+            store_url = str(data.get("store_url") or "").strip()
+            login_key = str(data.get("login_key") or "").strip()
+            auth_token = str(data.get("auth_token") or "").strip()
+            if not (login_key and auth_token):
+                return portal_json({"ok":False,"error":"Ingresa Login Key y Auth Token de Jumpseller."},400)
+            payload.update({
+                "store_url":store_url,
+                "store_domain":_ecommerce_clean_domain(store_url),
+                "login_key_enc":_ecommerce_encrypt(login_key),
+                "auth_token_enc":_ecommerce_encrypt(auth_token),
+                "access_token_enc":"",
+            })
+
+        if provider == "shopify":
+            domain = _ecommerce_clean_domain(data.get("store_domain"))
+            token = str(data.get("access_token") or "").strip()
+            if not domain or not token:
+                return portal_json({"ok":False,"error":"Ingresa el dominio myshopify.com y el Admin API access token."},400)
+            payload.update({
+                "store_domain":domain,
+                "store_url":f"https://{domain}",
+                "access_token_enc":_ecommerce_encrypt(token),
+                "login_key_enc":"",
+                "auth_token_enc":"",
+            })
+
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/ecommerce_integraciones",
+            headers={**headers,"Prefer":"resolution=merge-duplicates,return=representation"},
+            params={"on_conflict":"empresa_id"},
+            json=payload,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        _ecommerce_clear_cache(empresa_id)
+
+        # Prueba de conexión.
+        cfg_test = _ecommerce_get_config(empresa_id, use_cache=False)
+        try:
+            if provider == "jumpseller":
+                _jumpseller_products(cfg_test, "", 1)
+            else:
+                _shopify_products(cfg_test, "", 1)
+        except Exception as e:
+            print("NEXI ECOMMERCE TEST CONNECTION ERROR:",repr(e))
+            return portal_json({
+                "ok":False,
+                "error":"Las credenciales se guardaron, pero la prueba de conexión falló. Revisa permisos, token y dominio."
+            },400)
+
+        return portal_json({"ok":True,"conectado":True,"provider":provider})
+
+    except Exception as e:
+        print("PORTAL ECOMMERCE ERROR:",repr(e))
+        return portal_json({"ok":False,"error":"No se pudo gestionar la integración ecommerce"},500)
+
+
+@app.route("/portal/integraciones/ecommerce/probar", methods=["POST","OPTIONS"])
+def portal_integracion_ecommerce_probar():
+    if request.method == "OPTIONS":
+        return portal_json({"ok":True},204)
+    perfil, empresa_id = _portal_empresa_propia()
+    if not perfil:
+        return portal_json({"ok":False,"error":"Sesión no autorizada"},401)
+    data = request.get_json(silent=True) or {}
+    query = str(data.get("query") or "").strip()
+    if not query:
+        return portal_json({"ok":False,"error":"Escribe un producto para probar"},400)
+    try:
+        products = ecommerce_search_products(empresa_id, query, 5)
+        return portal_json({"ok":True,"productos":products})
+    except Exception as e:
+        print("PORTAL ECOMMERCE PROBAR ERROR:",repr(e))
+        return portal_json({"ok":False,"error":"No pude consultar la tienda"},500)
+
+
 CORE_AGENT_REGISTRY = {
     "atencion": _core_agent_atencion,
     "conocimiento": _core_agent_conocimiento,
@@ -5692,6 +6230,7 @@ CORE_AGENT_REGISTRY = {
     "agenda": _core_agent_agenda,
     "soporte": _core_agent_soporte,
     "seguimiento": _core_agent_seguimiento,
+    "ecommerce": _core_agent_ecommerce,
 }
 
 
