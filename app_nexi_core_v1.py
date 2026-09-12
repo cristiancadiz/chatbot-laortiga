@@ -23,7 +23,7 @@ from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
-APP_VERSION = "2026-09-11-NEXI-V2.9.2-PRECIOS-15990-29990"
+APP_VERSION = "2026-09-12-NEXI-V2.9.3-WEB-RRSS-ONBOARDING"
 load_dotenv()
 
 app = Flask(__name__)
@@ -3919,6 +3919,7 @@ CORE_COMMON_FIELDS = [
     "rubro",
     "direccion_fisica",
     "productos_servicios",
+    "presencia_digital",
     "objetivo",
     "personas_atencion",
 ]
@@ -3953,6 +3954,11 @@ CORE_QUESTIONS = {
         "kind": "service_catalog",
         "help": "Agrega uno por uno. El precio es opcional: si no lo publicas, déjalo vacío.",
     },
+    "presencia_digital": {
+        "text": "Agrega tu sitio web y redes sociales públicas.",
+        "kind": "digital_presence",
+        "help": "Todo es opcional. Si agregas un sitio web, después podrás decidir si quieres usar su información pública para responder consultas. Las redes sociales se guardan para poder informarlas a tus clientes.",
+    },
     "objetivo": {
         "text": "¿Qué necesitas que haga tu asistente?",
         "kind": "multi_choice",
@@ -3977,7 +3983,7 @@ CORE_QUESTIONS = {
         "help": "Esto nos ayuda a preparar la derivación y el trabajo del equipo.",
     },
     "aprende_web": {
-        "text": "¿Quieres usar la información de tu sitio web para responder consultas?",
+        "text": "¿Quieres usar la información pública de tu sitio web para responder consultas?",
         "kind": "choice",
         "options": ["Sí, aprender de mi web", "No, solo guardar el enlace"],
         "help": "Si eliges Sí, se leerán páginas públicas relevantes de tu sitio y se guardará una versión resumida para responder consultas.",
@@ -4926,6 +4932,17 @@ def _core_public_profile(empresa_id):
 
     perfil = _core_profile(empresa_id) or {}
     datos = dict(perfil.get("datos") or {})
+
+    # Expone como campos públicos simples la presencia digital guardada en onboarding.
+    presencia = _core_presencia(datos)
+    if presencia:
+        if str(presencia.get("web") or "").strip():
+            datos["web"] = str(presencia.get("web") or "").strip()
+            datos["sitio_web"] = datos["web"]
+        for red in ("instagram", "facebook", "tiktok"):
+            if str(presencia.get(red) or "").strip():
+                datos[red] = str(presencia.get(red) or "").strip()
+
     for privado in (
         "nombre_contacto",
         "email_contacto",
@@ -5159,6 +5176,7 @@ def _core_respuesta_estructurada(texto, datos, empresa=None, asistente=None):
     web = _core_valor_publico(datos, "web", "sitio_web", "website")
     instagram = _core_valor_publico(datos, "instagram")
     facebook = _core_valor_publico(datos, "facebook")
+    tiktok = _core_valor_publico(datos, "tiktok")
     direccion = _core_valor_publico(datos, "direccion", "direccion_completa")
     google_maps_url = _core_valor_publico(datos, "google_maps_url")
     atiende_direccion = bool(datos.get("atiende_direccion_fisica"))
