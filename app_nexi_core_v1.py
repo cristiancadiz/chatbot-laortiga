@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-12-NEXI-V3.2.0-CALENDARIO-PORTAL"
+APP_VERSION = "2026-09-12-NEXI-V3.3.0-INSTAGRAM-NEXIA-CORE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8081,20 +8081,37 @@ def intentar_recuperar_desde_message_edit(entry_id, evento):
     return None
 
 
-def procesar_texto_instagram(cliente_id, texto, username=None):
+def _core_responder_instagram(empresa_id, cliente_id, texto, username=None):
     """
-    Reutiliza la misma lógica conversacional del bot de Diego.
-    La sesión se separa de WhatsApp mediante el prefijo 'instagram:'.
+    Instagram usa el mismo Nexia Core que WhatsApp:
+    - mismo empresa_id
+    - mismo orquestador/agentes
+    - agenda real
+    - ecommerce
+    - handoff
+    - Portal/Supabase
+    El canal y la sesión permanecen separados.
+    """
+    empresa_id = str(empresa_id or "").strip()
+    cliente_id = str(cliente_id or "").strip()
+    if not empresa_id:
+        raise RuntimeError("Instagram sin empresa_id activo")
+    if not cliente_id:
+        raise RuntimeError("Instagram sin cliente_id")
 
-    Si Meta entrega username, se guarda como nombre_contacto para que
-    Portal Nexia muestre @usuario en lugar del IGSID numérico.
-    """
-    session_id = f"instagram:{cliente_id}"
-    activar_demo_por_contacto(cliente_id, "instagram")
+    activar_por_empresa(empresa_id, canal="instagram", provider="meta")
+
+    token = _core_token_por_empresa(empresa_id)
+    perfil = _core_profile(empresa_id) or {}
+    datos_perfil = perfil.get("datos") or {}
+    tipo = _core_tipo(datos_perfil.get("tipo_cliente")) or "personal"
+
     username = str(username or "").strip().lstrip("@")
     nombre_instagram = f"@{username}" if username else None
+    session_key = f"core:{empresa_id}:instagram:{cliente_id}"
 
-    guardar_mensaje(session_id, "user", texto, canal="instagram")
+    # Historial local + Portal.
+    guardar_mensaje(session_key, "user", texto, canal="instagram")
     guardar_mensaje_supabase(
         cliente_id,
         "entrante",
@@ -8103,67 +8120,282 @@ def procesar_texto_instagram(cliente_id, texto, username=None):
         canal="instagram",
     )
 
-    estado = get_estado(session_id)
-    debe_derivar = False
+    if token:
+        _core_log_message(token, empresa_id, "entrante", texto)
 
-    if quiere_hablar_con_persona(texto):
-        respuesta = mensaje_derivacion_ejecutivo()
-        debe_derivar = True
-    elif es_menu(texto):
-        reset_estado(session_id)
-        respuesta = mensaje_bienvenida()
-    elif es_empresa_nexia() and pregunta_contacto_sensible(texto):
-        respuesta = mensaje_contacto_no_publicado()
-    elif pregunta_horarios(texto):
-        respuesta = mensaje_horario_no_publicado() if es_empresa_nexia() else mensaje_horarios()
-    elif negocio_es_comercial() and (
-        estado.get("paso", "inicio").startswith("comercial_")
-        or intencion_interes_comercial(texto)
-    ):
-        paso_antes = estado.get("paso")
-        respuesta = procesar_comercial(estado, texto)
-        if estado.get("paso") == "comercial_completo" and paso_antes != "comercial_completo":
-            debe_derivar = True
-    elif negocio_usa_reservas() and estado.get("paso") != "inicio":
-        respuesta = procesar_agenda(estado, texto)
-    elif pregunta_servicios(texto):
-        respuesta = mostrar_servicios()
-    elif negocio_usa_reservas() and (
-        detectar_servicio(texto)
-        or corte_ambiguo(texto)
-        or intencion_agendar(texto)
-        or texto_menciona_fecha(texto)
-    ):
-        estado["paso"] = "inicio"
-        respuesta = procesar_agenda(estado, texto)
-    elif negocio_es_comercial() and detectar_servicio(texto):
-        respuesta = (
-            "Sí 😊 Ese servicio está disponible. "
-            "Si te interesa contratarlo, escribe *ME INTERESA* y te hago unas preguntas breves."
+    # Handoff persistente por canal Instagram.
+    hs = _core_handoff_lookup(empresa_id, cliente_id, "instagram")
+    estado_handoff = str((hs or {}).get("estado") or "").strip().lower()
+
+    # Agenda real usa una sesión independiente de WhatsApp.
+    agenda_estado = get_estado(session_key)
+    agenda_activa = str(agenda_estado.get("paso") or "inicio") != "inicio"
+
+    if agenda_activa and pregunta_servicios(texto):
+        agenda_estado["paso"] = "servicio"
+        agenda_estado["servicio"] = None
+        agenda_estado["fecha_hora"] = None
+        agenda_estado["horas_ofrecidas"] = []
+        agenda_activa = True
+
+    agente_previsto = _core_route_intent(texto, datos_perfil)
+    agenda_solicitada = agente_previsto == "agenda"
+
+    # Agenda tiene prioridad sobre handoff aún no ejecutado.
+    if estado_handoff in {"recolectando", "ofrecido"} and (agenda_solicitada or agenda_activa):
+        _core_handoff_upsert(
+            empresa_id,
+            cliente_id,
+            "instagram",
+            {
+                "estado":"cerrado",
+                "datos":{
+                    **((hs or {}).get("datos") or {}),
+                    "cierre":"interrumpido_por_agenda",
+                },
+                "started_at":(hs or {}).get("started_at") or datetime.now(pytz.UTC).isoformat(),
+            },
         )
-    else:
-        respuesta = respuesta_general(texto)
+        estado_handoff = "cerrado"
 
-    # V67: controla plan/demo antes de guardar y enviar la respuesta automática.
-    respuesta = preparar_mensaje_saliente_demo(respuesta)
-    # Filtro final de privacidad para Nexia.
-    respuesta = proteger_respuesta_publica_nexia(respuesta)
-    guardar_mensaje(session_id, "assistant", respuesta, canal="instagram")
+    respuesta = None
+    agente_usado = None
+
+    if estado_handoff == "derivado":
+        if not _core_handoff_expirado(hs):
+            respuesta = (
+                "Seguimos en contacto con el ejecutivo. "
+                "Tu solicitud ya fue enviada y tus mensajes están quedando registrados."
+            )
+        else:
+            _core_handoff_upsert(
+                empresa_id,
+                cliente_id,
+                "instagram",
+                {
+                    "estado":"cerrado",
+                    "datos":{
+                        **(hs.get("datos") or {}),
+                        "cierre":"timeout",
+                        "timeout_minutos":CORE_HANDOFF_TIMEOUT_MINUTOS,
+                    },
+                    "started_at":hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+                },
+            )
+            respuesta = (
+                f"No hemos podido conectarte con una persona dentro de los "
+                f"{CORE_HANDOFF_TIMEOUT_MINUTOS} minutos estimados. "
+                "Puedo seguir ayudándote por aquí.\n\n"
+                + _core_orchestrate(
+                    empresa_id,
+                    texto,
+                    token=token,
+                    canal="instagram",
+                )[0]
+            )
+
+    elif estado_handoff == "recolectando":
+        if _core_cancelar_handoff_texto(texto):
+            _core_handoff_upsert(
+                empresa_id,
+                cliente_id,
+                "instagram",
+                {
+                    "estado":"cerrado",
+                    "datos":{
+                        **(hs.get("datos") or {}),
+                        "cierre":"cancelado_usuario",
+                    },
+                    "started_at":hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+                },
+            )
+            respuesta = "Perfecto, cancelé la derivación. Seguimos con el asistente 😊 ¿En qué te puedo ayudar?"
+        else:
+            detalles = _core_parse_handoff_details(tipo, texto)
+            motivo = str(detalles.get("motivo") or "").strip()
+            nombre = str(detalles.get("nombre") or "").strip()
+
+            if not nombre or not motivo:
+                respuesta = _core_handoff_prompt(tipo)
+            else:
+                _core_handoff_request(
+                    empresa_id,
+                    cliente_id,
+                    "instagram",
+                    detalles,
+                    motivo,
+                )
+                _core_handoff_upsert(
+                    empresa_id,
+                    cliente_id,
+                    "instagram",
+                    {
+                        "estado":"derivado",
+                        "datos":detalles,
+                        "started_at":hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+                    },
+                )
+                respuesta = (
+                    f"Gracias, {nombre} 🙌\n\n"
+                    "Ya registré tu solicitud y estamos en contacto con el ejecutivo. "
+                    f"El tiempo estimado de atención es de hasta {CORE_HANDOFF_TIMEOUT_MINUTOS} minutos."
+                )
+
+    elif estado_handoff == "ofrecido":
+        if _core_es_confirmacion(texto):
+            _core_handoff_upsert(
+                empresa_id,
+                cliente_id,
+                "instagram",
+                {
+                    "estado":"recolectando",
+                    "datos":{},
+                    "started_at":hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+                },
+            )
+            respuesta = _core_handoff_prompt(tipo)
+        elif _core_es_rechazo(texto):
+            _core_handoff_upsert(
+                empresa_id,
+                cliente_id,
+                "instagram",
+                {
+                    "estado":"cerrado",
+                    "datos":hs.get("datos") or {},
+                    "started_at":hs.get("started_at") or datetime.now(pytz.UTC).isoformat(),
+                },
+            )
+            respuesta = "Perfecto. Seguimos por aquí 😊 ¿En qué más te puedo ayudar?"
+        else:
+            respuesta = (
+                "Tengo pendiente tu solicitud de hablar con una persona. "
+                "Si quieres continuar, responde sí; si prefieres seguir con el asistente, responde no."
+            )
+
+    elif _core_es_handoff(texto) and _core_si(datos_perfil.get("handoff")):
+        _core_handoff_upsert(
+            empresa_id,
+            cliente_id,
+            "instagram",
+            {
+                "estado":"recolectando",
+                "datos":{"solicitud_original":str(texto or "")},
+                "started_at":datetime.now(pytz.UTC).isoformat(),
+            },
+        )
+        respuesta = _core_handoff_prompt(tipo)
+
+    elif _core_respuesta_no_verificable(texto):
+        respuesta = (
+            "No tengo una fuente en tiempo real que me permita confirmar ese estado actual. "
+            "Puedo ayudarte con la información verificada disponible."
+        )
+
+    else:
+        # Agenda real: misma configuración de empresa, distinto canal.
+        if negocio_tiene_calendar_real() and (agente_previsto == "agenda" or agenda_activa):
+            # El flujo estándar usa un identificador de sesión. Para Instagram
+            # usamos un prefijo estable y evitamos mezclarlo con WhatsApp.
+            respuesta = _core_procesar_agenda_estandar(
+                empresa_id,
+                f"instagram:{cliente_id}",
+                texto,
+                datos_perfil,
+            )
+            agente_usado = "agenda"
+            print(
+                "NEXI CORE INSTAGRAM AGENDA:",
+                empresa_id,
+                google_calendar_id_actual(),
+                "paso=",
+                get_estado(session_key).get("paso"),
+            )
+        elif agente_previsto == "agenda":
+            respuesta = (
+                "📅 Muy pronto podrás agendar directamente desde aquí.\n"
+                "En breve integraremos el calendario a nuestros servicios para habilitar la reserva online."
+            )
+            agente_usado = "agenda"
+        else:
+            # Aquí entran Atención, Conocimiento, Ventas, Soporte,
+            # Seguimiento y Ecommerce usando exactamente el mismo Core.
+            respuesta, agente_usado = _core_orchestrate(
+                empresa_id,
+                texto,
+                token=token,
+                canal="instagram",
+            )
+
+        # Si el Core ofrece handoff, preservamos el contexto.
+        nr = normalizar_texto(respuesta)
+        if _core_si(datos_perfil.get("handoff")) and any(
+            x in nr
+            for x in (
+                "puedo derivarte",
+                "quieres que te derive",
+                "puedo ponerte en contacto",
+                "quieres hablar con una persona",
+                "derivarte internamente",
+            )
+        ):
+            _core_handoff_upsert(
+                empresa_id,
+                cliente_id,
+                "instagram",
+                {
+                    "estado":"ofrecido",
+                    "datos":{"respuesta_oferta":respuesta},
+                    "started_at":datetime.now(pytz.UTC).isoformat(),
+                },
+            )
+
+    respuesta = proteger_respuesta_publica_core(respuesta)
+
+    es_espera_handoff = respuesta == (
+        "Seguimos en contacto con el ejecutivo. "
+        "Tu solicitud ya fue enviada y tus mensajes están quedando registrados."
+    )
+    if not es_espera_handoff:
+        respuesta = preparar_mensaje_saliente_demo(respuesta)
+
+    guardar_mensaje(session_key, "assistant", respuesta, canal="instagram")
     guardar_mensaje_supabase(
         cliente_id,
         "saliente",
         respuesta,
-        nombre_contacto=nombre_instagram or estado.get("nombre"),
+        nombre_contacto=nombre_instagram,
         canal="instagram",
     )
-    if debe_derivar:
-        derivar_a_ejecutivo(
-            cliente_id,
-            "instagram",
-            estado=estado,
-            motivo=texto,
-        )
+
+    if token and respuesta:
+        _core_log_message(token, empresa_id, "saliente", respuesta)
+
+    print(
+        "NEXI CORE INSTAGRAM:",
+        empresa_id,
+        cliente_id,
+        "agent=",
+        agente_usado or agente_previsto,
+    )
     return respuesta
+
+
+def procesar_texto_instagram(cliente_id, texto, username=None):
+    """
+    Punto de compatibilidad del webhook existente.
+    Mantiene la misma URL/webhook de Meta y entrega el mensaje al Nexia Core
+    de la empresa activada por entry_id.
+    """
+    empresa_id = str(empresa_actual_id() or "").strip()
+    if not empresa_id:
+        raise RuntimeError("No fue posible resolver la empresa para Instagram")
+
+    return _core_responder_instagram(
+        empresa_id,
+        cliente_id,
+        texto,
+        username=username,
+    )
 
 
 @app.route("/instagram/webhook", methods=["GET"])
