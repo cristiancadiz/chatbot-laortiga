@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.3-JUMPSELLER-DEBUG-REAL"
+APP_VERSION = "2026-09-13-NEXI-V3.4.4-JUMPSELLER-BASIC-AUTH"
 load_dotenv()
 
 app = Flask(__name__)
@@ -6440,16 +6440,10 @@ def _ecommerce_money(value, currency="CLP"):
 def _jumpseller_headers(cfg):
     h = {
         "Accept":"application/json",
-        "User-Agent":"Nexia/3.4.3",
+        "User-Agent":"Nexia/3.4.4",
     }
-    login_key = str(cfg.get("login_key") or "").strip()
-    auth_token = str(cfg.get("auth_token") or "").strip()
     access_token = str(cfg.get("access_token") or "").strip()
-
-    if login_key and auth_token:
-        h["X-LOGIN-KEY"] = login_key
-        h["X-AUTH-TOKEN"] = auth_token
-    elif access_token:
+    if access_token:
         h["Authorization"] = f"Bearer {access_token}"
     return h
 
@@ -6460,12 +6454,22 @@ def _jumpseller_request(method, url, cfg, **kwargs):
     auth_token = str(cfg.get("auth_token") or "").strip()
     access_token = str(cfg.get("access_token") or "").strip()
 
+    auth = None
+    auth_mode = "none"
+    if login_key and auth_token:
+        # Mismo mecanismo que el código anterior que ya funcionó:
+        # HTTP Basic Auth -> requests genera Authorization: Basic ...
+        auth = (login_key, auth_token)
+        auth_mode = "basic_auth"
+    elif access_token:
+        auth_mode = "oauth"
+
     print(
         "JUMPSELLER REQUEST:",
         method.upper(),
         url,
         "auth_mode=",
-        "login_key_auth_token" if login_key and auth_token else ("oauth" if access_token else "none"),
+        auth_mode,
         "login_len=",
         len(login_key),
         "auth_len=",
@@ -6478,6 +6482,7 @@ def _jumpseller_request(method, url, cfg, **kwargs):
         method,
         url,
         headers=headers,
+        auth=auth,
         timeout=ECOMMERCE_TIMEOUT,
         **kwargs,
     )
