@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.6-ORDER-ROUTER-FIX"
+APP_VERSION = "2026-09-13-NEXI-V3.4.7-ORDER-FRIENDLY-STATUS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -6452,6 +6452,46 @@ def _ecommerce_money(value, currency="CLP"):
         return str(value or "")
 
 
+def _ecommerce_payment_status_label(status):
+    """Traduce estados técnicos de pago a texto claro para clientes."""
+    raw = str(status or "").strip()
+    key = raw.lower().replace("-", "_").replace(" ", "_")
+    labels = {
+        "paid": "Pagado",
+        "pending": "Pendiente de pago",
+        "unpaid": "No pagado",
+        "authorized": "Pago autorizado",
+        "partially_paid": "Pago parcial",
+        "refunded": "Reembolsado",
+        "partially_refunded": "Reembolso parcial",
+        "voided": "Pago anulado",
+        "cancelled": "Pago cancelado",
+        "canceled": "Pago cancelado",
+        "abandoned": "Pago no completado",
+    }
+    return labels.get(key, raw.replace("_", " ").strip().capitalize())
+
+
+def _ecommerce_fulfillment_status_label(status):
+    """
+    Traduce fulfillment sin prometer entrega física.
+    'fulfilled' significa que la preparación/despacho fue cumplido en la tienda,
+    no necesariamente que el transportista ya entregó al cliente.
+    """
+    raw = str(status or "").strip()
+    key = raw.lower().replace("-", "_").replace(" ", "_")
+    labels = {
+        "fulfilled": "Despachado / preparación completada",
+        "unfulfilled": "Pendiente de preparación o despacho",
+        "partial": "Parcialmente despachado",
+        "partially_fulfilled": "Parcialmente despachado",
+        "restocked": "Reingresado a stock",
+        "cancelled": "Despacho cancelado",
+        "canceled": "Despacho cancelado",
+    }
+    return labels.get(key, raw.replace("_", " ").strip().capitalize())
+
+
 def _jumpseller_headers(cfg):
     h = {
         "Accept":"application/json",
@@ -6778,21 +6818,34 @@ def _core_agent_ecommerce(empresa_id, texto, ctx=None):
         if not order:
             return "No encontré un pedido con ese dato. Revisa el número o correo e inténtalo nuevamente."
 
-        parts = [f"Pedido {order.get('number') or ref}."]
+        numero = order.get("number") or ref
+        lines = [f"📦 Pedido #{numero}"]
+
         if order.get("payment_status"):
-            parts.append(f"Pago: {order['payment_status']}.")
+            lines.append(
+                f"💳 Pago: {_ecommerce_payment_status_label(order['payment_status'])}"
+            )
+
         if order.get("fulfillment_status"):
-            parts.append(f"Despacho: {order['fulfillment_status']}.")
+            lines.append(
+                f"🚚 Despacho: {_ecommerce_fulfillment_status_label(order['fulfillment_status'])}"
+            )
+
         if order.get("total"):
-            parts.append(f"Total: {_ecommerce_money(order['total'], order.get('currency'))}.")
+            lines.append(
+                f"💰 Total: {_ecommerce_money(order['total'], order.get('currency'))}"
+            )
+
         if order.get("tracking_number"):
-            tr = f"Seguimiento: {order['tracking_number']}"
+            tr = f"📍 Seguimiento: {order['tracking_number']}"
             if order.get("tracking_company"):
                 tr += f" ({order['tracking_company']})"
-            parts.append(tr + ".")
+            lines.append(tr)
+
         if order.get("tracking_url"):
-            parts.append(f"Tracking: {order['tracking_url']}")
-        return " ".join(parts)
+            lines.append(f"🔗 Seguimiento online: {order['tracking_url']}")
+
+        return "\n\n".join(lines)
 
     query = _ecommerce_product_query(texto)
     try:
