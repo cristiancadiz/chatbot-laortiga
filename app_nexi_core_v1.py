@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.9-AUTH-USER-SYNC"
+APP_VERSION = "2026-09-13-NEXI-V3.4.10-WHATSAPP-MENU-LIST"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1507,66 +1507,100 @@ def _router_twilio_credenciales():
     return sid, token, from_value
 
 
-def _router_twilio_content_sid(cantidad):
-    """Crea/reutiliza una plantilla list-picker genérica para N elementos."""
-    cantidad = max(1, min(10, int(cantidad)))
+def _router_twilio_content_sid(opciones):
+    """
+    Crea/reutiliza un list-picker REAL para el menú superior.
+
+    V3.4.10:
+    - Los ítems son estáticos dentro del ContentSid.
+    - No usa variables dentro de item/id/description.
+    - Evita el fallback a texto provocado por plantillas dinámicas incompatibles.
+    """
+    opciones = list(opciones or [])[:10]
+    if not opciones:
+        raise RuntimeError("No hay opciones para crear el menú interactivo")
+
+    firma_src = json.dumps(
+        [
+            {
+                "item": str(op.get("item") or "")[:24],
+                "id": str(op.get("id") or "")[:200],
+                "description": str(op.get("description") or "Seleccionar")[:72],
+            }
+            for op in opciones
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    firma = hashlib.sha1(firma_src.encode("utf-8")).hexdigest()[:16]
+    cache_key = f"menu:{firma}"
+
     with ROUTER_TWILIO_CONTENT_CACHE_LOCK:
-        sid_cache = ROUTER_TWILIO_CONTENT_CACHE.get(cantidad)
+        sid_cache = ROUTER_TWILIO_CONTENT_CACHE.get(cache_key)
         if sid_cache:
             return sid_cache
 
     account_sid, auth_token, _ = _router_twilio_credenciales()
-    variables = {}
+
     items = []
-    for i in range(1, cantidad + 1):
-        variables[f"i{i}"] = f"Opción {i}"
-        variables[f"id{i}"] = f"opcion-{i}"
-        variables[f"d{i}"] = "Seleccionar esta opción"
-        items.append({"item": f"{{{{i{i}}}}}", "id": f"{{{{id{i}}}}}", "description": f"{{{{d{i}}}}}"})
+    for i, op in enumerate(opciones, 1):
+        item = str(op.get("item") or f"Opción {i}")[:24].strip()
+        item_id = str(op.get("id") or f"nexi:opcion:{i}")[:200].strip()
+        description = str(op.get("description") or "Seleccionar")[:72].strip()
+        items.append({
+            "item": item,
+            "id": item_id,
+            "description": description,
+        })
 
     payload = {
-        "friendly_name": f"nexia_router_lista_{cantidad}",
+        "friendly_name": f"nexia_router_menu_{firma}",
         "language": "es",
-        "variables": variables,
         "types": {
             "twilio/list-picker": {
-                "body": "Hola 👋 Bienvenido a Nexia. Selecciona con quién quieres hablar:",
+                "body": "Hola 👋 Bienvenido a Nexia.\n¿Con quién quieres hablar?",
                 "button": "Ver opciones",
                 "items": items,
             }
         },
     }
+
     r = requests.post(
         "https://content.twilio.com/v1/Content",
         auth=(account_sid, auth_token),
         json=payload,
         timeout=20,
     )
-    r.raise_for_status()
+    if not r.ok:
+        raise RuntimeError(
+            f"Twilio Content API menú HTTP {r.status_code}: {r.text[:500]}"
+        )
+
     data = r.json() if r.content else {}
     content_sid = str(data.get("sid") or "").strip()
     if not content_sid:
         raise RuntimeError("Twilio no devolvió ContentSid para el menú")
+
     with ROUTER_TWILIO_CONTENT_CACHE_LOCK:
-        ROUTER_TWILIO_CONTENT_CACHE[cantidad] = content_sid
+        ROUTER_TWILIO_CONTENT_CACHE[cache_key] = content_sid
+
+    print("NEXI ROUTER CONTENT SID OK:", content_sid, "opciones=", len(items))
     return content_sid
 
 
 def enviar_twilio_menu_interactivo(destino, pagina=0):
-    """Envía la recepción Nexia como lista clickeable de WhatsApp."""
+    """Envía la recepción Nexia como menú desplegable/list-picker de WhatsApp."""
     opciones = router_opciones_menu(destino, pagina=pagina)
     if not opciones:
         return False
+
     try:
         account_sid, auth_token, from_value = _router_twilio_credenciales()
-        content_sid = _router_twilio_content_sid(len(opciones))
-        variables = {}
-        for i, op in enumerate(opciones, 1):
-            variables[f"i{i}"] = str(op.get("item") or f"Opción {i}")[:24]
-            variables[f"id{i}"] = str(op.get("id") or f"nexi:opcion:{i}")[:200]
-            variables[f"d{i}"] = str(op.get("description") or "Seleccionar")[:72]
+        content_sid = _router_twilio_content_sid(opciones)
+
         to_digits = _router_identificador(destino)
         to_value = f"whatsapp:+{to_digits}"
+
         r = requests.post(
             f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
             auth=(account_sid, auth_token),
@@ -1574,14 +1608,25 @@ def enviar_twilio_menu_interactivo(destino, pagina=0):
                 "To": to_value,
                 "From": from_value,
                 "ContentSid": content_sid,
-                "ContentVariables": json.dumps(variables, ensure_ascii=False),
             },
             timeout=20,
         )
-        r.raise_for_status()
+
+        if not r.ok:
+            raise RuntimeError(
+                f"Twilio Messages API menú HTTP {r.status_code}: {r.text[:500]}"
+            )
+
         data = r.json() if r.content else {}
-        print("NEXI ROUTER LISTA TWILIO OK:", pagina, len(opciones), data.get("sid"))
+        print(
+            "NEXI ROUTER LISTA TWILIO OK:",
+            "pagina=", pagina,
+            "opciones=", len(opciones),
+            "message_sid=", data.get("sid"),
+            "content_sid=", content_sid,
+        )
         return True
+
     except Exception as e:
         print("NEXI ROUTER LISTA TWILIO ERROR:", repr(e))
         return False
