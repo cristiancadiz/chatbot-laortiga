@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.21-ECOMMERCE-FICHAS-MEDIA"
+APP_VERSION = "2026-09-13-NEXI-V3.4.23-ECOMMERCE-STATELESS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -7804,6 +7804,35 @@ def _core_responder_demo_web(token, empresa_id, texto):
     return respuesta
 
 
+
+def _ecommerce_context_exit(texto):
+    """
+    Mensajes sociales/cierre que no deben reutilizar el contexto de búsqueda.
+    Evita casos como 'Gracias' -> buscar productos.
+    """
+    t = _core_norm(texto)
+    if not t:
+        return True
+
+    exactos = {
+        "gracias", "muchas gracias", "ok gracias", "vale gracias",
+        "perfecto gracias", "genial gracias",
+        "ok", "okay", "vale", "perfecto", "listo", "genial",
+        "chao", "chau", "adios", "adiós", "hasta luego",
+        "nos vemos", "eso era", "nada mas", "nada más",
+    }
+    if t in exactos:
+        return True
+
+    if re.fullmatch(
+        r"(muchas\s+)?gracias(?:\s+(?:por\s+todo|por\s+la\s+ayuda))?[.!]*",
+        t,
+    ):
+        return True
+
+    return False
+
+
 def _core_responder_demo_whatsapp(demo_access, telefono, texto):
     """Procesa demo real por WhatsApp con handoff contextual y privacidad estricta."""
     empresa_id=str((demo_access or {}).get("empresa_id") or empresa_actual_id() or "").strip()
@@ -7838,19 +7867,17 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
 
     # V3.4.16: si el turno anterior era búsqueda de producto,
     # una respuesta corta como "champu solido" sigue dentro de Ecommerce.
+    # V3.4.23: búsqueda ecommerce sin estado pegajoso.
+    # Cada mensaje nuevo se interpreta desde cero por el router.
+    # No reescribimos automáticamente el siguiente mensaje como "producto ...".
     if agenda_estado.get("ecommerce_busqueda_producto_activa"):
-        t_follow = _core_norm(texto)
-        if (
-            len(t_follow) <= 80
-            and not re.search(r"\b(menu|agendar|reserva|hora|pedido|orden|soporte|ejecutivo)\b", t_follow)
-        ):
-            texto_core = f"producto {texto}"
-            print(
-                "NEXI ECOMMERCE PRODUCT CONTEXT:",
-                empresa_id,
-                _normalizar_identificador_demo(telefono, "whatsapp"),
-                "continuacion=SI",
-            )
+        agenda_estado["ecommerce_busqueda_producto_activa"] = False
+        print(
+            "NEXI ECOMMERCE PRODUCT CONTEXT:",
+            empresa_id,
+            _normalizar_identificador_demo(telefono, "whatsapp"),
+            "continuacion=NO modo=stateless",
+        )
 
     if agenda_estado.get("ecommerce_esperando_referencia"):
         ref_pedido_contextual = _ecommerce_extract_ref(texto)
@@ -8013,19 +8040,9 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
             respuesta, agente_usado = _core_orchestrate(empresa_id, texto_core, token=token, canal="whatsapp")
 
         # V3.4.16: recordar contexto corto de búsqueda de productos.
-        if agente_usado == "ecommerce":
-            if _ecommerce_product_intent(texto_core) and not any(
-                x in _core_norm(texto_core)
-                for x in ("pedido", "orden", "tracking", "seguimiento")
-            ):
-                agenda_estado["ecommerce_busqueda_producto_activa"] = True
-            elif any(
-                x in _core_norm(texto_core)
-                for x in ("pedido", "orden", "tracking", "seguimiento")
-            ):
-                agenda_estado["ecommerce_busqueda_producto_activa"] = False
-        elif agente_usado in {"agenda", "soporte", "handoff"}:
-            agenda_estado["ecommerce_busqueda_producto_activa"] = False
+        # V3.4.23: ecommerce no deja contexto de búsqueda activo entre turnos.
+        # El siguiente mensaje vuelve siempre al router general.
+        agenda_estado["ecommerce_busqueda_producto_activa"] = False
 
         # V3.4.5: recordar cuando el agente de ecommerce acaba de pedir la referencia.
         nr_pre = normalizar_texto(respuesta)
