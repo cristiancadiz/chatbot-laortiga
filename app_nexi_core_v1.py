@@ -28,7 +28,7 @@ ECOMMERCE_MEDIA_URL = ContextVar("ECOMMERCE_MEDIA_URL", default="")
 ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=None)
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.19-ECOMMERCE-CAROUSEL"
+APP_VERSION = "2026-09-13-NEXI-V3.4.20-CAROUSEL-ROUTE-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8297,8 +8297,6 @@ def core_demo_status(token):
 # TWILIO WHATSAPP WEBHOOK
 # ============================================================
 
-@app.route("/whatsapp/webhook", methods=["POST"])
-
 def _twilio_carousel_text(value, max_chars=80):
     value = re.sub(r"\s+", " ", str(value or "")).strip()
     return value[:max_chars].rstrip()
@@ -8433,6 +8431,7 @@ def _twilio_send_ecommerce_carousel(destino, products):
     return True
 
 
+@app.route("/whatsapp/webhook", methods=["POST"])
 def whatsapp_webhook():
     twiml = MessagingResponse()
     ECOMMERCE_MEDIA_URL.set("")
