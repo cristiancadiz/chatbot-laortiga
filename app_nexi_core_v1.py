@@ -27,7 +27,7 @@ import base64
 ECOMMERCE_MEDIA_URL = ContextVar("ECOMMERCE_MEDIA_URL", default="")
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.17-ECOMMERCE-FOTO-LINK"
+APP_VERSION = "2026-09-13-NEXI-V3.4.18-ECOMMERCE-FOTO-STOCK"
 load_dotenv()
 
 app = Flask(__name__)
@@ -7330,20 +7330,36 @@ def _core_agent_ecommerce(empresa_id, texto, ctx=None):
     if not products:
         return "No encontré un producto que coincida con tu búsqueda en la tienda conectada."
 
+    # V3.4.18: priorizar solo productos vendibles/disponibles.
+    # stock=None se considera sin control/ilimitado y se puede mostrar.
+    disponibles = []
+    for prod in products:
+        stock = prod.get("stock")
+        if stock is None:
+            disponibles.append(prod)
+            continue
+        try:
+            if int(stock) > 0:
+                disponibles.append(prod)
+        except Exception:
+            # Si Jumpseller no entrega un valor interpretable, no lo descartamos.
+            disponibles.append(prod)
+
+    if not disponibles:
+        ECOMMERCE_MEDIA_URL.set("")
+        return (
+            "Encontré productos relacionados, pero en este momento aparecen sin stock. "
+            "Si quieres, puedo buscarte otra alternativa disponible."
+        )
+
     lines = []
     ECOMMERCE_MEDIA_URL.set("")
-    for idx, prod in enumerate(products[:5]):
+    for idx, prod in enumerate(disponibles[:5]):
         line = f"• *{prod.get('name') or 'Producto'}*"
         if prod.get("price") not in (None,""):
             line += f" — {_ecommerce_money(prod['price'], prod.get('currency'))}"
-        if prod.get("stock") is not None:
-            try:
-                line += " — disponible" if int(prod["stock"]) > 0 else " — sin stock"
-            except Exception:
-                pass
 
-        # WhatsApp: adjuntar la foto del primer resultado en vez de mostrar
-        # una URL de imagen cruda en el texto.
+        # La foto del primer resultado se enviará como media real de WhatsApp.
         if idx == 0 and prod.get("image_url"):
             ECOMMERCE_MEDIA_URL.set(str(prod["image_url"]).strip())
 
@@ -7351,7 +7367,7 @@ def _core_agent_ecommerce(empresa_id, texto, ctx=None):
             line += f"\n  🛍️ Ver producto: {prod['url']}"
         lines.append(line)
 
-    return "Encontré esto en la tienda:\n\n" + "\n\n".join(lines)
+    return "Encontré estas opciones disponibles:\n\n" + "\n\n".join(lines)
 
 
 @app.route("/portal/integraciones/ecommerce", methods=["GET","POST","DELETE","OPTIONS"])
@@ -8510,14 +8526,43 @@ def whatsapp_webhook():
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
         media_url = str(ECOMMERCE_MEDIA_URL.get() or "").strip()
-        msg = twiml.message(respuesta)
-        if media_url.startswith(("http://", "https://")):
-            try:
-                msg.media(media_url)
-                print("NEXI ECOMMERCE MEDIA OK:", media_url[:180])
-            except Exception as media_error:
-                print("NEXI ECOMMERCE MEDIA ERROR:", repr(media_error))
 
+        # V3.4.18: para ecommerce enviamos la foto como media real mediante
+        # Twilio REST. Esto evita depender del preview automático del link.
+        if (
+            media_url.startswith(("http://", "https://"))
+            and twilio_client
+            and telefono
+        ):
+            try:
+                destino_media = str(telefono).strip()
+                if not destino_media.startswith("whatsapp:"):
+                    destino_media = "whatsapp:+" + re.sub(r"\\D", "", destino_media)
+
+                enviado = twilio_client.messages.create(
+                    from_=TWILIO_WHATSAPP_FROM,
+                    to=destino_media,
+                    body=respuesta,
+                    media_url=[media_url],
+                )
+                print(
+                    "NEXI ECOMMERCE MEDIA REST OK:",
+                    getattr(enviado, "sid", ""),
+                    media_url[:180],
+                )
+                # Ya enviamos texto + imagen directamente; no duplicar con TwiML.
+                return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+            except Exception as media_error:
+                print("NEXI ECOMMERCE MEDIA REST ERROR:", repr(media_error))
+                # Fallback: responder normalmente por TwiML.
+                msg = twiml.message(respuesta)
+                try:
+                    msg.media(media_url)
+                except Exception:
+                    pass
+                return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+        twiml.message(respuesta)
         return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
     except Exception as e:
