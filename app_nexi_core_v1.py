@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.8-PORTAL-AUTO-CLAVE"
+APP_VERSION = "2026-09-13-NEXI-V3.4.9-AUTH-USER-SYNC"
 load_dotenv()
 
 app = Flask(__name__)
@@ -9150,11 +9150,48 @@ def portal_usuario_autorizado():
                     print("PORTAL DEMO AUTH: prueba vencida", empresa_id)
                     return None
             datos = sesion.get("datos") or {}
+
+            # V3.4.9: sincronización perezosa de Supabase Auth.
+            # Esto cubre demos antiguas creadas antes de V3.4.8 y también
+            # repara casos donde la creación inicial de Auth falló.
+            email_demo = str(datos.get("email_contacto") or "").strip().lower()
+            nombre_demo = str(
+                datos.get("nombre_contacto")
+                or datos.get("nombre_negocio")
+                or "Usuario"
+            ).strip()
+            if email_demo and "@" in email_demo:
+                try:
+                    acceso_sync = _portal_crear_o_actualizar_acceso(
+                        empresa_id, email_demo, nombre_demo
+                    )
+                    if not isinstance(datos.get("portal_acceso"), dict):
+                        datos["portal_acceso"] = {}
+                    datos["portal_acceso"].update({
+                        "email": acceso_sync.get("email"),
+                        "auto": True,
+                        "sincronizado": True,
+                    })
+                    try:
+                        _core_save_session(demo_token, {"datos": datos})
+                    except Exception as save_error:
+                        print("PORTAL AUTH SYNC SESSION SAVE ERROR:", repr(save_error))
+                    print("PORTAL AUTH SYNC OK:", empresa_id, email_demo)
+                except Exception as auth_error:
+                    # El acceso temporal por demo_token sigue funcionando;
+                    # dejamos un log explícito para diagnosticar Auth sin tumbar el Portal.
+                    print(
+                        "PORTAL AUTH SYNC ERROR:",
+                        empresa_id,
+                        email_demo,
+                        repr(auth_error),
+                    )
+
             perfil = {
                 "id": f"demo:{demo_token}",
                 "empresa_id": empresa_id,
-                "nombre": str(datos.get("nombre_contacto") or datos.get("nombre_negocio") or "Usuario"),
-                "email": str(datos.get("email_contacto") or ""),
+                "nombre": nombre_demo,
+                "email": email_demo,
                 "rol": "demo",
                 "demo": True,
                 "demo_token": demo_token,
