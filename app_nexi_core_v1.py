@@ -26,9 +26,10 @@ import base64
 
 ECOMMERCE_MEDIA_URL = ContextVar("ECOMMERCE_MEDIA_URL", default="")
 ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=None)
+ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.20-CAROUSEL-ROUTE-FIX"
+APP_VERSION = "2026-09-13-NEXI-V3.4.21-ECOMMERCE-FICHAS-MEDIA"
 load_dotenv()
 
 app = Flask(__name__)
@@ -7329,10 +7330,11 @@ def _core_agent_ecommerce(empresa_id, texto, ctx=None):
         return "No pude consultar la tienda en este momento. Intenta nuevamente en unos minutos."
 
     if not products:
+        ECOMMERCE_PRODUCT_CARDS.set(None)
         return "No encontré un producto que coincida con tu búsqueda en la tienda conectada."
 
-    # V3.4.18: priorizar solo productos vendibles/disponibles.
-    # stock=None se considera sin control/ilimitado y se puede mostrar.
+    # V3.4.21: patrón probado del bot La Ortiga.
+    # Un mensaje por producto con foto + nombre + precio + disponibilidad + link.
     disponibles = []
     for prod in products:
         stock = prod.get("stock")
@@ -7343,10 +7345,10 @@ def _core_agent_ecommerce(empresa_id, texto, ctx=None):
             if int(stock) > 0:
                 disponibles.append(prod)
         except Exception:
-            # Si Jumpseller no entrega un valor interpretable, no lo descartamos.
             disponibles.append(prod)
 
     if not disponibles:
+        ECOMMERCE_PRODUCT_CARDS.set(None)
         ECOMMERCE_MEDIA_URL.set("")
         ECOMMERCE_CAROUSEL_PRODUCTS.set(None)
         return (
@@ -7354,23 +7356,39 @@ def _core_agent_ecommerce(empresa_id, texto, ctx=None):
             "Si quieres, puedo buscarte otra alternativa disponible."
         )
 
-    lines = []
+    tarjetas = []
+    for i, prod in enumerate(disponibles[:5], 1):
+        nombre = str(prod.get("name") or "Producto").strip()
+        if prod.get("price") not in (None, ""):
+            precio = _ecommerce_money(prod.get("price"), prod.get("currency"))
+        else:
+            precio = "Precio por confirmar"
+
+        stock = prod.get("stock")
+        if stock is None:
+            disponibilidad = "✅ Disponible"
+        else:
+            try:
+                disponibilidad = "✅ Disponible" if int(stock) > 0 else "❌ Sin stock"
+            except Exception:
+                disponibilidad = "✅ Disponible"
+
+        texto_tarjeta = f"*{i}. {nombre}*\n💰 {precio}\n{disponibilidad}"
+        url = str(prod.get("url") or "").strip()
+        if url:
+            texto_tarjeta += f"\n🛍️ Ver producto: {url}"
+
+        tarjetas.append({
+            "texto": texto_tarjeta,
+            "media": str(prod.get("image_url") or "").strip(),
+            "nombre": nombre,
+            "url": url,
+        })
+
+    ECOMMERCE_PRODUCT_CARDS.set(tarjetas)
+    ECOMMERCE_CAROUSEL_PRODUCTS.set(None)
     ECOMMERCE_MEDIA_URL.set("")
-    ECOMMERCE_CAROUSEL_PRODUCTS.set(disponibles[:5])
-    for idx, prod in enumerate(disponibles[:5]):
-        line = f"• *{prod.get('name') or 'Producto'}*"
-        if prod.get("price") not in (None,""):
-            line += f" — {_ecommerce_money(prod['price'], prod.get('currency'))}"
-
-        # La foto del primer resultado se enviará como media real de WhatsApp.
-        if idx == 0 and prod.get("image_url"):
-            ECOMMERCE_MEDIA_URL.set(str(prod["image_url"]).strip())
-
-        if prod.get("url"):
-            line += f"\n  🛍️ Ver producto: {prod['url']}"
-        lines.append(line)
-
-    return "Encontré estas opciones disponibles:\n\n" + "\n\n".join(lines)
+    return f"Encontré {len(tarjetas)} opciones disponibles. Te las muestro con foto 👇"
 
 
 @app.route("/portal/integraciones/ecommerce", methods=["GET","POST","DELETE","OPTIONS"])
@@ -8436,6 +8454,7 @@ def whatsapp_webhook():
     twiml = MessagingResponse()
     ECOMMERCE_MEDIA_URL.set("")
     ECOMMERCE_CAROUSEL_PRODUCTS.set(None)
+    ECOMMERCE_PRODUCT_CARDS.set(None)
     try:
         to_numero = re.sub(r"\D", "", str(request.form.get("To") or TWILIO_WHATSAPP_FROM))
         # Conserva la resolución por número receptor como fallback, pero el router
@@ -8579,6 +8598,21 @@ def whatsapp_webhook():
 
                 if enviar_twilio_agenda_interactiva(telefono, estado_core):
                     return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+                tarjetas = ECOMMERCE_PRODUCT_CARDS.get() or []
+                if tarjetas:
+                    for tarjeta in tarjetas[:5]:
+                        m = twiml.message(tarjeta.get("texto") or "Producto")
+                        foto = str(tarjeta.get("media") or "").strip()
+                        if foto.startswith(("http://", "https://")):
+                            try:
+                                m.media(foto)
+                                print("NEXI ECOMMERCE MEDIA CARD:", tarjeta.get("nombre"), foto[:180])
+                            except Exception as media_error:
+                                print("NEXI ECOMMERCE MEDIA CARD ERROR:", repr(media_error))
+                    twiml.message(respuesta)
+                    return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
                 twiml.message(respuesta)
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
