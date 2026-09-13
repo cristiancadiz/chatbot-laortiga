@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.15-JUMPSELLER-TIME-FIX"
+APP_VERSION = "2026-09-13-NEXI-V3.4.16-ECOMMERCE-SEARCH-CONTEXT"
 load_dotenv()
 
 app = Flask(__name__)
@@ -7154,12 +7154,79 @@ def _ecommerce_product_query(texto):
     return re.sub(r"\s+"," ",t).strip(" ?!.,") or str(texto or "").strip()
 
 
+
+def _ecommerce_edit_distance(a, b, max_dist=2):
+    """Levenshtein acotado para tolerar typos cortos como prdoucto/producto."""
+    a = str(a or "")
+    b = str(b or "")
+    if abs(len(a) - len(b)) > max_dist:
+        return max_dist + 1
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        row_min = i
+        for j, cb in enumerate(b, 1):
+            val = min(
+                cur[-1] + 1,
+                prev[j] + 1,
+                prev[j - 1] + (ca != cb),
+            )
+            cur.append(val)
+            row_min = min(row_min, val)
+        if row_min > max_dist:
+            return max_dist + 1
+        prev = cur
+    return prev[-1]
+
+
+def _ecommerce_product_intent(texto):
+    """
+    Detecta intención de buscar/recomendar productos, incluso con errores
+    de escritura y frases naturales.
+    """
+    t = _core_norm(texto)
+    if not t:
+        return False
+
+    # Intenciones explícitas.
+    patrones = (
+        "busco un producto", "busco producto", "quiero un producto",
+        "necesito un producto", "recomiendame un producto",
+        "recomiéndame un producto", "que producto", "qué producto",
+        "tienen algo para", "tienes algo para", "venden algo para",
+        "producto para", "productos para", "catalogo", "catálogo",
+        "stock", "sku",
+    )
+    if any(x in t for x in patrones):
+        return True
+
+    # Tolerancia de typos en "producto/productos".
+    tokens = re.findall(r"[a-z0-9]+", t)
+    for tok in tokens:
+        if _ecommerce_edit_distance(tok, "producto", 2) <= 2:
+            return True
+        if _ecommerce_edit_distance(tok, "productos", 2) <= 2:
+            return True
+
+    # Consultas naturales de compra/búsqueda.
+    if re.search(r"\b(busco|buscar|quiero|necesito|recomienda|recomiendame|recomiéndame)\b", t):
+        if any(x in t for x in (
+            "champu", "shampoo", "crema", "serum", "aceite", "jabón", "jabon",
+            "mascarilla", "tratamiento", "cosmetico", "cosmético", "suplemento",
+        )):
+            return True
+
+    return False
+
+
 def _ecommerce_intent(texto):
     t = _core_norm(texto)
 
-    # Pedidos/órdenes deben ir siempre al agente Ecommerce, incluso cuando
-    # el usuario escribe solo "pedido 7441".
+    # Pedidos/órdenes deben ir siempre al agente Ecommerce.
     if re.search(r"\b(pedido|pedidos|orden|ordenes|órdenes|tracking)\b", t):
+        return True
+
+    if _ecommerce_product_intent(texto):
         return True
 
     return any(x in t for x in (
@@ -7696,6 +7763,23 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
     # debe interpretarse como referencia del pedido y no como texto aislado.
     texto_core = texto
     ref_pedido_contextual = ""
+
+    # V3.4.16: si el turno anterior era búsqueda de producto,
+    # una respuesta corta como "champu solido" sigue dentro de Ecommerce.
+    if agenda_estado.get("ecommerce_busqueda_producto_activa"):
+        t_follow = _core_norm(texto)
+        if (
+            len(t_follow) <= 80
+            and not re.search(r"\b(menu|agendar|reserva|hora|pedido|orden|soporte|ejecutivo)\b", t_follow)
+        ):
+            texto_core = f"producto {texto}"
+            print(
+                "NEXI ECOMMERCE PRODUCT CONTEXT:",
+                empresa_id,
+                _normalizar_identificador_demo(telefono, "whatsapp"),
+                "continuacion=SI",
+            )
+
     if agenda_estado.get("ecommerce_esperando_referencia"):
         ref_pedido_contextual = _ecommerce_extract_ref(texto)
         if ref_pedido_contextual:
@@ -7855,6 +7939,21 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
             print("NEXI CORE AGENDA SIN CALENDAR:", empresa_id)
         else:
             respuesta, agente_usado = _core_orchestrate(empresa_id, texto_core, token=token, canal="whatsapp")
+
+        # V3.4.16: recordar contexto corto de búsqueda de productos.
+        if agente_usado == "ecommerce":
+            if _ecommerce_product_intent(texto_core) and not any(
+                x in _core_norm(texto_core)
+                for x in ("pedido", "orden", "tracking", "seguimiento")
+            ):
+                agenda_estado["ecommerce_busqueda_producto_activa"] = True
+            elif any(
+                x in _core_norm(texto_core)
+                for x in ("pedido", "orden", "tracking", "seguimiento")
+            ):
+                agenda_estado["ecommerce_busqueda_producto_activa"] = False
+        elif agente_usado in {"agenda", "soporte", "handoff"}:
+            agenda_estado["ecommerce_busqueda_producto_activa"] = False
 
         # V3.4.5: recordar cuando el agente de ecommerce acaba de pedir la referencia.
         nr_pre = normalizar_texto(respuesta)
