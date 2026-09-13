@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.5-ECOMMERCE-ORDER-CONTEXT"
+APP_VERSION = "2026-09-13-NEXI-V3.4.6-ORDER-ROUTER-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -5537,10 +5537,25 @@ def proteger_respuesta_publica_core(texto):
 
 def _core_respuesta_no_verificable(texto):
     """
-    Detecta preguntas sobre estado actual de una persona que la demo no puede
-    conocer sin una integración/fuente en tiempo real.
+    Detecta preguntas sobre el estado actual de una PERSONA cuando Nexia no
+    dispone de una fuente en tiempo real.
+
+    V3.4.6: nunca intercepta consultas de ecommerce. Frases como
+    "dónde está mi pedido" o "cómo va la orden 7441" sí tienen una fuente
+    potencial en la tienda conectada y deben llegar al agente Ecommerce.
     """
     t = _core_norm(texto)
+
+    # Exclusión explícita de objetos/estados consultables por integraciones.
+    if re.search(r"\b(pedido|pedidos|orden|ordenes|órdenes|tracking)\b", t):
+        return False
+    if any(x in t for x in (
+        "estado del pedido", "seguimiento de pedido",
+        "despacho de mi", "envio de mi", "envío de mi",
+        "donde esta mi compra", "dónde está mi compra",
+    )):
+        return False
+
     patrones = (
         "como esta", "cómo está", "como se encuentra", "cómo se encuentra",
         "donde esta", "dónde está", "que esta haciendo", "qué está haciendo",
@@ -6724,11 +6739,16 @@ def _ecommerce_product_query(texto):
 
 def _ecommerce_intent(texto):
     t = _core_norm(texto)
+
+    # Pedidos/órdenes deben ir siempre al agente Ecommerce, incluso cuando
+    # el usuario escribe solo "pedido 7441".
+    if re.search(r"\b(pedido|pedidos|orden|ordenes|órdenes|tracking)\b", t):
+        return True
+
     return any(x in t for x in (
         "stock","disponible","disponibilidad","sku","talla","color",
         "producto","productos","catalogo","catálogo",
-        "mi pedido","pedido #","pedido numero","pedido número",
-        "estado del pedido","tracking","seguimiento de pedido",
+        "estado del pedido","seguimiento de pedido",
         "despacho de mi","envio de mi","envío de mi",
     ))
 
