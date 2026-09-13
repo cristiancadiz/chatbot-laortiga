@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-12-NEXI-V3.4.1-ECOMMERCE-CACHE-FIX"
+APP_VERSION = "2026-09-13-NEXI-V3.4.2-JUMPSELLER-DIAGNOSTICO-403"
 load_dotenv()
 
 app = Flask(__name__)
