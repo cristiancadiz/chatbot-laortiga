@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.4-JUMPSELLER-BASIC-AUTH"
+APP_VERSION = "2026-09-13-NEXI-V3.4.5-ECOMMERCE-ORDER-CONTEXT"
 load_dotenv()
 
 app = Flask(__name__)
@@ -7239,6 +7239,23 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
     agenda_estado = get_estado(agenda_session_key)
     agenda_activa = str(agenda_estado.get("paso") or "inicio") != "inicio"
 
+    # V3.4.5: contexto corto para seguimiento de pedidos.
+    # Si Nexia acaba de pedir número/correo, una respuesta como "7441"
+    # debe interpretarse como referencia del pedido y no como texto aislado.
+    texto_core = texto
+    ref_pedido_contextual = ""
+    if agenda_estado.get("ecommerce_esperando_referencia"):
+        ref_pedido_contextual = _ecommerce_extract_ref(texto)
+        if ref_pedido_contextual:
+            texto_core = f"pedido {ref_pedido_contextual}"
+            agenda_estado["ecommerce_esperando_referencia"] = False
+            print(
+                "NEXI ECOMMERCE ORDER CONTEXT:",
+                empresa_id,
+                _normalizar_identificador_demo(telefono, "whatsapp"),
+                "ref_detectada=SI",
+            )
+
     # V2.5.3: una consulta explícita por servicios debe interrumpir un paso viejo
     # de agenda (por ejemplo, seleccionar_hora) y volver a la selección de servicio.
     # Esto evita que "quiero conocer sus servicios" reutilice horas de una reserva anterior.
@@ -7254,7 +7271,7 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
             _normalizar_identificador_demo(telefono, "whatsapp"),
         )
 
-    agente_previsto = _core_route_intent(texto, datos_perfil)
+    agente_previsto = _core_route_intent(texto_core, datos_perfil)
     agenda_solicitada = agente_previsto == "agenda"
 
     if estado_handoff in {"recolectando", "ofrecido"} and (agenda_solicitada or agenda_activa):
@@ -7385,7 +7402,18 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
             agente_usado = "agenda"
             print("NEXI CORE AGENDA SIN CALENDAR:", empresa_id)
         else:
-            respuesta, agente_usado = _core_orchestrate(empresa_id, texto, token=token, canal="whatsapp")
+            respuesta, agente_usado = _core_orchestrate(empresa_id, texto_core, token=token, canal="whatsapp")
+
+        # V3.4.5: recordar cuando el agente de ecommerce acaba de pedir la referencia.
+        nr_pre = normalizar_texto(respuesta)
+        if agente_usado == "ecommerce" and (
+            "indicame el numero de pedido" in nr_pre
+            or "indícame el número de pedido" in respuesta.lower()
+            or "correo asociado a la compra" in nr_pre
+        ):
+            agenda_estado["ecommerce_esperando_referencia"] = True
+        elif agente_usado == "ecommerce" and ref_pedido_contextual:
+            agenda_estado["ecommerce_esperando_referencia"] = False
 
         # Si el agente termina ofreciendo handoff, dejamos contexto pendiente para que "sí" tenga sentido.
         nr=normalizar_texto(respuesta)
