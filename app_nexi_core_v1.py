@@ -24,8 +24,10 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from cryptography.fernet import Fernet, InvalidToken
 import base64
 
+ECOMMERCE_MEDIA_URL = ContextVar("ECOMMERCE_MEDIA_URL", default="")
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.16-ECOMMERCE-SEARCH-CONTEXT"
+
+APP_VERSION = "2026-09-13-NEXI-V3.4.17-ECOMMERCE-FOTO-LINK"
 load_dotenv()
 
 app = Flask(__name__)
@@ -6752,6 +6754,32 @@ def _jumpseller_product_stock(prod):
     return None
 
 
+
+def _ecommerce_storefront_base(cfg):
+    """
+    Base pública para links de producto.
+    Prefiere store_url configurada (ej. https://laortiga.cl) sobre el dominio técnico.
+    """
+    raw = str(cfg.get("store_url") or cfg.get("store_domain") or "").strip()
+    if not raw:
+        return ""
+    if not raw.startswith(("http://", "https://")):
+        raw = "https://" + raw
+    return raw.rstrip("/") + "/"
+
+
+def _ecommerce_absolute_product_url(value, cfg):
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://")):
+        return value
+    base = _ecommerce_storefront_base(cfg)
+    if not base:
+        return value
+    return urljoin(base, value.lstrip("/"))
+
+
 def _jumpseller_light_product(prod, cfg):
     """
     Representación liviana para catálogos grandes.
@@ -6768,13 +6796,14 @@ def _jumpseller_light_product(prod, cfg):
                 price = v.get("price")
                 break
 
-    url = (
+    url_raw = (
         prod.get("url")
         or prod.get("storefront_url")
         or prod.get("permalink")
         or prod.get("product_url")
         or ""
     )
+    url = _ecommerce_absolute_product_url(url_raw, cfg)
 
     name = str(prod.get("name") or "Producto").strip()
     description = str(prod.get("description") or "").strip()
@@ -7302,8 +7331,9 @@ def _core_agent_ecommerce(empresa_id, texto, ctx=None):
         return "No encontré un producto que coincida con tu búsqueda en la tienda conectada."
 
     lines = []
-    for prod in products[:5]:
-        line = f"• {prod.get('name') or 'Producto'}"
+    ECOMMERCE_MEDIA_URL.set("")
+    for idx, prod in enumerate(products[:5]):
+        line = f"• *{prod.get('name') or 'Producto'}*"
         if prod.get("price") not in (None,""):
             line += f" — {_ecommerce_money(prod['price'], prod.get('currency'))}"
         if prod.get("stock") is not None:
@@ -7311,12 +7341,17 @@ def _core_agent_ecommerce(empresa_id, texto, ctx=None):
                 line += " — disponible" if int(prod["stock"]) > 0 else " — sin stock"
             except Exception:
                 pass
+
+        # WhatsApp: adjuntar la foto del primer resultado en vez de mostrar
+        # una URL de imagen cruda en el texto.
+        if idx == 0 and prod.get("image_url"):
+            ECOMMERCE_MEDIA_URL.set(str(prod["image_url"]).strip())
+
         if prod.get("url"):
-            line += f"\n  🔗 {prod['url']}"
-        if prod.get("image_url"):
-            line += f"\n  🖼️ {prod['image_url']}"
+            line += f"\n  🛍️ Ver producto: {prod['url']}"
         lines.append(line)
-    return "Encontré esto en la tienda:\n" + "\n".join(lines)
+
+    return "Encontré esto en la tienda:\n\n" + "\n\n".join(lines)
 
 
 @app.route("/portal/integraciones/ecommerce", methods=["GET","POST","DELETE","OPTIONS"])
@@ -8246,6 +8281,7 @@ def core_demo_status(token):
 @app.route("/whatsapp/webhook", methods=["POST"])
 def whatsapp_webhook():
     twiml = MessagingResponse()
+    ECOMMERCE_MEDIA_URL.set("")
     try:
         to_numero = re.sub(r"\D", "", str(request.form.get("To") or TWILIO_WHATSAPP_FROM))
         # Conserva la resolución por número receptor como fallback, pero el router
@@ -8472,7 +8508,16 @@ def whatsapp_webhook():
 
         if telefono and enviar_twilio_agenda_interactiva(telefono, get_estado(telefono)):
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
-        twiml.message(respuesta)
+
+        media_url = str(ECOMMERCE_MEDIA_URL.get() or "").strip()
+        msg = twiml.message(respuesta)
+        if media_url.startswith(("http://", "https://")):
+            try:
+                msg.media(media_url)
+                print("NEXI ECOMMERCE MEDIA OK:", media_url[:180])
+            except Exception as media_error:
+                print("NEXI ECOMMERCE MEDIA ERROR:", repr(media_error))
+
         return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
     except Exception as e:
