@@ -25,9 +25,10 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 ECOMMERCE_MEDIA_URL = ContextVar("ECOMMERCE_MEDIA_URL", default="")
+ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=None)
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.18-ECOMMERCE-FOTO-STOCK"
+APP_VERSION = "2026-09-13-NEXI-V3.4.19-ECOMMERCE-CAROUSEL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -7347,6 +7348,7 @@ def _core_agent_ecommerce(empresa_id, texto, ctx=None):
 
     if not disponibles:
         ECOMMERCE_MEDIA_URL.set("")
+        ECOMMERCE_CAROUSEL_PRODUCTS.set(None)
         return (
             "Encontré productos relacionados, pero en este momento aparecen sin stock. "
             "Si quieres, puedo buscarte otra alternativa disponible."
@@ -7354,6 +7356,7 @@ def _core_agent_ecommerce(empresa_id, texto, ctx=None):
 
     lines = []
     ECOMMERCE_MEDIA_URL.set("")
+    ECOMMERCE_CAROUSEL_PRODUCTS.set(disponibles[:5])
     for idx, prod in enumerate(disponibles[:5]):
         line = f"• *{prod.get('name') or 'Producto'}*"
         if prod.get("price") not in (None,""):
@@ -8295,9 +8298,145 @@ def core_demo_status(token):
 # ============================================================
 
 @app.route("/whatsapp/webhook", methods=["POST"])
+
+def _twilio_carousel_text(value, max_chars=80):
+    value = re.sub(r"\s+", " ", str(value or "")).strip()
+    return value[:max_chars].rstrip()
+
+
+def _twilio_ecommerce_carousel_sid(products):
+    """
+    Crea un carrusel estático de productos para la respuesta actual.
+    Cada tarjeta incluye foto, nombre/precio y botón directo al producto.
+    """
+    products = list(products or [])[:5]
+    cards = []
+
+    for prod in products:
+        media = str(prod.get("image_url") or "").strip()
+        url = str(prod.get("url") or "").strip()
+        if not media.startswith(("http://", "https://")):
+            continue
+        if not url.startswith(("http://", "https://")):
+            continue
+
+        title = _twilio_carousel_text(prod.get("name") or "Producto", 80)
+        body_parts = []
+        if prod.get("price") not in (None, ""):
+            body_parts.append(_ecommerce_money(prod["price"], prod.get("currency")))
+        stock = prod.get("stock")
+        if stock is not None:
+            try:
+                body_parts.append("Disponible" if int(stock) > 0 else "Sin stock")
+            except Exception:
+                pass
+        body = " · ".join(body_parts) or "Disponible en la tienda"
+        body = _twilio_carousel_text(body, 70)
+
+        # Twilio limita title+body a 160 caracteres por tarjeta.
+        if len(title) + len(body) > 155:
+            title = title[: max(20, 155 - len(body))].rstrip()
+
+        cards.append({
+            "title": title,
+            "body": body,
+            "media": media,
+            "actions": [
+                {
+                    "type": "URL",
+                    "title": "Ver producto",
+                    "url": url,
+                }
+            ],
+        })
+
+    if not cards:
+        raise RuntimeError("No hay productos válidos para carrusel")
+
+    signature = hashlib.sha1(
+        json.dumps(cards, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+
+    cache_key = f"ecommerce_carousel:{signature}"
+    with ROUTER_TWILIO_CONTENT_CACHE_LOCK:
+        cached_sid = ROUTER_TWILIO_CONTENT_CACHE.get(cache_key)
+        if cached_sid:
+            return cached_sid
+
+    account_sid, auth_token, _ = _router_twilio_credenciales()
+    payload = {
+        "friendly_name": f"nexia_products_{signature}",
+        "language": "es",
+        "types": {
+            "twilio/carousel": {
+                "body": "Encontré estas opciones disponibles:",
+                "cards": cards,
+            }
+        },
+    }
+
+    r = requests.post(
+        "https://content.twilio.com/v1/Content",
+        auth=(account_sid, auth_token),
+        json=payload,
+        timeout=20,
+    )
+    if not r.ok:
+        raise RuntimeError(
+            f"Twilio Content API carrusel HTTP {r.status_code}: {r.text[:500]}"
+        )
+
+    data = r.json() if r.content else {}
+    sid = str(data.get("sid") or "").strip()
+    if not sid:
+        raise RuntimeError("Twilio no devolvió ContentSid para carrusel")
+
+    with ROUTER_TWILIO_CONTENT_CACHE_LOCK:
+        ROUTER_TWILIO_CONTENT_CACHE[cache_key] = sid
+
+    print("NEXI ECOMMERCE CAROUSEL SID OK:", sid, "cards=", len(cards))
+    return sid
+
+
+def _twilio_send_ecommerce_carousel(destino, products):
+    """
+    Envía tarjetas horizontales con foto pequeña/compacta y botón Ver producto.
+    """
+    account_sid, auth_token, from_value = _router_twilio_credenciales()
+    content_sid = _twilio_ecommerce_carousel_sid(products)
+
+    to_digits = _router_identificador(destino)
+    to_value = f"whatsapp:+{to_digits}"
+
+    r = requests.post(
+        f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+        auth=(account_sid, auth_token),
+        data={
+            "To": to_value,
+            "From": from_value,
+            "ContentSid": content_sid,
+        },
+        timeout=20,
+    )
+
+    if not r.ok:
+        raise RuntimeError(
+            f"Twilio Messages API carrusel HTTP {r.status_code}: {r.text[:500]}"
+        )
+
+    data = r.json() if r.content else {}
+    print(
+        "NEXI ECOMMERCE CAROUSEL OK:",
+        data.get("sid"),
+        "cards=", len(list(products or [])[:5]),
+    )
+    return True
+
+
 def whatsapp_webhook():
     twiml = MessagingResponse()
     ECOMMERCE_MEDIA_URL.set("")
+    ECOMMERCE_CAROUSEL_PRODUCTS.set(None)
     try:
         to_numero = re.sub(r"\D", "", str(request.form.get("To") or TWILIO_WHATSAPP_FROM))
         # Conserva la resolución por número receptor como fallback, pero el router
@@ -8525,10 +8664,18 @@ def whatsapp_webhook():
         if telefono and enviar_twilio_agenda_interactiva(telefono, get_estado(telefono)):
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
+        carousel_products = ECOMMERCE_CAROUSEL_PRODUCTS.get()
+        if telefono and carousel_products:
+            try:
+                if _twilio_send_ecommerce_carousel(telefono, carousel_products):
+                    # El carrusel ya incluye foto + nombre/precio + botón.
+                    return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+            except Exception as carousel_error:
+                print("NEXI ECOMMERCE CAROUSEL ERROR:", repr(carousel_error))
+
         media_url = str(ECOMMERCE_MEDIA_URL.get() or "").strip()
 
-        # V3.4.18: para ecommerce enviamos la foto como media real mediante
-        # Twilio REST. Esto evita depender del preview automático del link.
+        # Fallback: imagen real del primer producto + texto tradicional.
         if (
             media_url.startswith(("http://", "https://"))
             and twilio_client
@@ -8550,17 +8697,9 @@ def whatsapp_webhook():
                     getattr(enviado, "sid", ""),
                     media_url[:180],
                 )
-                # Ya enviamos texto + imagen directamente; no duplicar con TwiML.
                 return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
             except Exception as media_error:
                 print("NEXI ECOMMERCE MEDIA REST ERROR:", repr(media_error))
-                # Fallback: responder normalmente por TwiML.
-                msg = twiml.message(respuesta)
-                try:
-                    msg.media(media_url)
-                except Exception:
-                    pass
-                return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
         twiml.message(respuesta)
         return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
