@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.12-MENU-LIMPIO"
+APP_VERSION = "2026-09-13-NEXI-V3.4.14-JUMPSELLER-FOTOS-CATALOGO-GRANDE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -6649,55 +6649,342 @@ def _jumpseller_request(method, url, cfg, **kwargs):
     return r
 
 
-def _jumpseller_products(cfg, query, limit=6):
-    r = _jumpseller_request(
-        "GET",
-        "https://api.jumpseller.com/v1/products.json",
-        cfg,
-        params={"limit":100},
-    )
-    rows = r.json() if r.content else []
-    q = _core_norm(query)
-    words = [w for w in q.split() if len(w) > 2]
-    out = []
-    for raw in rows:
-        prod = raw.get("product") if isinstance(raw, dict) and "product" in raw else raw
-        if not isinstance(prod, dict):
+def _jumpseller_normalize_image_url(value):
+    """Normaliza URLs de imágenes Jumpseller sin inventar rutas."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, dict):
+        for key in (
+            "url", "src", "image_url", "original", "large", "medium",
+            "thumb", "thumbnail", "public_url"
+        ):
+            candidate = value.get(key)
+            if candidate:
+                return _jumpseller_normalize_image_url(candidate)
+        nested = value.get("image")
+        if nested:
+            return _jumpseller_normalize_image_url(nested)
+        return ""
+
+    url = str(value).strip()
+    if not url:
+        return ""
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    return ""
+
+
+def _jumpseller_product_images(prod):
+    """
+    Extrae foto principal + galería usando varias formas de respuesta
+    observables en APIs ecommerce. Limita galería para controlar RAM.
+    """
+    max_images = max(1, int(os.getenv("JUMPSELLER_MAX_IMAGES_PER_PRODUCT", "6")))
+    urls = []
+
+    def add(value):
+        url = _jumpseller_normalize_image_url(value)
+        if url and url not in urls:
+            urls.append(url)
+
+    # Posibles campos principales.
+    for key in (
+        "image", "image_url", "featured_image", "main_image",
+        "primary_image", "thumbnail"
+    ):
+        add(prod.get(key))
+
+    # Galería estándar.
+    images = prod.get("images") or []
+    if isinstance(images, dict):
+        images = images.get("images") or images.get("data") or [images]
+    if isinstance(images, list):
+        for raw in images:
+            if isinstance(raw, dict) and "image" in raw:
+                add(raw.get("image"))
+            add(raw)
+            if len(urls) >= max_images:
+                break
+
+    return urls[:max_images]
+
+
+def _jumpseller_product_stock(prod):
+    """Suma stock controlado de variantes; None = no informado/ilimitado."""
+    variants = prod.get("variants") or []
+    if not isinstance(variants, list):
+        variants = []
+
+    values = []
+    unlimited = False
+
+    for raw in variants:
+        v = raw.get("variant", raw) if isinstance(raw, dict) else {}
+        if not isinstance(v, dict):
             continue
-        hay = _core_norm(" ".join([
-            str(prod.get("name") or ""),
-            str(prod.get("description") or ""),
-            str(prod.get("sku") or ""),
-        ]))
-        if words and not all(w in hay for w in words):
+        if v.get("stock_unlimited") is True:
+            unlimited = True
             continue
-        variants = prod.get("variants") or []
-        stock = None
-        vals = []
-        for v in variants:
-            if not isinstance(v, dict):
-                continue
-            raw_stock = v.get("stock")
-            if raw_stock is None:
-                raw_stock = v.get("stock_quantity")
+        raw_stock = None
+        for key in ("stock", "stock_quantity", "quantity"):
+            if v.get(key) is not None:
+                raw_stock = v.get(key)
+                break
+        if raw_stock is not None:
             try:
-                vals.append(int(raw_stock))
+                values.append(max(0, int(float(raw_stock))))
             except Exception:
                 pass
-        if vals:
-            stock = sum(vals)
-        out.append({
-            "id":prod.get("id"),
-            "name":prod.get("name") or "Producto",
-            "price":prod.get("price"),
-            "currency":cfg.get("currency") or "CLP",
-            "stock":stock,
-            "sku":prod.get("sku"),
-            "url":prod.get("url") or prod.get("permalink"),
-            "provider":"jumpseller",
-        })
+
+    if values:
+        return sum(values)
+    if unlimited or prod.get("stock_unlimited") is True:
+        return None
+
+    for key in ("stock", "stock_quantity", "quantity"):
+        if prod.get(key) is not None:
+            try:
+                return max(0, int(float(prod.get(key))))
+            except Exception:
+                pass
+    return None
+
+
+def _jumpseller_light_product(prod, cfg):
+    """
+    Representación liviana para catálogos grandes.
+    Conserva lo necesario para búsqueda/respuesta y hasta N fotos.
+    """
+    images = _jumpseller_product_images(prod)
+
+    # Precio: primero producto; si no existe, toma la primera variante con precio.
+    price = prod.get("price")
+    if price in (None, ""):
+        for raw in (prod.get("variants") or []):
+            v = raw.get("variant", raw) if isinstance(raw, dict) else {}
+            if isinstance(v, dict) and v.get("price") not in (None, ""):
+                price = v.get("price")
+                break
+
+    url = (
+        prod.get("url")
+        or prod.get("storefront_url")
+        or prod.get("permalink")
+        or prod.get("product_url")
+        or ""
+    )
+
+    name = str(prod.get("name") or "Producto").strip()
+    description = str(prod.get("description") or "").strip()
+    sku = str(prod.get("sku") or "").strip()
+    brand = str(prod.get("brand") or "").strip()
+
+    # Índice de búsqueda precomputado para miles de productos.
+    search_text = _core_norm(
+        " ".join([name, description[:2500], sku, brand])
+    )
+
+    return {
+        "id": prod.get("id"),
+        "name": name,
+        "description": description[:2500],
+        "price": price,
+        "currency": cfg.get("currency") or "CLP",
+        "stock": _jumpseller_product_stock(prod),
+        "sku": sku or None,
+        "brand": brand or None,
+        "url": url,
+        "image_url": images[0] if images else "",
+        "foto_principal": images[0] if images else "",
+        "images": images,
+        "fotos": images,
+        "provider": "jumpseller",
+        "_search": search_text,
+    }
+
+
+def _jumpseller_catalog(cfg, force=False):
+    """
+    Descarga y cachea catálogo completo con paginación.
+
+    Pensado para catálogos grandes:
+    - 100 productos/página.
+    - Máximo 100 páginas por defecto = hasta 10.000 productos.
+    - Configurable con JUMPSELLER_MAX_PRODUCT_PAGES.
+    - Reintentos 429/5xx.
+    - Deduplicación por ID.
+    - Cache configurable para no recorrer miles de productos en cada mensaje.
+    """
+    empresa_id = str(cfg.get("empresa_id") or cfg.get("id") or "").strip()
+    store_id = str(cfg.get("store_url") or cfg.get("store_domain") or "jumpseller")
+    cache_key = f"ecommerce_catalog:{empresa_id or store_id}"
+
+    cache_seconds = max(
+        30, int(os.getenv("JUMPSELLER_CATALOG_CACHE_SECONDS", "300"))
+    )
+
+    if not force:
+        cached = TENANT_CACHE.get(cache_key)
+        if isinstance(cached, dict):
+            ts = float(cached.get("ts") or 0)
+            products = cached.get("products")
+            if isinstance(products, list) and (time.time() - ts) < cache_seconds:
+                print(
+                    "JUMPSELLER CATALOG CACHE HIT:",
+                    "productos=", len(products),
+                    "edad_s=", round(time.time() - ts, 1),
+                )
+                return products
+
+    page_size = 100
+    max_pages = max(
+        1, int(os.getenv("JUMPSELLER_MAX_PRODUCT_PAGES", "100"))
+    )
+    productos = []
+    vistos = set()
+    base_url = "https://api.jumpseller.com/v1/products.json"
+
+    for page in range(1, max_pages + 1):
+        params = {"page": page, "limit": page_size}
+        response_data = None
+
+        for attempt in range(1, 4):
+            try:
+                response_data = _jumpseller_request(
+                    "GET", base_url, cfg, params=params
+                )
+                break
+            except Exception as e:
+                txt = str(e)
+                transient = any(
+                    code in txt
+                    for code in (
+                        "HTTP 429", "HTTP 500", "HTTP 502",
+                        "HTTP 503", "HTTP 504"
+                    )
+                )
+                if not transient or attempt >= 3:
+                    raise
+                espera = 0.4 * attempt
+                print(
+                    "JUMPSELLER PRODUCTS RETRY:",
+                    "pagina=", page,
+                    "intento=", attempt,
+                    "espera_s=", espera,
+                )
+                time.sleep(espera)
+
+        data = response_data
+        if hasattr(data, "json"):
+            payload = data.json() if getattr(data, "content", b"") else {}
+        else:
+            payload = data
+
+        if isinstance(payload, list):
+            items = payload
+        elif isinstance(payload, dict):
+            items = payload.get("products") or []
+        else:
+            items = []
+
+        nuevos = 0
+        con_foto = 0
+
+        for raw in items:
+            prod = (
+                raw.get("product", raw)
+                if isinstance(raw, dict)
+                else {}
+            )
+            if not isinstance(prod, dict) or not prod:
+                continue
+
+            pid = str(prod.get("id") or "").strip()
+            dedup_key = pid or json.dumps(
+                [
+                    prod.get("name"),
+                    prod.get("sku"),
+                    prod.get("url"),
+                    prod.get("permalink"),
+                ],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            if dedup_key in vistos:
+                continue
+            vistos.add(dedup_key)
+
+            light = _jumpseller_light_product(prod, cfg)
+            if light.get("image_url"):
+                con_foto += 1
+            productos.append(light)
+            nuevos += 1
+
+        print(
+            "JUMPSELLER PRODUCTS PAGE:",
+            page,
+            "recibidos=", len(items),
+            "nuevos=", nuevos,
+            "con_foto=", con_foto,
+            "acumulados=", len(productos),
+        )
+
+        # Una página incompleta marca el final del catálogo.
+        if len(items) < page_size:
+            break
+    else:
+        print(
+            "JUMPSELLER PRODUCTS WARNING:",
+            "se alcanzó max_pages=", max_pages,
+            "productos=", len(productos),
+        )
+
+    TENANT_CACHE[cache_key] = {
+        "ts": time.time(),
+        "products": productos,
+    }
+
+    print(
+        "JUMPSELLER CATALOG READY:",
+        "productos=", len(productos),
+        "con_foto=", sum(1 for p in productos if p.get("image_url")),
+    )
+    return productos
+
+
+def _jumpseller_products(cfg, query="", limit=6, force=False):
+    """
+    Busca sobre el catálogo paginado/cacheado.
+
+    Compatible con llamadas históricas:
+      _jumpseller_products(cfg, "polera", 5)
+    """
+    catalog = _jumpseller_catalog(cfg, force=force)
+
+    q = _core_norm(query)
+    words = [w for w in q.split() if len(w) > 2]
+    limit = min(max(int(limit or 6), 1), 50)
+
+    out = []
+    for prod in catalog:
+        hay = str(prod.get("_search") or "")
+        if words and not all(word in hay for word in words):
+            continue
+
+        # No exponer índice interno al Portal/API.
+        clean = {k: v for k, v in prod.items() if k != "_search"}
+        out.append(clean)
         if len(out) >= limit:
             break
+
+    print(
+        "JUMPSELLER SEARCH:",
+        "query=", str(query or "")[:80],
+        "resultados=", len(out),
+        "catalogo=", len(catalog),
+    )
     return out
 
 
@@ -6958,7 +7245,9 @@ def _core_agent_ecommerce(empresa_id, texto, ctx=None):
             except Exception:
                 pass
         if prod.get("url"):
-            line += f"\n  {prod['url']}"
+            line += f"\n  🔗 {prod['url']}"
+        if prod.get("image_url"):
+            line += f"\n  🖼️ {prod['image_url']}"
         lines.append(line)
     return "Encontré esto en la tienda:\n" + "\n".join(lines)
 
