@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.2-JUMPSELLER-DIAGNOSTICO-403"
+APP_VERSION = "2026-09-13-NEXI-V3.4.3-JUMPSELLER-DEBUG-REAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -6438,23 +6438,74 @@ def _ecommerce_money(value, currency="CLP"):
 
 
 def _jumpseller_headers(cfg):
-    h = {"Accept":"application/json"}
-    if cfg.get("login_key") and cfg.get("auth_token"):
-        h["X-LOGIN-KEY"] = cfg["login_key"]
-        h["X-AUTH-TOKEN"] = cfg["auth_token"]
-    elif cfg.get("access_token"):
-        h["Authorization"] = f"Bearer {cfg['access_token']}"
+    h = {
+        "Accept":"application/json",
+        "User-Agent":"Nexia/3.4.3",
+    }
+    login_key = str(cfg.get("login_key") or "").strip()
+    auth_token = str(cfg.get("auth_token") or "").strip()
+    access_token = str(cfg.get("access_token") or "").strip()
+
+    if login_key and auth_token:
+        h["X-LOGIN-KEY"] = login_key
+        h["X-AUTH-TOKEN"] = auth_token
+    elif access_token:
+        h["Authorization"] = f"Bearer {access_token}"
     return h
 
 
-def _jumpseller_products(cfg, query, limit=6):
-    r = requests.get(
-        "https://api.jumpseller.com/v1/products.json",
-        headers=_jumpseller_headers(cfg),
-        params={"limit":100},
-        timeout=ECOMMERCE_TIMEOUT,
+def _jumpseller_request(method, url, cfg, **kwargs):
+    headers = _jumpseller_headers(cfg)
+    login_key = str(cfg.get("login_key") or "").strip()
+    auth_token = str(cfg.get("auth_token") or "").strip()
+    access_token = str(cfg.get("access_token") or "").strip()
+
+    print(
+        "JUMPSELLER REQUEST:",
+        method.upper(),
+        url,
+        "auth_mode=",
+        "login_key_auth_token" if login_key and auth_token else ("oauth" if access_token else "none"),
+        "login_len=",
+        len(login_key),
+        "auth_len=",
+        len(auth_token),
+        "oauth_len=",
+        len(access_token),
     )
-    r.raise_for_status()
+
+    r = requests.request(
+        method,
+        url,
+        headers=headers,
+        timeout=ECOMMERCE_TIMEOUT,
+        **kwargs,
+    )
+
+    if not r.ok:
+        body = (r.text or "").strip()
+        print(
+            "JUMPSELLER API ERROR:",
+            "status=", r.status_code,
+            "content_type=", r.headers.get("Content-Type"),
+            "request_id=", r.headers.get("X-Request-Id") or r.headers.get("X-Request-ID"),
+            "body=", body[:1500],
+        )
+        raise RuntimeError(
+            f"Jumpseller rechazó la conexión (HTTP {r.status_code}): "
+            f"{body[:500] or 'sin detalle en la respuesta'}"
+        )
+
+    return r
+
+
+def _jumpseller_products(cfg, query, limit=6):
+    r = _jumpseller_request(
+        "GET",
+        "https://api.jumpseller.com/v1/products.json",
+        cfg,
+        params={"limit":100},
+    )
     rows = r.json() if r.content else []
     q = _core_norm(query)
     words = [w for w in q.split() if len(w) > 2]
@@ -6501,13 +6552,12 @@ def _jumpseller_products(cfg, query, limit=6):
 
 
 def _jumpseller_order(cfg, reference):
-    r = requests.get(
+    r = _jumpseller_request(
+        "GET",
         "https://api.jumpseller.com/v1/orders.json",
-        headers=_jumpseller_headers(cfg),
+        cfg,
         params={"limit":100},
-        timeout=ECOMMERCE_TIMEOUT,
     )
-    r.raise_for_status()
     rows = r.json() if r.content else []
     ref = _core_norm(reference).replace("#","").strip()
     for raw in rows:
@@ -6842,9 +6892,11 @@ def portal_integracion_ecommerce():
                 _shopify_products(cfg_test, "", 1)
         except Exception as e:
             print("NEXI ECOMMERCE TEST CONNECTION ERROR:",repr(e))
+            msg = str(e)
             return portal_json({
                 "ok":False,
-                "error":"Las credenciales se guardaron, pero la prueba de conexión falló. Revisa permisos, token y dominio."
+                "error": msg if "Jumpseller rechazó la conexión" in msg else
+                         "Las credenciales se guardaron, pero la prueba de conexión falló. Revisa permisos, token y dominio."
             },400)
 
         return portal_json({"ok":True,"conectado":True,"provider":provider})
