@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.14-JUMPSELLER-FOTOS-CATALOGO-GRANDE"
+APP_VERSION = "2026-09-13-NEXI-V3.4.15-JUMPSELLER-TIME-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -4603,7 +4603,7 @@ def procesar_agenda(estado, texto):
 # Se usa mediante endpoints /core/* y crea tenants demo separados.
 
 import uuid
-
+import time
 CORE_ONBOARDING_VERSION = "nexi-core-v1.5"
 CORE_DEMO_CHANNEL = "web"
 
