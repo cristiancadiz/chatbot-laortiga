@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.23-ECOMMERCE-STATELESS"
+APP_VERSION = "2026-09-13-NEXI-V3.4.24-ECOMMERCE-PREGUNTAS-PRODUCTO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -7216,6 +7216,24 @@ def _ecommerce_product_intent(texto):
     de escritura y frases naturales.
     """
     t = _core_norm(texto)
+
+    # Preguntas naturales de disponibilidad/venta:
+    # "¿Venden desodorante?", "¿Tienen jabón?", "¿Hay shampoo?",
+    # "¿Trabajan desodorantes?", "¿Tienen disponible crema?"
+    if re.search(
+        r"\b(venden|vende|tienen|tiene|hay|ofrecen|ofrece|trabajan|manejan|disponen|disponible)\b",
+        t,
+    ):
+        # Evitar que preguntas generales de servicios/agenda se clasifiquen como ecommerce.
+        bloqueos = {
+            "hora", "horas", "agenda", "agendar", "reserva", "reservar",
+            "cita", "servicio", "servicios", "pedido", "orden", "tracking",
+            "seguimiento", "soporte", "ejecutivo",
+        }
+        palabras = set(re.findall(r"[a-z0-9]+", t))
+        if not (palabras & bloqueos):
+            return True
+
     if not t:
         return False
 
