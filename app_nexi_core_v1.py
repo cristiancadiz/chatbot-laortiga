@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.7-ORDER-FRIENDLY-STATUS"
+APP_VERSION = "2026-09-13-NEXI-V3.4.8-PORTAL-AUTO-CLAVE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -5405,6 +5405,25 @@ def _core_create_company_from_session(session):
 
     whatsapp_demo=str(datos.get("whatsapp_demo") or "").strip()
     activar_demo_empresa(empresa_id, whatsapp_demo if whatsapp_demo else None, "whatsapp")
+
+    # V3.4.8: la demo también recibe usuario/clave real de Portal.
+    # Usuario = email de onboarding. Clave = texto antes de @.
+    email_portal = str(datos.get("email_contacto") or "").strip().lower()
+    nombre_portal = str(datos.get("nombre_contacto") or empresa_nombre or "Cliente Nexia").strip()
+    if email_portal and "@" in email_portal:
+        try:
+            acceso_portal = _portal_crear_o_actualizar_acceso(
+                empresa_id, email_portal, nombre_portal
+            )
+            datos["portal_acceso"] = {
+                "email": acceso_portal["email"],
+                "password": acceso_portal["password"],
+                "auto": True,
+            }
+        except Exception as e:
+            # No bloquear la creación de la demo si Auth presenta un error puntual.
+            print("PORTAL DEMO AUTO ACCESS ERROR:", repr(e))
+
     _core_save_session(token,{"empresa_id":empresa_id,"estado":"demo_activa","completado":True,"datos":datos})
     return empresa_id
 
@@ -7574,7 +7593,9 @@ def core_onboarding_answer(token):
         datos=dict(s.get("datos") or {}); current=_core_next_question(datos)
         if not current:
             empresa_id=_core_create_company_from_session(s)
-            return core_json({"ok":True,"complete":True,"empresa_id":empresa_id,"summary":datos,"whatsapp":_core_whatsapp_info(empresa_id)})
+            perfil_demo = _core_get_session(token) or {}
+            datos_final = perfil_demo.get("datos") or datos
+            return core_json({"ok":True,"complete":True,"empresa_id":empresa_id,"summary":datos_final,"portal_acceso":datos_final.get("portal_acceso"),"whatsapp":_core_whatsapp_info(empresa_id)})
         body=request.get_json(silent=True) or {}; value=body.get("answer")
         if value is None:return core_json({"ok":False,"error":"Falta answer"},400)
         key=current["key"]
@@ -9337,6 +9358,146 @@ def portal_login():
 
 
 
+
+def _portal_clave_desde_email(email):
+    """
+    V3.4.8: clave automática del Portal = parte del correo antes de @.
+    Ej.: carlos@gmail.com -> carlos
+    Supabase exige una longitud mínima; si el nombre local es demasiado corto,
+    se completa únicamente para poder crear la cuenta.
+    """
+    email = str(email or "").strip().lower()
+    local = email.split("@", 1)[0].strip() if "@" in email else ""
+    if not local:
+        return ""
+    # Mantener exactamente el local-part cuando cumple el mínimo práctico.
+    if len(local) >= 6:
+        return local
+    # Fallback técnico excepcional para correos con local-part muy corto.
+    return (local + "nexia")[:6]
+
+
+def _portal_buscar_usuario_auth_por_email(email):
+    """Busca un usuario Supabase Auth por email usando la API admin."""
+    email = str(email or "").strip().lower()
+    if not email:
+        return None
+    headers_admin = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+    # MVP: recorrer páginas pequeñas; normalmente Nexia tiene pocos usuarios.
+    for page in range(1, 11):
+        r = requests.get(
+            f"{SUPABASE_URL}/auth/v1/admin/users",
+            headers=headers_admin,
+            params={"page": page, "per_page": 100},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if not r.ok:
+            print("PORTAL AUTH USER LOOKUP ERROR:", r.status_code, r.text[:300])
+            return None
+        payload = r.json() if r.content else {}
+        users = payload.get("users", []) if isinstance(payload, dict) else []
+        for u in users:
+            if str(u.get("email") or "").strip().lower() == email:
+                return u
+        if len(users) < 100:
+            break
+    return None
+
+
+def _portal_crear_o_actualizar_acceso(empresa_id, email, nombre):
+    """
+    Crea el acceso real Supabase Auth para DEMO y PRODUCCIÓN.
+    Clave = local-part del email. Si la cuenta ya existe, actualiza la clave
+    y asegura el perfil de la empresa.
+    """
+    empresa_id = str(empresa_id or "").strip()
+    email = str(email or "").strip().lower()
+    nombre = str(nombre or "Cliente Nexia").strip()
+    password = _portal_clave_desde_email(email)
+
+    if not empresa_id or not email or "@" not in email or not password:
+        raise RuntimeError("No se puede crear acceso Portal: empresa/email inválido")
+
+    headers_admin = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    user = _portal_buscar_usuario_auth_por_email(email)
+    if user:
+        user_id = str(user.get("id") or "").strip()
+        if not user_id:
+            raise RuntimeError("Usuario Auth existente sin id")
+        ru = requests.put(
+            f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}",
+            headers=headers_admin,
+            json={
+                "password": password,
+                "email_confirm": True,
+                "user_metadata": {
+                    **(user.get("user_metadata") or {}),
+                    "empresa_id": empresa_id,
+                    "nombre": nombre,
+                    "nexia_auto_password": True,
+                },
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if not ru.ok:
+            raise RuntimeError(f"No se pudo actualizar acceso Portal: {ru.status_code} {ru.text[:300]}")
+    else:
+        ru = requests.post(
+            f"{SUPABASE_URL}/auth/v1/admin/users",
+            headers=headers_admin,
+            json={
+                "email": email,
+                "password": password,
+                "email_confirm": True,
+                "user_metadata": {
+                    "empresa_id": empresa_id,
+                    "nombre": nombre,
+                    "nexia_auto_password": True,
+                },
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if not ru.ok:
+            raise RuntimeError(f"No se pudo crear acceso Portal: {ru.status_code} {ru.text[:300]}")
+        user = ru.json() if ru.content else {}
+        user_id = str(user.get("id") or "").strip()
+
+    if not user_id:
+        raise RuntimeError("Supabase no devolvió id de usuario Portal")
+
+    hp = backend_headers()
+    rp = requests.post(
+        f"{SUPABASE_URL}/rest/v1/perfiles",
+        headers={**hp, "Prefer":"resolution=merge-duplicates,return=representation"},
+        params={"on_conflict":"id"},
+        json={
+            "id": user_id,
+            "empresa_id": empresa_id,
+            "nombre": nombre,
+            "email": email,
+            "rol": "cliente",
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    rp.raise_for_status()
+
+    print("PORTAL AUTO ACCESS OK:", empresa_id, email, "clave_localpart=SI")
+    return {
+        "user_id": user_id,
+        "email": email,
+        "password": password,
+    }
+
+
 @app.route("/portal/crear-acceso-pagado", methods=["POST", "OPTIONS"])
 def portal_crear_acceso_pagado():
     if request.method == "OPTIONS":
@@ -9350,53 +9511,21 @@ def portal_crear_acceso_pagado():
     empresa_id = str(perfil.get("empresa_id") or "").strip()
     email = str(perfil.get("email") or "").strip().lower()
     data = request.get_json(silent=True) or {}
-    password = str(data.get("password") or "")
+    password = _portal_clave_desde_email(email)
     if not email or "@" not in email:
         return portal_json({"ok": False, "error": "La prueba no tiene un correo válido asociado"}, 400)
-    if len(password) < 8:
-        return portal_json({"ok": False, "error": "La contraseña debe tener al menos 8 caracteres"}, 400)
+    if not password:
+        return portal_json({"ok": False, "error": "No se pudo generar la clave automática del Portal"}, 400)
 
     plan = estado_suscripcion_empresa(empresa_id)
     if str(plan.get("tipo_plan") or "").lower() not in {"nexia_500", "nexia_1000"}:
         return portal_json({"ok": False, "error": "Primero debes tener un pago aprobado"}, 409)
 
-    headers_admin = {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "Content-Type": "application/json",
-    }
     nombre = str(perfil.get("nombre") or "Cliente Nexia").strip()
-    ru = requests.post(
-        f"{SUPABASE_URL}/auth/v1/admin/users",
-        headers=headers_admin,
-        json={
-            "email": email,
-            "password": password,
-            "email_confirm": True,
-            "user_metadata": {"empresa_id": empresa_id, "nombre": nombre},
-        },
-        timeout=SUPABASE_TIMEOUT,
-    )
-    if not ru.ok:
-        detalle = ru.text[:500]
-        if ru.status_code in {400, 422} and "already" in detalle.lower():
-            return portal_json({"ok": False, "codigo":"USUARIO_EXISTE", "error":"Este correo ya tiene una cuenta. Ingresa con tu contraseña o restablécela."}, 409)
-        raise RuntimeError(f"No se pudo crear el usuario del Portal: {ru.status_code} {detalle}")
-
-    usuario = ru.json() if ru.content else {}
-    user_id = str(usuario.get("id") or "").strip()
-    if not user_id:
-        raise RuntimeError("Supabase no devolvió el id del usuario")
-
+    acceso = _portal_crear_o_actualizar_acceso(empresa_id, email, nombre)
+    user_id = acceso["user_id"]
+    password = acceso["password"]
     hp = backend_headers()
-    rp = requests.post(
-        f"{SUPABASE_URL}/rest/v1/perfiles",
-        headers={**hp, "Prefer":"resolution=merge-duplicates,return=representation"},
-        params={"on_conflict":"id"},
-        json={"id":user_id,"empresa_id":empresa_id,"nombre":nombre,"email":email,"rol":"cliente"},
-        timeout=SUPABASE_TIMEOUT,
-    )
-    rp.raise_for_status()
     requests.patch(
         f"{SUPABASE_URL}/rest/v1/nexi_pagos",
         headers={**hp, "Prefer":"return=minimal"},
@@ -9404,7 +9533,7 @@ def portal_crear_acceso_pagado():
         json={"setup_completed":True,"updated_at":datetime.now(pytz.UTC).isoformat()},
         timeout=SUPABASE_TIMEOUT,
     )
-    return portal_json({"ok": True, "email": email, "mensaje":"Acceso permanente creado. Ya puedes ingresar con correo y contraseña."}, 201)
+    return portal_json({"ok": True, "email": email, "password": password, "mensaje":"Acceso permanente creado. La clave corresponde al texto del correo antes de @."}, 201)
 
 
 @app.route("/portal/me", methods=["GET", "OPTIONS"])
