@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import base64
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.10-WHATSAPP-MENU-LIST"
+APP_VERSION = "2026-09-13-NEXI-V3.4.12-MENU-LIMPIO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -1358,6 +1358,14 @@ def router_opciones_menu(telefono, pagina=0, canal="whatsapp"):
 
     for e in pagadas:
         nombre = str(e.get("nombre") or "Negocio Nexia").strip()
+
+        # V3.4.12: ocultar solo estas dos entradas del menú público.
+        # No se eliminan de Supabase ni del Portal.
+        if normalizar_texto(nombre) == "administracion general":
+            continue
+        if nombre == "Nexia":
+            continue
+
         todas.append({
             "id": f"nexi:empresa:{e['empresa_id']}",
             "item": _router_item_produccion(nombre),
@@ -1507,6 +1515,24 @@ def _router_twilio_credenciales():
     return sid, token, from_value
 
 
+
+def _twilio_item_limit(texto, max_units=24):
+    """
+    Twilio valida el título del item con límite de 24 unidades UTF-16.
+    Un emoji como 🟢 ocupa 2 unidades aunque Python len() cuente 1.
+    """
+    texto = str(texto or "").strip()
+    out = []
+    units = 0
+    for ch in texto:
+        ch_units = len(ch.encode("utf-16-le")) // 2
+        if units + ch_units > max_units:
+            break
+        out.append(ch)
+        units += ch_units
+    return "".join(out).strip()
+
+
 def _router_twilio_content_sid(opciones):
     """
     Crea/reutiliza un list-picker REAL para el menú superior.
@@ -1523,7 +1549,7 @@ def _router_twilio_content_sid(opciones):
     firma_src = json.dumps(
         [
             {
-                "item": str(op.get("item") or "")[:24],
+                "item": _twilio_item_limit(op.get("item") or "", 24),
                 "id": str(op.get("id") or "")[:200],
                 "description": str(op.get("description") or "Seleccionar")[:72],
             }
@@ -1544,7 +1570,7 @@ def _router_twilio_content_sid(opciones):
 
     items = []
     for i, op in enumerate(opciones, 1):
-        item = str(op.get("item") or f"Opción {i}")[:24].strip()
+        item = _twilio_item_limit(op.get("item") or f"Opción {i}", 24)
         item_id = str(op.get("id") or f"nexi:opcion:{i}")[:200].strip()
         description = str(op.get("description") or "Seleccionar")[:72].strip()
         items.append({
