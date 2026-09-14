@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-13-NEXI-V3.4.24-ECOMMERCE-PREGUNTAS-PRODUCTO"
+APP_VERSION = "2026-09-14-NEXI-V3.4.25-WHATSAPP-SENDER-NEXIA"
 load_dotenv()
 
 app = Flask(__name__)
@@ -75,7 +75,7 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
 TWILIO_WHATSAPP_FROM = os.getenv(
     "TWILIO_WHATSAPP_FROM",
-    "whatsapp:+56971906724",
+    "whatsapp:+56921800941",
 ).strip()
 
 twilio_client = (
