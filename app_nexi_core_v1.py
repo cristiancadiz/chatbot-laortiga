@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-14-NEXI-V3.4.25-WHATSAPP-SENDER-NEXIA"
+APP_VERSION = "2026-09-14-NEXI-V3.4.26-TWILIO-ROUTING-DEBUG"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8491,11 +8491,52 @@ def whatsapp_webhook():
     ECOMMERCE_CAROUSEL_PRODUCTS.set(None)
     ECOMMERCE_PRODUCT_CARDS.set(None)
     try:
-        to_numero = re.sub(r"\D", "", str(request.form.get("To") or TWILIO_WHATSAPP_FROM))
+        # ------------------------------------------------------------
+        # DEBUG DE ENRUTAMIENTO TWILIO
+        # ------------------------------------------------------------
+        # Permite comprobar en producción:
+        # 1) a qué número de WhatsApp llegó realmente el mensaje (To);
+        # 2) quién escribió (From);
+        # 3) qué sender global tiene cargado Render;
+        # 4) qué sender/credenciales específicas resolvió el tenant.
+        #
+        # IMPORTANTE: nunca imprimimos TWILIO_AUTH_TOKEN.
+        raw_to = (request.form.get("To") or "").strip()
+        raw_from = (request.form.get("From") or "").strip()
+        to_numero = re.sub(r"\D", "", str(raw_to or TWILIO_WHATSAPP_FROM))
+
+        print("=" * 60)
+        print("NEXI TWILIO ROUTING DEBUG")
+        print("REQUEST TO:", raw_to or "(vacío)")
+        print("REQUEST FROM:", raw_from or "(vacío)")
+        print("CONFIG GLOBAL FROM:", TWILIO_WHATSAPP_FROM or "(vacío)")
+        print(
+            "CONFIG ACCOUNT SID:",
+            ("..." + TWILIO_ACCOUNT_SID[-8:]) if TWILIO_ACCOUNT_SID else "(vacío)",
+        )
+        print("TO NORMALIZADO:", to_numero or "(vacío)")
+
         # Conserva la resolución por número receptor como fallback, pero el router
         # superior decide el tenant activo de esta conversación.
         activar_por_canal("whatsapp", "twilio", to_numero)
-        telefono = (request.form.get("From") or "").strip()
+
+        canal_cfg_debug = cfg("canal_config", {}) or {}
+        print("TENANT EMPRESA ID:", empresa_actual_id())
+        print("TENANT EMPRESA:", cfg("empresa_nombre", ""))
+        print("TENANT CANAL:", cfg("canal", ""))
+        print("TENANT PROVIDER:", cfg("provider", ""))
+        print("TENANT SENDER:", canal_cfg_debug.get("sender") or "(sin override)")
+        print(
+            "TENANT ACCOUNT SID ENV:",
+            canal_cfg_debug.get("account_sid_env") or "(sin override)",
+        )
+        print(
+            "TENANT AUTH TOKEN ENV:",
+            canal_cfg_debug.get("auth_token_env") or "(sin override)",
+        )
+        print("=" * 60)
+
+        telefono = raw_from
         texto = (request.form.get("Body") or "").strip()
         interactive_payload = router_payload_interactivo(request.form)
         texto_router = agenda_payload_a_texto(interactive_payload) if interactive_payload else texto
