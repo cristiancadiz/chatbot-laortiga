@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-16-NEXI-V3.5.6-SCOPE-CONVOCATORIAS-SUPERADMIN"
+APP_VERSION = "2026-09-16-NEXI-V3.5.7-ROUTER-CONVOCATORIAS-WHATSAPP"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8627,16 +8627,56 @@ def whatsapp_webhook():
 
         router_activar_ruta(route, "twilio")
 
-        # V3.5.2: Convocatorias transversales configuradas desde Portal.
-        # IMPORTANTE: usar la empresa de la ruta activa. El webhook puede haber
-        # entrado inicialmente por un número cuyo tenant base sea otro (por ejemplo
-        # Diego), mientras el router superior ya seleccionó una demo/empresa Core.
-        empresa_conv = str(route.get("empresa_id") or empresa_actual_id() or "").strip()
-        conv_respuesta = _conv_trigger_respuesta(empresa_conv, telefono, texto_procesado or texto)
-        if conv_respuesta:
-            print("NEXI CONVOCATORIAS TRIGGER:", empresa_conv, telefono, repr(texto_procesado or texto))
-            twiml.message(conv_respuesta)
-            return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+        # V3.5.7: Convocatorias con resolución de empresa por WhatsApp.
+        # Evita generar un token usando una sesión antigua del router.
+        texto_conv = texto_procesado or texto
+        empresa_conv = _conv_resolver_empresa_trigger(route, telefono, texto_conv)
+
+        if empresa_conv:
+            # Si la empresa correcta difiere del contexto viejo, alinear la sesión
+            # para que las siguientes interacciones continúen en el mismo workspace.
+            empresa_router = str(route.get("empresa_id") or "").strip()
+            if empresa_router != empresa_conv:
+                try:
+                    router_contexto_guardar(
+                        telefono,
+                        empresa_conv,
+                        motor="core",
+                        origen="convocatorias",
+                        canal="whatsapp",
+                    )
+                    route = dict(route or {})
+                    route.update({
+                        "empresa_id": empresa_conv,
+                        "motor": "core",
+                        "origen": "convocatorias",
+                    })
+                    router_activar_ruta(route, "twilio")
+                    print(
+                        "NEXI CONVOCATORIAS ROUTER REALINEADO:",
+                        empresa_router or "-",
+                        "->",
+                        empresa_conv,
+                    )
+                except Exception as e:
+                    print("NEXI CONVOCATORIAS ROUTER REALINEAR ERROR:", repr(e))
+
+            conv_respuesta = _conv_trigger_respuesta(
+                empresa_conv,
+                telefono,
+                texto_conv,
+            )
+            if conv_respuesta:
+                print(
+                    "NEXI CONVOCATORIAS TRIGGER:",
+                    empresa_conv,
+                    telefono,
+                    repr(texto_conv),
+                )
+                twiml.message(conv_respuesta)
+                return str(twiml), 200, {
+                    "Content-Type": "application/xml; charset=utf-8"
+                }
 
         # V2.3.1: paginación de listas interactivas de agenda.
         if interactive_payload and interactive_payload.lower().startswith("agenda:"):
@@ -13060,6 +13100,93 @@ def _conv_config_empresa(empresa_id):
         if rows:out.update(rows[0])
     except Exception as e: print('NEXI CONVOCATORIAS CONFIG ERROR:',repr(e))
     return out
+
+
+def _conv_empresa_asociada_whatsapp(telefono):
+    """
+    Recupera la empresa más recientemente asociada al WhatsApp desde demo_accesos.
+
+    Se usa únicamente como pista de enrutamiento para Convocatorias.
+    No crea demos, no reactiva planes y no modifica suscripciones.
+    """
+    ident=_normalizar_identificador_demo(telefono,'whatsapp')
+    h=backend_headers()
+    if not ident or not h:
+        return ''
+
+    try:
+        r=requests.get(
+            f'{SUPABASE_URL}/rest/v1/demo_accesos',
+            headers=h,
+            params={
+                'select':'empresa_id,updated_at,created_at',
+                'canal':'eq.whatsapp',
+                'identificador_cliente':f'eq.{ident}',
+                'order':'updated_at.desc.nullslast,created_at.desc',
+                'limit':'1',
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows=r.json() if r.content else []
+        if not rows:
+            return ''
+        return str((rows[0] or {}).get('empresa_id') or '').strip()
+    except Exception as e:
+        print('NEXI CONVOCATORIAS WHATSAPP EMPRESA ERROR:',repr(e))
+        return ''
+
+
+def _conv_resolver_empresa_trigger(route, telefono, texto):
+    """
+    Determina qué empresa debe recibir un trigger de Convocatorias.
+
+    Prioridad:
+    1) Empresa más recientemente asociada al WhatsApp, si tiene Convocatorias
+       activas y el texto coincide con sus palabras de activación.
+    2) Empresa de la ruta activa.
+    3) Tenant actual como último fallback.
+
+    Esto evita que una sesión antigua del router genere el token para otra empresa.
+    """
+    candidatos=[]
+
+    propia=_conv_empresa_asociada_whatsapp(telefono)
+    if propia:
+        candidatos.append(('whatsapp_asociado',propia))
+
+    ruta=str((route or {}).get('empresa_id') or '').strip()
+    if ruta:
+        candidatos.append(('router',ruta))
+
+    tenant=str(empresa_actual_id() or '').strip()
+    if tenant:
+        candidatos.append(('tenant',tenant))
+
+    vistos=set()
+    for origen,eid in candidatos:
+        if not eid or eid in vistos:
+            continue
+        vistos.add(eid)
+
+        cfg_conv=_conv_config_empresa(eid)
+        if not bool(cfg_conv.get('activo')):
+            continue
+
+        if not _conv_trigger_coincide(cfg_conv,texto):
+            continue
+
+        print(
+            'NEXI CONVOCATORIAS ROUTE:',
+            origen,
+            'empresa=',eid,
+            'router_empresa=',ruta or '-',
+            'whatsapp_empresa=',propia or '-',
+        )
+        return eid
+
+    return ''
+
 
 def _conv_secret(): return str(app.secret_key or os.getenv('SECRET_KEY') or 'change-me-in-render').encode()
 def _conv_token_crear(empresa_id,telefono='',conversacion_id=''):
