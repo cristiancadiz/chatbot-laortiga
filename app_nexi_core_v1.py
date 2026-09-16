@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-16-NEXI-V3.5.8-CONVOCATORIAS-ANTES-ROUTER"
+APP_VERSION = "2026-09-16-NEXI-V3.5.9-MATCH-APORTE-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -13325,18 +13325,77 @@ def _conv_trigger_respuesta(empresa_id,telefono,texto):
     return f'Claro 😊 Para participar en {name}, completa este formulario:\n\n{url}\n\nTu número de WhatsApp ya viene asociado para que no tengas que escribirlo nuevamente.'
 
 def _conv_interesados_match(empresa_id,comuna,tipos,monto):
-    h=backend_headers();
-    if not h:return []
-    r=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',headers=h,params={'select':'*','empresa_id':f'eq.{empresa_id}','activo':'eq.true','limit':'500'},timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else []
-    ck=_conv_norm(comuna);tk={_conv_norm(x) for x in _conv_lista(tipos)};out=[]
+    h=backend_headers()
+    if not h:
+        return []
+
+    r=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',
+        headers=h,
+        params={
+            'select':'*',
+            'empresa_id':f'eq.{empresa_id}',
+            'activo':'eq.true',
+            'limit':'500',
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows=r.json() if r.content else []
+
+    ck=_conv_norm(comuna)
+    tk={_conv_norm(x) for x in _conv_lista(tipos)}
+    out=[]
+
+    try:
+        m=float(monto) if monto not in (None,'') else None
+    except Exception:
+        m=None
+
     for row in rows:
-        if ck not in {_conv_norm(x) for x in _conv_lista(row.get('comunas'))}:continue
-        if tk and not (tk & {_conv_norm(x) for x in _conv_lista(row.get('tipos_producto'))}):continue
-        try:m=float(monto) if monto not in (None,'') else None;mn=float(row.get('aporte_minimo')) if row.get('aporte_minimo') not in (None,'') else None
-        except:m=mn=None
-        if m is None and not bool(row.get('acepta_retiro_sin_aporte',True)):continue
-        if mn is not None and (m is None or m<mn):continue
+        comunas_row={_conv_norm(x) for x in _conv_lista(row.get('comunas'))}
+        tipos_row={_conv_norm(x) for x in _conv_lista(row.get('tipos_producto'))}
+
+        if ck not in comunas_row:
+            continue
+
+        if tk and not (tk & tipos_row):
+            continue
+
+        try:
+            mn=(
+                float(row.get('aporte_minimo'))
+                if row.get('aporte_minimo') not in (None,'')
+                else None
+            )
+        except Exception:
+            mn=None
+
+        acepta_sin_aporte=bool(row.get('acepta_retiro_sin_aporte',True))
+
+        # Si la solicitud NO ofrece aporte:
+        # - entra si el recolector acepta retiros sin aporte.
+        # - el aporte_minimo NO debe bloquearlo.
+        if m is None:
+            if not acepta_sin_aporte:
+                continue
+
+        # Si la solicitud SÍ ofrece aporte:
+        # aplicar el mínimo declarado por el recolector.
+        elif mn is not None and m < mn:
+            continue
+
         out.append(row)
+
+    print(
+        'NEXI CONVOCATORIA MATCH:',
+        'empresa=',empresa_id,
+        'comuna=',ck,
+        'tipos=',sorted(tk),
+        'monto=',m,
+        'candidatos=',len(rows),
+        'coincidencias=',len(out),
+    )
     return out
 
 def _conv_notificar(match_id,sol,it):
@@ -13350,19 +13409,82 @@ def _conv_notificar(match_id,sol,it):
     return enviar_correo_resend(correo,asunto,texto=txt)
 
 def _conv_matches(sol):
-    h=backend_headers();n=0
-    for it in _conv_interesados_match(sol.get('empresa_id'),sol.get('comuna'),sol.get('tipos_producto'),sol.get('monto_ofrecido')):
+    h=backend_headers()
+    if not h:
+        return
+
+    encontrados=_conv_interesados_match(
+        sol.get('empresa_id'),
+        sol.get('comuna'),
+        sol.get('tipos_producto'),
+        sol.get('monto_ofrecido'),
+    )
+
+    enviados=0
+    matches_creados=0
+
+    for it in encontrados:
         try:
-            p={'empresa_id':sol.get('empresa_id'),'solicitud_id':sol.get('id'),'interesado_id':it.get('id'),'estado':'notificado','notified_at':datetime.now(pytz.UTC).isoformat()}
-            r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',headers={**h,'Prefer':'resolution=ignore-duplicates,return=representation'},json=p,timeout=SUPABASE_TIMEOUT)
-            if r.status_code not in {200,201,409}:r.raise_for_status()
+            p={
+                'empresa_id':sol.get('empresa_id'),
+                'solicitud_id':sol.get('id'),
+                'interesado_id':it.get('id'),
+                'estado':'notificado',
+                'notified_at':datetime.now(pytz.UTC).isoformat(),
+            }
+
+            r=requests.post(
+                f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',
+                headers={
+                    **h,
+                    'Prefer':'resolution=ignore-duplicates,return=representation',
+                },
+                json=p,
+                timeout=SUPABASE_TIMEOUT,
+            )
+
+            if r.status_code not in {200,201,409}:
+                r.raise_for_status()
+
             rows=r.json() if r.content else []
             mid=rows[0].get('id') if rows else None
+
             if not mid:
-                q=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',headers=h,params={'select':'id','solicitud_id':f"eq.{sol.get('id')}",'interesado_id':f"eq.{it.get('id')}",'limit':'1'},timeout=SUPABASE_TIMEOUT);q.raise_for_status();qr=q.json() if q.content else [];mid=qr[0].get('id') if qr else None
-            if mid and _conv_notificar(mid,sol,it):n+=1
-        except Exception as e:print('NEXI CONVOCATORIA MATCH ERROR:',repr(e))
-    print('NEXI CONVOCATORIA NOTIFICADOS:',sol.get('id'),n)
+                q=requests.get(
+                    f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',
+                    headers=h,
+                    params={
+                        'select':'id',
+                        'solicitud_id':f"eq.{sol.get('id')}",
+                        'interesado_id':f"eq.{it.get('id')}",
+                        'limit':'1',
+                    },
+                    timeout=SUPABASE_TIMEOUT,
+                )
+                q.raise_for_status()
+                qr=q.json() if q.content else []
+                mid=qr[0].get('id') if qr else None
+
+            if mid:
+                matches_creados+=1
+                if _conv_notificar(mid,sol,it):
+                    enviados+=1
+
+        except Exception as e:
+            print(
+                'NEXI CONVOCATORIA MATCH ERROR:',
+                'solicitud=',sol.get('id'),
+                'interesado=',it.get('id'),
+                repr(e),
+            )
+
+    print(
+        'NEXI CONVOCATORIA RESULTADO:',
+        'solicitud=',sol.get('id'),
+        'coincidencias=',len(encontrados),
+        'matches=',matches_creados,
+        'notificaciones_enviadas=',enviados,
+    )
 
 
 def _conv_comunas_recolectores_activos(empresa_id):
