@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-16-NEXI-V3.5.13-CHAT-RETIRO"
+APP_VERSION = "2026-09-16-NEXI-V3.5.14-HUMANO-RETIRO-24H"
 load_dotenv()
 
 app = Flask(__name__)
@@ -3432,6 +3432,68 @@ def supabase_headers():
 
 
 
+def _conv_retiro_activo_en_conversacion(conversacion_id, empresa_id):
+    """Only an adjudicated, unfinished pickup exempts a chat from the general timeout.
+
+    Query both linked requests and accepted matches; never infer ownership from a
+    phone number alone, because the WhatsApp number is shared across companies.
+    """
+    if not conversacion_id or not empresa_id:
+        return False
+    h=supabase_headers()
+    if not h:
+        return False
+    try:
+        r=requests.get(
+            f"{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes",
+            headers=h,
+            params={
+                "select":"id,estado",
+                "empresa_id":f"eq.{empresa_id}",
+                "conversacion_id":f"eq.{conversacion_id}",
+                "estado":"in.(disponible,reclamada,en_gestion)",
+                "limit":"25",
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        solicitudes=r.json() if r.content else []
+        for solicitud in solicitudes:
+            q=requests.get(
+                f"{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches",
+                headers=h,
+                params={
+                    "select":"id",
+                    "solicitud_id":f"eq.{solicitud['id']}",
+                    "estado":"eq.tomada",
+                    "limit":"1",
+                },
+                timeout=SUPABASE_TIMEOUT,
+            )
+            q.raise_for_status()
+            if q.json() if q.content else []:
+                return True
+        return False
+    except Exception as e:
+        print("NEXI RETIRO MODO VALIDACION ERROR:",repr(e))
+        return False  # fail closed: no indefinite human mode on DB errors
+
+
+def _conv_aplicar_modo_retiro(conversacion_id, empresa_id, canal='whatsapp'):
+    """Human only while an accepted request is active and the real 24h window is open."""
+    if not conversacion_id or not empresa_id:
+        return False
+    if not _conv_retiro_activo_en_conversacion(conversacion_id,empresa_id):
+        return False
+    ventana=estado_ventana_whatsapp_24h(conversacion_id) if canal=='whatsapp' else {'abierta':True}
+    activar_por_empresa(empresa_id,canal=canal)
+    establecer_modo_atencion(conversacion_id,'ejecutivo' if ventana.get('abierta') else 'bot')
+    print('NEXI RETIRO MODO:',conversacion_id,
+          'humano' if ventana.get('abierta') else 'bot',
+          'ventana=',ventana.get('motivo'))
+    return bool(ventana.get('abierta'))
+
+
 def obtener_modo_atencion(identificador, canal="whatsapp"):
     """
     Devuelve 'bot' o 'ejecutivo' para una conversación.
@@ -3472,8 +3534,19 @@ def obtener_modo_atencion(identificador, canal="whatsapp"):
         fila = filas[0]
         modo = str(fila.get("modo_atencion") or "bot").lower()
 
-        # El modo ejecutivo nunca queda bloqueado para siempre.
-        # Si pasó el tiempo configurado sin actividad, la conversación vuelve al bot.
+        # Retiro adjudicado: ignorar timeout general de 30 min, pero no la ventana
+        # real de WhatsApp ni la finalización de la solicitud.
+        if modo == 'ejecutivo' and _conv_retiro_activo_en_conversacion(
+            fila.get('id'), empresa_actual_id()
+        ):
+            ventana=estado_ventana_whatsapp_24h(fila.get('id')) if canal=='whatsapp' else {'abierta':True}
+            if not ventana.get('abierta'):
+                establecer_modo_atencion(fila.get('id'),'bot')
+                print('NEXI RETIRO VENTANA 24H VENCIDA:',fila.get('id'))
+                return 'bot'
+            return 'ejecutivo'
+
+        # Otros handoffs conservan su timeout normal.
         if modo == "ejecutivo" and MODO_EJECUTIVO_TIMEOUT_MINUTOS > 0:
             ultima = str(fila.get("ultima_fecha") or "").strip()
             if ultima:
@@ -13664,7 +13737,7 @@ def _conv_asegurar_conversacion_solicitud(sol):
 
     if existente:
         try:
-            establecer_modo_atencion(existente,'ejecutivo')
+            _conv_aplicar_modo_retiro(existente,eid,canal)
         except Exception as e:
             print('NEXI CONVOCATORIA CHAT MODO WARN:',repr(e))
         return existente
@@ -13735,7 +13808,7 @@ def _conv_asegurar_conversacion_solicitud(sol):
             print('NEXI CONVOCATORIA CHAT PATCH SOL WARN:',repr(e))
 
         try:
-            establecer_modo_atencion(conv_id,'ejecutivo')
+            _conv_aplicar_modo_retiro(conv_id,eid,canal)
         except Exception as e:
             print('NEXI CONVOCATORIA CHAT MODO WARN:',repr(e))
 
@@ -13768,34 +13841,12 @@ def _conv_chat_mensajes(conversacion_id, desde=None):
     return r.json() if r.content else []
 
 
-def _conv_ventana_chat_abierta(conversacion_id, solicitud_created_at):
-    """
-    Usa la ventana real del historial cuando existe. Como fallback, permite
-    responder dentro de 24 h desde la creación de la solicitud pública.
-    """
-    if conversacion_id:
-        try:
-            v=estado_ventana_whatsapp_24h(conversacion_id)
-            if bool(v.get('abierta')):
-                return True, v
-        except Exception as e:
-            print('NEXI CONVOCATORIA CHAT VENTANA WARN:',repr(e))
-
-    f=_parsear_fecha_iso_segura(solicitud_created_at)
-    if f:
-        ahora=datetime.now(pytz.UTC)
-        if ahora - f.astimezone(pytz.UTC) <= timedelta(hours=24):
-            return True, {
-                'abierta':True,
-                'motivo':'solicitud_reciente',
-                'solicitud_created_at':solicitud_created_at,
-            }
-
-    return False, {
-        'abierta':False,
-        'motivo':'ventana_24h_cerrada',
-        'solicitud_created_at':solicitud_created_at,
-    }
+def _conv_ventana_chat_abierta(conversacion_id, solicitud_created_at=None):
+    """Only a verified incoming WhatsApp message starts or renews the 24h window."""
+    if not conversacion_id:
+        return False, {'abierta':False,'motivo':'sin_conversacion'}
+    v=estado_ventana_whatsapp_24h(conversacion_id)
+    return bool(v.get('abierta')),v
 
 
 @app.route('/public/convocatorias/match/<match_id>',methods=['GET','OPTIONS'])
@@ -13817,10 +13868,13 @@ def public_conv_match(match_id):
         if conv_id:
             sol['conversacion_id']=conv_id
             mensajes=_conv_chat_mensajes(conv_id,sol.get('created_at'))
+            abierta,ventana=_conv_ventana_chat_abierta(conv_id)
+            vigente=sol.get('estado') in {'disponible','reclamada','en_gestion'}
             chat={
-                'habilitado':True,
+                'habilitado':bool(abierta and vigente),
                 'conversacion_id':conv_id,
                 'mensajes':mensajes,
+                'ventana_24h':ventana,
             }
     else:
         for k in ['direccion_retiro','telefono','nombre','apellido','conversacion_id']:
@@ -13876,6 +13930,19 @@ def public_conv_tomar(match_id):
     q.raise_for_status()
     rows=q.json() if q.content else []
     sol=rows[0] if rows else {}
+    if sol and str(sol.get('estado') or '')=='disponible':
+        upd=requests.patch(
+            f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
+            headers={**h,'Prefer':'return=representation'},
+            params={'id':f'eq.{sid}','empresa_id':f"eq.{sol.get('empresa_id')}",'estado':'eq.disponible'},
+            json={'estado':'reclamada','updated_at':datetime.now(pytz.UTC).isoformat()},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if not upd.ok:
+            print('NEXI RETIRO ESTADO SOLICITUD ERROR:',upd.status_code,upd.text[:1000])
+        else:
+            changed=upd.json() if upd.content else []
+            if changed: sol=changed[0]
 
     conv_id=_conv_asegurar_conversacion_solicitud(sol)
     if conv_id:
@@ -13919,6 +13986,8 @@ def public_conv_match_mensaje(match_id):
         },403)
 
     sol=dict(row.get('nexi_convocatorias_solicitudes') or {})
+    if sol.get('estado') in {'completada','no_concretada','cancelada'}:
+        return portal_json({'ok':False,'error':'El retiro ya finalizó. Chat cerrado.'},409)
     eid=str(sol.get('empresa_id') or row.get('empresa_id') or '').strip()
     telefono=str(sol.get('telefono') or '').strip()
     canal=str(sol.get('canal') or 'whatsapp').lower()
@@ -13969,7 +14038,7 @@ def public_conv_match_mensaje(match_id):
         provider=provider,
         canal_config=canal_cfg,
     )
-    establecer_modo_atencion(conv_id,'ejecutivo')
+    _conv_aplicar_modo_retiro(conv_id,eid,canal)
 
     if canal!='whatsapp':
         return portal_json({'ok':False,'error':f'Canal no soportado: {canal}'},400)
@@ -14183,7 +14252,18 @@ def portal_conv_solicitud_patch(sid):
     if not p or not eid:return portal_json({'ok':False,'error':'Sesión no autorizada'},401)
     d=request.get_json(silent=True) or {};estado=str(d.get('estado') or '')
     if estado not in {'disponible','reclamada','en_gestion','completada','no_concretada','cancelada'}:return portal_json({'ok':False,'error':'Estado inválido'},400)
-    pay={'estado':estado,'resultado_detalle':str(d.get('resultado_detalle') or '')[:2000],'updated_at':datetime.now(pytz.UTC).isoformat()};r=requests.patch(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers={**backend_headers(),'Prefer':'return=representation'},params={'id':f'eq.{sid}','empresa_id':f'eq.{eid}'},json=pay,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];return portal_json({'ok':True,'solicitud':rows[0] if rows else pay})
+    pay={'estado':estado,'resultado_detalle':str(d.get('resultado_detalle') or '')[:2000],'updated_at':datetime.now(pytz.UTC).isoformat()}
+    r=requests.patch(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers={**backend_headers(),'Prefer':'return=representation'},params={'id':f'eq.{sid}','empresa_id':f'eq.{eid}'},json=pay,timeout=SUPABASE_TIMEOUT)
+    r.raise_for_status()
+    rows=r.json() if r.content else []
+    sol=rows[0] if rows else pay
+    if rows and estado in {'completada','no_concretada','cancelada'}:
+        conv_id=str(sol.get('conversacion_id') or '')
+        if conv_id and not _conv_retiro_activo_en_conversacion(conv_id,eid):
+            activar_por_empresa(eid,canal=sol.get('canal') or 'whatsapp')
+            establecer_modo_atencion(conv_id,'bot')
+            print('NEXI RETIRO FINALIZADO MODO BOT:',sid,conv_id)
+    return portal_json({'ok':True,'solicitud':sol})
 
 
 if __name__ == "__main__":
