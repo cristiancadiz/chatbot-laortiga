@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-16-NEXI-V3.5.12-MATCH-ESTADOS-REALES"
+APP_VERSION = "2026-09-16-NEXI-V3.5.13-CHAT-RETIRO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -13603,27 +13603,407 @@ def public_conv_solicitudes():
     except:_conv_matches(sol)
     return portal_json({'ok':True,'solicitud':sol,'mensaje':'Solicitud registrada. Notificaremos a las personas que coincidan con tu comuna y tipo de producto/material.'},201)
 
+
+def _conv_match_row(match_id):
+    h=backend_headers()
+    if not h:
+        return None
+    r=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',
+        headers=h,
+        params={
+            'select':'id,empresa_id,estado,solicitud_id,interesado_id,'
+                     'nexi_convocatorias_solicitudes('
+                     'id,empresa_id,estado,comuna,fecha_retiro,horario_retiro,'
+                     'cantidad_bultos,tipos_producto,monto_ofrecido,moneda,'
+                     'forma_pago,monto_negociable,comision_porcentaje,'
+                     'comision_monto,monto_neto_interesado,pago_proveedor,'
+                     'estado_pago,direccion_retiro,telefono,nombre,apellido,'
+                     'conversacion_id,canal,created_at)',
+            'id':f'eq.{match_id}',
+            'limit':'1',
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows=r.json() if r.content else []
+    return rows[0] if rows else None
+
+
+def _conv_asegurar_conversacion_solicitud(sol):
+    """
+    Garantiza una conversación de Portal Nexia para la solicitud adjudicada.
+    Si ya existe, la reutiliza. Si no existe, crea una conversación vacía
+    asociada al teléfono del solicitante y guarda conversacion_id en la solicitud.
+    """
+    if not isinstance(sol,dict):
+        return None
+
+    eid=str(sol.get('empresa_id') or '').strip()
+    sid=str(sol.get('id') or '').strip()
+    telefono=str(sol.get('telefono') or '').strip()
+    canal=str(sol.get('canal') or 'whatsapp').strip().lower() or 'whatsapp'
+    existente=str(sol.get('conversacion_id') or '').strip()
+
+    if not eid or not sid or not telefono:
+        return existente or None
+
+    activar_por_empresa(eid, canal=canal)
+
+    # Mantener el contexto del teléfono dentro de la empresa de la solicitud.
+    try:
+        router_contexto_guardar(
+            telefono,
+            eid,
+            motor='core',
+            origen='convocatorias',
+            canal=canal,
+        )
+    except Exception as e:
+        print('NEXI CONVOCATORIA CHAT ROUTER WARN:',repr(e))
+
+    if existente:
+        try:
+            establecer_modo_atencion(existente,'ejecutivo')
+        except Exception as e:
+            print('NEXI CONVOCATORIA CHAT MODO WARN:',repr(e))
+        return existente
+
+    h=backend_headers()
+    if not h:
+        return None
+
+    ident=re.sub(r'\D','',normalizar_telefono(telefono)) if canal=='whatsapp' else re.sub(r'\D','',telefono)
+    if not ident:
+        return None
+
+    # Reutilizar conversación existente de esa empresa/teléfono.
+    r=requests.get(
+        f'{SUPABASE_URL}/rest/v1/conversaciones',
+        headers=h,
+        params={
+            'select':'id',
+            'empresa_id':f'eq.{eid}',
+            'telefono':f'eq.{ident}',
+            'canal':f'eq.{canal}',
+            'order':'ultima_fecha.desc.nullslast,created_at.desc',
+            'limit':'1',
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows=r.json() if r.content else []
+    conv_id=str((rows[0] if rows else {}).get('id') or '').strip()
+
+    if not conv_id:
+        ahora=ahora_local().isoformat()
+        nuevo={
+            'empresa_id':eid,
+            'telefono':ident,
+            'nombre_contacto':(' '.join([
+                str(sol.get('nombre') or '').strip(),
+                str(sol.get('apellido') or '').strip(),
+            ])).strip() or None,
+            'ultimo_mensaje':'Solicitud de retiro adjudicada',
+            'ultima_fecha':ahora,
+            'canal':canal,
+            'modo_atencion':'ejecutivo',
+        }
+        rc=requests.post(
+            f'{SUPABASE_URL}/rest/v1/conversaciones',
+            headers={**h,'Prefer':'return=representation'},
+            json=nuevo,
+            timeout=SUPABASE_TIMEOUT,
+        )
+        rc.raise_for_status()
+        creadas=rc.json() if rc.content else []
+        conv_id=str((creadas[0] if creadas else {}).get('id') or '').strip()
+
+    if conv_id:
+        try:
+            requests.patch(
+                f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
+                headers={**h,'Prefer':'return=minimal'},
+                params={'id':f'eq.{sid}'},
+                json={
+                    'conversacion_id':conv_id,
+                    'updated_at':datetime.now(pytz.UTC).isoformat(),
+                },
+                timeout=SUPABASE_TIMEOUT,
+            ).raise_for_status()
+        except Exception as e:
+            print('NEXI CONVOCATORIA CHAT PATCH SOL WARN:',repr(e))
+
+        try:
+            establecer_modo_atencion(conv_id,'ejecutivo')
+        except Exception as e:
+            print('NEXI CONVOCATORIA CHAT MODO WARN:',repr(e))
+
+    return conv_id or None
+
+
+def _conv_chat_mensajes(conversacion_id, desde=None):
+    if not conversacion_id:
+        return []
+    h=backend_headers()
+    if not h:
+        return []
+
+    params={
+        'select':'id,direccion,mensaje,fecha,canal',
+        'conversacion_id':f'eq.{conversacion_id}',
+        'order':'fecha.asc',
+        'limit':'250',
+    }
+    if desde:
+        params['fecha']=f'gte.{desde}'
+
+    r=requests.get(
+        f'{SUPABASE_URL}/rest/v1/mensajes',
+        headers=h,
+        params=params,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    return r.json() if r.content else []
+
+
+def _conv_ventana_chat_abierta(conversacion_id, solicitud_created_at):
+    """
+    Usa la ventana real del historial cuando existe. Como fallback, permite
+    responder dentro de 24 h desde la creación de la solicitud pública.
+    """
+    if conversacion_id:
+        try:
+            v=estado_ventana_whatsapp_24h(conversacion_id)
+            if bool(v.get('abierta')):
+                return True, v
+        except Exception as e:
+            print('NEXI CONVOCATORIA CHAT VENTANA WARN:',repr(e))
+
+    f=_parsear_fecha_iso_segura(solicitud_created_at)
+    if f:
+        ahora=datetime.now(pytz.UTC)
+        if ahora - f.astimezone(pytz.UTC) <= timedelta(hours=24):
+            return True, {
+                'abierta':True,
+                'motivo':'solicitud_reciente',
+                'solicitud_created_at':solicitud_created_at,
+            }
+
+    return False, {
+        'abierta':False,
+        'motivo':'ventana_24h_cerrada',
+        'solicitud_created_at':solicitud_created_at,
+    }
+
+
 @app.route('/public/convocatorias/match/<match_id>',methods=['GET','OPTIONS'])
 def public_conv_match(match_id):
-    if request.method=='OPTIONS':return portal_json({'ok':True},204)
-    h=backend_headers();r=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',headers=h,params={'select':'id,estado,solicitud_id,interesado_id,nexi_convocatorias_solicitudes(id,estado,comuna,fecha_retiro,horario_retiro,cantidad_bultos,tipos_producto,monto_ofrecido,moneda,forma_pago,monto_negociable,comision_porcentaje,comision_monto,monto_neto_interesado,pago_proveedor,estado_pago,direccion_retiro,telefono,nombre,apellido,conversacion_id)','id':f'eq.{match_id}','limit':'1'},timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else []
-    if not rows:return portal_json({'ok':False,'error':'Invitación no encontrada'},404)
-    row=rows[0];sol=dict(row.get('nexi_convocatorias_solicitudes') or {})
-    if row.get('estado')!='tomada':
-        for k in ['direccion_retiro','telefono','nombre','apellido']:sol.pop(k,None)
-    return portal_json({'ok':True,'match':row,'solicitud':sol})
+    if request.method=='OPTIONS':
+        return portal_json({'ok':True},204)
+
+    row=_conv_match_row(match_id)
+    if not row:
+        return portal_json({'ok':False,'error':'Invitación no encontrada'},404)
+
+    sol=dict(row.get('nexi_convocatorias_solicitudes') or {})
+    estado=str(row.get('estado') or '').strip().lower()
+
+    chat=None
+
+    if estado=='tomada':
+        conv_id=_conv_asegurar_conversacion_solicitud(sol)
+        if conv_id:
+            sol['conversacion_id']=conv_id
+            mensajes=_conv_chat_mensajes(conv_id,sol.get('created_at'))
+            chat={
+                'habilitado':True,
+                'conversacion_id':conv_id,
+                'mensajes':mensajes,
+            }
+    else:
+        for k in ['direccion_retiro','telefono','nombre','apellido','conversacion_id']:
+            sol.pop(k,None)
+
+    return portal_json({
+        'ok':True,
+        'match':row,
+        'solicitud':sol,
+        'chat':chat,
+    })
+
 
 @app.route('/public/convocatorias/match/<match_id>/tomar',methods=['POST','OPTIONS'])
 def public_conv_tomar(match_id):
-    if request.method=='OPTIONS':return portal_json({'ok':True},204)
-    h=backend_headers();r=requests.post(f'{SUPABASE_URL}/rest/v1/rpc/nexi_tomar_convocatoria',headers=h,json={'p_match_id':match_id},timeout=SUPABASE_TIMEOUT);r.raise_for_status();data=r.json() if r.content else {}
-    if isinstance(data,list):data=data[0] if data else {}
-    if not data.get('ok'):return portal_json({'ok':False,'error':'Esta solicitud ya fue tomada por otra persona.','resultado':data},409)
-    sid=str(data.get('solicitud_id') or '');q=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers=h,params={'select':'*','id':f'eq.{sid}','limit':'1'},timeout=SUPABASE_TIMEOUT);q.raise_for_status();rows=q.json() if q.content else [];sol=rows[0] if rows else {}
-    if sol.get('conversacion_id'):
-        try:establecer_modo_atencion(str(sol.get('conversacion_id')),'ejecutivo')
-        except Exception as e:print('NEXI CONVOCATORIA MODO EJECUTIVO WARN:',repr(e))
-    return portal_json({'ok':True,'solicitud':sol,'portal_url':f'{PORTAL_ORIGIN}/portal.html?seccion=convocatorias&solicitud={quote(sid)}','mensaje':'Solicitud adjudicada. Los demás interesados quedaron cerrados.'})
+    if request.method=='OPTIONS':
+        return portal_json({'ok':True},204)
+
+    h=backend_headers()
+    r=requests.post(
+        f'{SUPABASE_URL}/rest/v1/rpc/nexi_tomar_convocatoria',
+        headers=h,
+        json={'p_match_id':match_id},
+        timeout=SUPABASE_TIMEOUT,
+    )
+
+    if not r.ok:
+        print(
+            'NEXI CONVOCATORIA TOMAR RPC ERROR:',
+            r.status_code,
+            r.text[:2000],
+        )
+        r.raise_for_status()
+
+    data=r.json() if r.content else {}
+    if isinstance(data,list):
+        data=data[0] if data else {}
+
+    if not data.get('ok'):
+        return portal_json({
+            'ok':False,
+            'error':'Esta solicitud ya fue tomada por otra persona.',
+            'resultado':data,
+        },409)
+
+    sid=str(data.get('solicitud_id') or '')
+    q=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
+        headers=h,
+        params={'select':'*','id':f'eq.{sid}','limit':'1'},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    q.raise_for_status()
+    rows=q.json() if q.content else []
+    sol=rows[0] if rows else {}
+
+    conv_id=_conv_asegurar_conversacion_solicitud(sol)
+    if conv_id:
+        sol['conversacion_id']=conv_id
+
+    return portal_json({
+        'ok':True,
+        'solicitud':sol,
+        'chat':{
+            'habilitado':bool(conv_id),
+            'conversacion_id':conv_id,
+        },
+        'portal_url':(
+            f'{PORTAL_ORIGIN}/portal.html?seccion=conversaciones'
+            + (f'&conversacion={quote(conv_id)}' if conv_id else '')
+        ),
+        'mensaje':'Solicitud adjudicada. Ya puedes coordinar el retiro por el chat de Nexia.',
+    })
+
+
+@app.route('/public/convocatorias/match/<match_id>/mensaje',methods=['POST','OPTIONS'])
+def public_conv_match_mensaje(match_id):
+    if request.method=='OPTIONS':
+        return portal_json({'ok':True},204)
+
+    d=request.get_json(silent=True) or {}
+    mensaje=str(d.get('mensaje') or '').strip()
+    if not mensaje:
+        return portal_json({'ok':False,'error':'Escribe un mensaje'},400)
+    if len(mensaje)>2000:
+        return portal_json({'ok':False,'error':'Mensaje demasiado largo'},400)
+
+    row=_conv_match_row(match_id)
+    if not row:
+        return portal_json({'ok':False,'error':'Invitación no encontrada'},404)
+
+    if str(row.get('estado') or '').lower()!='tomada':
+        return portal_json({
+            'ok':False,
+            'error':'Solo la persona que tomó la solicitud puede usar este chat.',
+        },403)
+
+    sol=dict(row.get('nexi_convocatorias_solicitudes') or {})
+    eid=str(sol.get('empresa_id') or row.get('empresa_id') or '').strip()
+    telefono=str(sol.get('telefono') or '').strip()
+    canal=str(sol.get('canal') or 'whatsapp').lower()
+
+    if not eid or not telefono:
+        return portal_json({'ok':False,'error':'Solicitud incompleta'},500)
+
+    conv_id=_conv_asegurar_conversacion_solicitud(sol)
+    if not conv_id:
+        return portal_json({'ok':False,'error':'No se pudo crear la conversación'},500)
+
+    abierta,ventana=_conv_ventana_chat_abierta(conv_id,sol.get('created_at'))
+    if canal=='whatsapp' and not abierta:
+        return portal_json({
+            'ok':False,
+            'codigo':'WHATSAPP_24H_CERRADA',
+            'error':'La ventana de WhatsApp de 24 horas está cerrada. El cliente debe volver a escribir.',
+            'ventana_24h':ventana,
+        },409)
+
+    # Resolver proveedor del canal para esta empresa.
+    provider='twilio'
+    canal_cfg={}
+    hb=backend_headers()
+    if hb:
+        rc=requests.get(
+            f'{SUPABASE_URL}/rest/v1/canales_empresa',
+            headers=hb,
+            params={
+                'select':'*',
+                'empresa_id':f'eq.{eid}',
+                'canal':f'eq.{canal}',
+                'activo':'eq.true',
+                'es_principal':'eq.true',
+                'limit':'1',
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if rc.ok:
+            rr=rc.json() if rc.content else []
+            if rr:
+                canal_cfg=rr[0]
+                provider=str(canal_cfg.get('provider') or provider).lower()
+
+    activar_por_empresa(
+        eid,
+        canal=canal,
+        provider=provider,
+        canal_config=canal_cfg,
+    )
+    establecer_modo_atencion(conv_id,'ejecutivo')
+
+    if canal!='whatsapp':
+        return portal_json({'ok':False,'error':f'Canal no soportado: {canal}'},400)
+
+    if provider=='gupshup':
+        enviar_gupshup_texto(telefono,mensaje)
+    else:
+        enviar_twilio_texto(telefono,mensaje)
+
+    guardar_mensaje_supabase(
+        telefono,
+        'saliente',
+        mensaje,
+        nombre_contacto=(' '.join([
+            str(sol.get('nombre') or '').strip(),
+            str(sol.get('apellido') or '').strip(),
+        ])).strip() or None,
+        canal=canal,
+    )
+
+    print(
+        'NEXI CONVOCATORIA CHAT MENSAJE OK:',
+        'match=',match_id,
+        'empresa=',eid,
+        'telefono=',telefono,
+        'provider=',provider,
+    )
+
+    return portal_json({
+        'ok':True,
+        'mensaje':'Mensaje enviado',
+        'conversacion_id':conv_id,
+    },201)
+
 
 def _conv_portal_empresa():
     """
