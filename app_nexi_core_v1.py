@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-16-NEXI-V3.5.11-MATCH-POST-SIMPLE"
+APP_VERSION = "2026-09-16-NEXI-V3.5.12-MATCH-ESTADOS-REALES"
 load_dotenv()
 
 app = Flask(__name__)
@@ -13609,7 +13609,7 @@ def public_conv_match(match_id):
     h=backend_headers();r=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',headers=h,params={'select':'id,estado,solicitud_id,interesado_id,nexi_convocatorias_solicitudes(id,estado,comuna,fecha_retiro,horario_retiro,cantidad_bultos,tipos_producto,monto_ofrecido,moneda,forma_pago,monto_negociable,comision_porcentaje,comision_monto,monto_neto_interesado,pago_proveedor,estado_pago,direccion_retiro,telefono,nombre,apellido,conversacion_id)','id':f'eq.{match_id}','limit':'1'},timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else []
     if not rows:return portal_json({'ok':False,'error':'Invitación no encontrada'},404)
     row=rows[0];sol=dict(row.get('nexi_convocatorias_solicitudes') or {})
-    if row.get('estado')!='tomado':
+    if row.get('estado')!='tomada':
         for k in ['direccion_retiro','telefono','nombre','apellido']:sol.pop(k,None)
     return portal_json({'ok':True,'match':row,'solicitud':sol})
 
