@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-16-NEXI-V3.5.7-ROUTER-CONVOCATORIAS-WHATSAPP"
+APP_VERSION = "2026-09-16-NEXI-V3.5.8-CONVOCATORIAS-ANTES-ROUTER"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8607,6 +8607,52 @@ def whatsapp_webhook():
                 print("NEXI PAGO WHATSAPP ERROR:", repr(e))
                 twiml.message("No pude iniciar Mercado Pago en este momento. Intenta nuevamente o realiza el pago desde Portal Nexia.")
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+        # V3.5.8: Convocatorias ANTES del router multiempresa.
+        # Frases como "quiero reciclar" no deben abrir el menú general si el
+        # WhatsApp ya está asociado a una empresa con Convocatorias activas.
+        texto_conv_pre = texto_procesado or texto
+        empresa_conv_pre = _conv_resolver_empresa_trigger(
+            {},
+            telefono,
+            texto_conv_pre,
+        )
+
+        if empresa_conv_pre:
+            try:
+                router_contexto_guardar(
+                    telefono,
+                    empresa_conv_pre,
+                    motor="core",
+                    origen="convocatorias",
+                    canal="whatsapp",
+                )
+                activar_por_empresa(empresa_conv_pre, "whatsapp", "twilio")
+                print(
+                    "NEXI CONVOCATORIAS PRE-ROUTER:",
+                    empresa_conv_pre,
+                    telefono,
+                    repr(texto_conv_pre),
+                )
+            except Exception as e:
+                print("NEXI CONVOCATORIAS PRE-ROUTER CONTEXTO ERROR:", repr(e))
+
+            conv_respuesta_pre = _conv_trigger_respuesta(
+                empresa_conv_pre,
+                telefono,
+                texto_conv_pre,
+            )
+            if conv_respuesta_pre:
+                print(
+                    "NEXI CONVOCATORIAS TRIGGER:",
+                    empresa_conv_pre,
+                    telefono,
+                    repr(texto_conv_pre),
+                )
+                twiml.message(conv_respuesta_pre)
+                return str(twiml), 200, {
+                    "Content-Type": "application/xml; charset=utf-8"
+                }
 
         # V1.8: capa superior. El mismo número puede atender Diego, una demo o
         # cualquier nuevo negocio registrado en nexi_router_destinos.
