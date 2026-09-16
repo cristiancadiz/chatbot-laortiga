@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-14-NEXI-V3.4.26-TWILIO-ROUTING-DEBUG"
+APP_VERSION = "2026-09-15-NEXI-V3.5.1-CONVOCATORIAS-COMISION-CONFIGURABLE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8627,6 +8627,12 @@ def whatsapp_webhook():
 
         router_activar_ruta(route, "twilio")
 
+        # V3.5.0: Convocatorias transversales configuradas desde Portal.
+        conv_respuesta = _conv_trigger_respuesta(empresa_actual_id(), telefono, texto_procesado or texto)
+        if conv_respuesta:
+            twiml.message(conv_respuesta)
+            return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
         # V2.3.1: paginación de listas interactivas de agenda.
         if interactive_payload and interactive_payload.lower().startswith("agenda:"):
             raw_agenda = interactive_payload.lower()
@@ -12914,6 +12920,265 @@ def portal_google_calendar_desconectar():
         return portal_json({"ok": True})
     except Exception as e:
         return portal_json({"ok": False, "error": str(e)[:300]}, 400)
+
+
+# ============================================================
+# NEXIA V3.5.1 - CONVOCATORIAS / MATCHING + COMISION CONFIGURABLE
+# ============================================================
+CONVOCATORIAS_PUBLIC_URL = os.getenv('CONVOCATORIAS_PUBLIC_URL', f'{PORTAL_ORIGIN}/convocatoria.html').strip()
+CONVOCATORIAS_TOKEN_HORAS = int(os.getenv('CONVOCATORIAS_TOKEN_HORAS','24'))
+
+def _conv_norm(v): return normalizar_texto(str(v or '')).strip()
+def _conv_lista(v):
+    raw=v if isinstance(v,(list,tuple)) else re.split(r'[,;\n]+',str(v or ''))
+    out=[];seen=set()
+    for x in raw:
+        s=str(x or '').strip();k=_conv_norm(s)
+        if s and k and k not in seen: seen.add(k);out.append(s)
+    return out
+
+def _conv_config_default():
+    # El módulo es transversal: cada empresa decide si cobra, cuánto cobra y cómo se llama la comisión.
+    # `pago_retiro_habilitado` NO activa un split automático por sí solo; deja preparada la regla económica
+    # y el snapshot por solicitud. La conexión de Mercado Pago de cada empresa se implementa por integración.
+    return {
+        'activo': False,
+        'nombre_publico': 'Convocatorias',
+        'descripcion': '',
+        'palabras_activacion': ['participar en convocatoria'],
+        'tipos_producto': [],
+        'comunas': [],
+        'campos': {
+            'peso': True, 'tipo_inmueble': True, 'piso': True, 'ascensor': True,
+            'requiere_vehiculo': True, 'observaciones': True, 'monto': True,
+        },
+        'pago_retiro_habilitado': False,
+        'proveedor_pago': 'mercadopago',
+        'comision_porcentaje': 10.0,
+        'comision_nombre': 'Comisión de gestión',
+    }
+
+
+def _conv_float(v, default=0.0, minimo=None, maximo=None):
+    try:
+        n = float(v)
+    except Exception:
+        n = float(default)
+    if minimo is not None:
+        n = max(float(minimo), n)
+    if maximo is not None:
+        n = min(float(maximo), n)
+    return n
+
+
+def _conv_economia(config, monto):
+    """Calcula comisión y neto usando la configuración vigente de la empresa."""
+    if monto in (None, ''):
+        return {
+            'comision_porcentaje': _conv_float(config.get('comision_porcentaje'), 10, 0, 100),
+            'comision_monto': None,
+            'monto_neto_interesado': None,
+            'pago_proveedor': '',
+            'estado_pago': 'no_aplica',
+        }
+    total = _conv_float(monto, 0, 0)
+    pct = _conv_float(config.get('comision_porcentaje'), 10, 0, 100)
+    comision = round(total * pct / 100.0, 2)
+    neto = round(total - comision, 2)
+    pago_habilitado = bool(config.get('pago_retiro_habilitado'))
+    proveedor = str(config.get('proveedor_pago') or 'mercadopago').strip().lower() if pago_habilitado else ''
+    return {
+        'comision_porcentaje': pct,
+        'comision_monto': comision,
+        'monto_neto_interesado': neto,
+        'pago_proveedor': proveedor,
+        # Se registra como pendiente solo cuando la empresa activó cobro integrado.
+        # El backend no inventa un payment_id hasta que exista una transacción real.
+        'estado_pago': 'pendiente' if pago_habilitado else 'no_integrado',
+    }
+
+def _conv_config_empresa(empresa_id):
+    h=backend_headers();out=_conv_config_default()
+    if not h or not empresa_id:return out
+    try:
+        r=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_config',headers=h,params={'select':'*','empresa_id':f'eq.{empresa_id}','limit':'1'},timeout=SUPABASE_TIMEOUT)
+        if r.status_code==404:return out
+        r.raise_for_status();rows=r.json() if r.content else []
+        if rows:out.update(rows[0])
+    except Exception as e: print('NEXI CONVOCATORIAS CONFIG ERROR:',repr(e))
+    return out
+
+def _conv_secret(): return str(app.secret_key or os.getenv('SECRET_KEY') or 'change-me-in-render').encode()
+def _conv_token_crear(empresa_id,telefono='',conversacion_id=''):
+    p={'empresa_id':str(empresa_id or ''),'telefono':_normalizar_identificador_demo(telefono,'whatsapp'),'conversacion_id':str(conversacion_id or ''),'exp':int(datetime.now(pytz.UTC).timestamp())+CONVOCATORIAS_TOKEN_HORAS*3600}
+    raw=json.dumps(p,separators=(',',':'),ensure_ascii=False).encode();body=base64.urlsafe_b64encode(raw).decode().rstrip('=');sig=hmac.new(_conv_secret(),body.encode(),hashlib.sha256).hexdigest();return body+'.'+sig
+
+def _conv_token_leer(token):
+    try:
+        body,sig=str(token or '').rsplit('.',1);exp=hmac.new(_conv_secret(),body.encode(),hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig,exp):return None
+        pad='='*((4-len(body)%4)%4);p=json.loads(base64.urlsafe_b64decode((body+pad).encode()).decode())
+        if int(p.get('exp') or 0)<int(datetime.now(pytz.UTC).timestamp()):return None
+        return p
+    except Exception:return None
+
+def _conv_trigger_respuesta(empresa_id,telefono,texto):
+    c=_conv_config_empresa(empresa_id)
+    if not c.get('activo'):return None
+    t=_conv_norm(texto);tr=_conv_lista(c.get('palabras_activacion')) or ['participar en convocatoria']
+    if not any(_conv_norm(x) in t for x in tr if _conv_norm(x)):return None
+    conv=obtener_conversacion_por_identificador(telefono,'whatsapp') or {};tok=_conv_token_crear(empresa_id,telefono,conv.get('id'))
+    url=f'{CONVOCATORIAS_PUBLIC_URL}?token={quote(tok)}';name=str(c.get('nombre_publico') or 'la convocatoria')
+    return f'Claro 😊 Para participar en {name}, completa este formulario:\n\n{url}\n\nTu número de WhatsApp ya viene asociado para que no tengas que escribirlo nuevamente.'
+
+def _conv_interesados_match(empresa_id,comuna,tipos,monto):
+    h=backend_headers();
+    if not h:return []
+    r=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',headers=h,params={'select':'*','empresa_id':f'eq.{empresa_id}','activo':'eq.true','limit':'500'},timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else []
+    ck=_conv_norm(comuna);tk={_conv_norm(x) for x in _conv_lista(tipos)};out=[]
+    for row in rows:
+        if ck not in {_conv_norm(x) for x in _conv_lista(row.get('comunas'))}:continue
+        if tk and not (tk & {_conv_norm(x) for x in _conv_lista(row.get('tipos_producto'))}):continue
+        try:m=float(monto) if monto not in (None,'') else None;mn=float(row.get('aporte_minimo')) if row.get('aporte_minimo') not in (None,'') else None
+        except:m=mn=None
+        if m is None and not bool(row.get('acepta_retiro_sin_aporte',True)):continue
+        if mn is not None and (m is None or m<mn):continue
+        out.append(row)
+    return out
+
+def _conv_notificar(match_id,sol,it):
+    correo=str(it.get('correo') or '').strip()
+    if not correo:return False
+    try:mtxt='Sin aporte ofrecido' if sol.get('monto_ofrecido') in (None,'') else '$'+f"{int(float(sol.get('monto_ofrecido'))):,}".replace(',','.')+' CLP'
+    except:mtxt=str(sol.get('monto_ofrecido') or 'Sin aporte')
+    tipos=', '.join(_conv_lista(sol.get('tipos_producto'))) or 'No especificado';url=f'{CONVOCATORIAS_PUBLIC_URL}?match={quote(str(match_id))}'
+    asunto=f"Nueva solicitud disponible · {sol.get('comuna') or ''}"
+    txt=f"Hola {it.get('nombre') or ''},\n\nHay una nueva solicitud que coincide con tu cobertura.\nComuna: {sol.get('comuna') or '—'}\nProductos/materiales: {tipos}\nBultos: {sol.get('cantidad_bultos') or 1}\nDía: {sol.get('fecha_retiro') or 'A coordinar'}\nHorario: {sol.get('horario_retiro') or 'A coordinar'}\nAporte ofrecido: {mtxt}\nMonto neto estimado para quien realiza el retiro: {('$'+f"{int(float(sol.get('monto_neto_interesado'))):,}".replace(',','.')+' CLP') if sol.get('monto_neto_interesado') not in (None,'') else '—'}\n\nTomar solicitud: {url}\n\nLa dirección exacta se muestra solo a quien logre tomarla."
+    return enviar_correo_resend(correo,asunto,texto=txt)
+
+def _conv_matches(sol):
+    h=backend_headers();n=0
+    for it in _conv_interesados_match(sol.get('empresa_id'),sol.get('comuna'),sol.get('tipos_producto'),sol.get('monto_ofrecido')):
+        try:
+            p={'empresa_id':sol.get('empresa_id'),'solicitud_id':sol.get('id'),'interesado_id':it.get('id'),'estado':'notificado','notified_at':datetime.now(pytz.UTC).isoformat()}
+            r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',headers={**h,'Prefer':'resolution=ignore-duplicates,return=representation'},json=p,timeout=SUPABASE_TIMEOUT)
+            if r.status_code not in {200,201,409}:r.raise_for_status()
+            rows=r.json() if r.content else []
+            mid=rows[0].get('id') if rows else None
+            if not mid:
+                q=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',headers=h,params={'select':'id','solicitud_id':f"eq.{sol.get('id')}",'interesado_id':f"eq.{it.get('id')}",'limit':'1'},timeout=SUPABASE_TIMEOUT);q.raise_for_status();qr=q.json() if q.content else [];mid=qr[0].get('id') if qr else None
+            if mid and _conv_notificar(mid,sol,it):n+=1
+        except Exception as e:print('NEXI CONVOCATORIA MATCH ERROR:',repr(e))
+    print('NEXI CONVOCATORIA NOTIFICADOS:',sol.get('id'),n)
+
+@app.route('/public/convocatorias/config',methods=['GET','OPTIONS'])
+def public_conv_config():
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    p=_conv_token_leer(request.args.get('token'))
+    if not p:return portal_json({'ok':False,'error':'Enlace inválido o vencido'},401)
+    c=_conv_config_empresa(p.get('empresa_id'))
+    if not c.get('activo'):return portal_json({'ok':False,'error':'Esta convocatoria no está activa'},404)
+    return portal_json({'ok':True,'config':c,'telefono':p.get('telefono') or ''})
+
+@app.route('/public/convocatorias/solicitudes',methods=['POST','OPTIONS'])
+def public_conv_solicitudes():
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    d=request.get_json(silent=True) or {};p=_conv_token_leer(d.get('token'))
+    if not p:return portal_json({'ok':False,'error':'Enlace inválido o vencido'},401)
+    eid=str(p.get('empresa_id') or '');c=_conv_config_empresa(eid)
+    if not c.get('activo'):return portal_json({'ok':False,'error':'Esta convocatoria no está activa'},404)
+    for k,l in [('nombre','nombre'),('direccion_retiro','dirección de retiro'),('comuna','comuna'),('horario_retiro','horario de retiro')]:
+        if not str(d.get(k) or '').strip():return portal_json({'ok':False,'error':f'Falta {l}'},400)
+    tipos=_conv_lista(d.get('tipos_producto'))
+    if not tipos:return portal_json({'ok':False,'error':'Selecciona al menos un tipo de producto/material'},400)
+    try:bultos=max(1,int(d.get('cantidad_bultos') or 1))
+    except:bultos=1
+    monto=d.get('monto_ofrecido')
+    try:monto=None if monto in ('',None) else max(0,float(monto))
+    except:return portal_json({'ok':False,'error':'Monto ofrecido inválido'},400)
+    economia=_conv_economia(c,monto)
+    forma_pago=str(d.get('forma_pago') or '')[:80]
+    if monto is not None and bool(c.get('pago_retiro_habilitado')):
+        forma_pago='Mercado Pago'
+    payload={'empresa_id':eid,'conversacion_id':str(p.get('conversacion_id') or '') or None,'canal':'whatsapp','telefono':str(p.get('telefono') or ''),'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'direccion_retiro':str(d.get('direccion_retiro') or '')[:500],'comuna':str(d.get('comuna') or '')[:120],'fecha_retiro':str(d.get('fecha_retiro') or '') or None,'horario_retiro':str(d.get('horario_retiro') or '')[:120],'cantidad_bultos':bultos,'tipos_producto':tipos,'peso_aprox':str(d.get('peso_aprox') or '')[:120],'tipo_inmueble':str(d.get('tipo_inmueble') or '')[:80],'piso':str(d.get('piso') or '')[:50],'ascensor':d.get('ascensor') if isinstance(d.get('ascensor'),bool) else None,'requiere_vehiculo':d.get('requiere_vehiculo') if isinstance(d.get('requiere_vehiculo'),bool) else None,'observaciones':str(d.get('observaciones') or '')[:2000],'monto_ofrecido':monto,'moneda':'CLP','forma_pago':forma_pago,'monto_negociable':bool(d.get('monto_negociable')),'comision_porcentaje':economia['comision_porcentaje'],'comision_monto':economia['comision_monto'],'monto_neto_interesado':economia['monto_neto_interesado'],'pago_proveedor':economia['pago_proveedor'],'estado_pago':economia['estado_pago'],'estado':'disponible'}
+    h=backend_headers();r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers={**h,'Prefer':'return=representation'},json=payload,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else []
+    if not rows:return portal_json({'ok':False,'error':'No se creó la solicitud'},500)
+    sol=rows[0]
+    try:
+        from threading import Thread;Thread(target=_conv_matches,args=(sol,),daemon=True).start()
+    except:_conv_matches(sol)
+    return portal_json({'ok':True,'solicitud':sol,'mensaje':'Solicitud registrada. Notificaremos a las personas que coincidan con tu comuna y tipo de producto/material.'},201)
+
+@app.route('/public/convocatorias/match/<match_id>',methods=['GET','OPTIONS'])
+def public_conv_match(match_id):
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    h=backend_headers();r=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',headers=h,params={'select':'id,estado,solicitud_id,interesado_id,nexi_convocatorias_solicitudes(id,estado,comuna,fecha_retiro,horario_retiro,cantidad_bultos,tipos_producto,monto_ofrecido,moneda,forma_pago,monto_negociable,comision_porcentaje,comision_monto,monto_neto_interesado,pago_proveedor,estado_pago,direccion_retiro,telefono,nombre,apellido,conversacion_id)','id':f'eq.{match_id}','limit':'1'},timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else []
+    if not rows:return portal_json({'ok':False,'error':'Invitación no encontrada'},404)
+    row=rows[0];sol=dict(row.get('nexi_convocatorias_solicitudes') or {})
+    if row.get('estado')!='tomado':
+        for k in ['direccion_retiro','telefono','nombre','apellido']:sol.pop(k,None)
+    return portal_json({'ok':True,'match':row,'solicitud':sol})
+
+@app.route('/public/convocatorias/match/<match_id>/tomar',methods=['POST','OPTIONS'])
+def public_conv_tomar(match_id):
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    h=backend_headers();r=requests.post(f'{SUPABASE_URL}/rest/v1/rpc/nexi_tomar_convocatoria',headers=h,json={'p_match_id':match_id},timeout=SUPABASE_TIMEOUT);r.raise_for_status();data=r.json() if r.content else {}
+    if isinstance(data,list):data=data[0] if data else {}
+    if not data.get('ok'):return portal_json({'ok':False,'error':'Esta solicitud ya fue tomada por otra persona.','resultado':data},409)
+    sid=str(data.get('solicitud_id') or '');q=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers=h,params={'select':'*','id':f'eq.{sid}','limit':'1'},timeout=SUPABASE_TIMEOUT);q.raise_for_status();rows=q.json() if q.content else [];sol=rows[0] if rows else {}
+    if sol.get('conversacion_id'):
+        try:establecer_modo_atencion(str(sol.get('conversacion_id')),'ejecutivo')
+        except Exception as e:print('NEXI CONVOCATORIA MODO EJECUTIVO WARN:',repr(e))
+    return portal_json({'ok':True,'solicitud':sol,'portal_url':f'{PORTAL_ORIGIN}/portal.html?seccion=convocatorias&solicitud={quote(sid)}','mensaje':'Solicitud adjudicada. Los demás interesados quedaron cerrados.'})
+
+def _conv_portal_empresa():
+    p=portal_usuario_autorizado();return (p,str((p or {}).get('empresa_id') or '').strip()) if p else (None,None)
+
+@app.route('/portal/convocatorias/config',methods=['GET','POST','OPTIONS'])
+def portal_conv_config():
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    p,eid=_conv_portal_empresa()
+    if not p or not eid:return portal_json({'ok':False,'error':'Sesión no autorizada'},401)
+    if request.method=='GET':return portal_json({'ok':True,'config':_conv_config_empresa(eid)})
+    d=request.get_json(silent=True) or {}
+    pct=_conv_float(d.get('comision_porcentaje'),10,0,100)
+    pay={'empresa_id':eid,'activo':bool(d.get('activo')),'nombre_publico':str(d.get('nombre_publico') or 'Convocatorias')[:120],'descripcion':str(d.get('descripcion') or '')[:1000],'palabras_activacion':_conv_lista(d.get('palabras_activacion')) or ['participar en convocatoria'],'tipos_producto':_conv_lista(d.get('tipos_producto')),'comunas':_conv_lista(d.get('comunas')),'campos':d.get('campos') if isinstance(d.get('campos'),dict) else _conv_config_default()['campos'],'pago_retiro_habilitado':bool(d.get('pago_retiro_habilitado')),'proveedor_pago':'mercadopago','comision_porcentaje':pct,'comision_nombre':str(d.get('comision_nombre') or 'Comisión de gestión')[:120],'updated_at':datetime.now(pytz.UTC).isoformat()}
+    h={**backend_headers(),'Prefer':'resolution=merge-duplicates,return=representation'};r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_config',headers=h,params={'on_conflict':'empresa_id'},json=pay,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];return portal_json({'ok':True,'config':rows[0] if rows else pay})
+
+@app.route('/portal/convocatorias/interesados',methods=['GET','POST','OPTIONS'])
+def portal_conv_interesados():
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    p,eid=_conv_portal_empresa()
+    if not p or not eid:return portal_json({'ok':False,'error':'Sesión no autorizada'},401)
+    h=backend_headers()
+    if request.method=='GET':
+        r=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',headers=h,params={'select':'*','empresa_id':f'eq.{eid}','order':'created_at.desc','limit':'500'},timeout=SUPABASE_TIMEOUT);r.raise_for_status();return portal_json({'ok':True,'interesados':r.json() if r.content else []})
+    d=request.get_json(silent=True) or {}
+    if not str(d.get('nombre') or '').strip() or not str(d.get('correo') or '').strip():return portal_json({'ok':False,'error':'Nombre y correo son obligatorios'},400)
+    pay={'empresa_id':eid,'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'telefono':re.sub(r'\D','',str(d.get('telefono') or '')),'correo':str(d.get('correo') or '')[:320],'tipos_producto':_conv_lista(d.get('tipos_producto')),'comunas':_conv_lista(d.get('comunas')),'dias_disponibles':_conv_lista(d.get('dias_disponibles')),'horarios':_conv_lista(d.get('horarios')),'medio_transporte':str(d.get('medio_transporte') or '')[:120],'capacidad':str(d.get('capacidad') or '')[:120],'aporte_minimo':d.get('aporte_minimo') if d.get('aporte_minimo') not in ('',None) else None,'acepta_retiro_sin_aporte':bool(d.get('acepta_retiro_sin_aporte',True)),'activo':True,'updated_at':datetime.now(pytz.UTC).isoformat()};r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',headers={**h,'Prefer':'return=representation'},json=pay,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];return portal_json({'ok':True,'interesado':rows[0] if rows else pay},201)
+
+@app.route('/portal/convocatorias/interesados/<iid>',methods=['DELETE','OPTIONS'])
+def portal_conv_interesado_del(iid):
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    p,eid=_conv_portal_empresa()
+    if not p or not eid:return portal_json({'ok':False,'error':'Sesión no autorizada'},401)
+    r=requests.patch(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',headers={**backend_headers(),'Prefer':'return=minimal'},params={'id':f'eq.{iid}','empresa_id':f'eq.{eid}'},json={'activo':False,'updated_at':datetime.now(pytz.UTC).isoformat()},timeout=SUPABASE_TIMEOUT);r.raise_for_status();return portal_json({'ok':True})
+
+@app.route('/portal/convocatorias/solicitudes',methods=['GET','OPTIONS'])
+def portal_conv_solicitudes():
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    p,eid=_conv_portal_empresa()
+    if not p or not eid:return portal_json({'ok':False,'error':'Sesión no autorizada'},401)
+    r=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers=backend_headers(),params={'select':'*,nexi_convocatorias_interesados(id,nombre,apellido,telefono,correo)','empresa_id':f'eq.{eid}','order':'created_at.desc','limit':'500'},timeout=SUPABASE_TIMEOUT);r.raise_for_status();return portal_json({'ok':True,'solicitudes':r.json() if r.content else []})
+
+@app.route('/portal/convocatorias/solicitudes/<sid>',methods=['PATCH','OPTIONS'])
+def portal_conv_solicitud_patch(sid):
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    p,eid=_conv_portal_empresa()
+    if not p or not eid:return portal_json({'ok':False,'error':'Sesión no autorizada'},401)
+    d=request.get_json(silent=True) or {};estado=str(d.get('estado') or '')
+    if estado not in {'disponible','reclamada','en_gestion','completada','no_concretada','cancelada'}:return portal_json({'ok':False,'error':'Estado inválido'},400)
+    pay={'estado':estado,'resultado_detalle':str(d.get('resultado_detalle') or '')[:2000],'updated_at':datetime.now(pytz.UTC).isoformat()};r=requests.patch(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers={**backend_headers(),'Prefer':'return=representation'},params={'id':f'eq.{sid}','empresa_id':f'eq.{eid}'},json=pay,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];return portal_json({'ok':True,'solicitud':rows[0] if rows else pay})
 
 
 if __name__ == "__main__":
