@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-16-NEXI-V3.5.3-PORTAL-SESSION-REFRESH"
+APP_VERSION = "2026-09-16-NEXI-V3.5.4-REGISTRO-INTERESADOS-PUBLICO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -12978,6 +12978,8 @@ def portal_google_calendar_desconectar():
 # ============================================================
 CONVOCATORIAS_PUBLIC_URL = os.getenv('CONVOCATORIAS_PUBLIC_URL', f'{PORTAL_ORIGIN}/convocatoria.html').strip()
 CONVOCATORIAS_TOKEN_HORAS = int(os.getenv('CONVOCATORIAS_TOKEN_HORAS','24'))
+INTERESADOS_PUBLIC_URL = os.getenv('INTERESADOS_PUBLIC_URL', f'{PORTAL_ORIGIN}/registro_interesado.html').strip()
+INTERESADOS_TOKEN_HORAS = int(os.getenv('INTERESADOS_TOKEN_HORAS','720'))
 
 def _conv_norm(v): return normalizar_texto(str(v or '')).strip()
 def _conv_lista(v):
@@ -13072,6 +13074,27 @@ def _conv_token_leer(token):
         if int(p.get('exp') or 0)<int(datetime.now(pytz.UTC).timestamp()):return None
         return p
     except Exception:return None
+
+
+def _conv_interesado_token_crear(empresa_id):
+    p={
+        'empresa_id':str(empresa_id or ''),
+        'purpose':'registro_interesado',
+        'exp':int(datetime.now(pytz.UTC).timestamp())+INTERESADOS_TOKEN_HORAS*3600,
+    }
+    raw=json.dumps(p,separators=(',',':'),ensure_ascii=False).encode()
+    body=base64.urlsafe_b64encode(raw).decode().rstrip('=')
+    sig=hmac.new(_conv_secret(),body.encode(),hashlib.sha256).hexdigest()
+    return body+'.'+sig
+
+
+def _conv_interesado_token_leer(token):
+    p=_conv_token_leer(token)
+    if not p or str(p.get('purpose') or '')!='registro_interesado':
+        return None
+    if not str(p.get('empresa_id') or '').strip():
+        return None
+    return p
 
 def _conv_trigger_coincide(config,texto):
     """Detecta intención usando solo configuración de la empresa.
@@ -13241,6 +13264,101 @@ def portal_conv_config():
     pct=_conv_float(d.get('comision_porcentaje'),10,0,100)
     pay={'empresa_id':eid,'activo':bool(d.get('activo')),'nombre_publico':str(d.get('nombre_publico') or 'Convocatorias')[:120],'descripcion':str(d.get('descripcion') or '')[:1000],'palabras_activacion':_conv_lista(d.get('palabras_activacion')) or ['participar en convocatoria'],'tipos_producto':_conv_lista(d.get('tipos_producto')),'comunas':_conv_lista(d.get('comunas')),'campos':d.get('campos') if isinstance(d.get('campos'),dict) else _conv_config_default()['campos'],'pago_retiro_habilitado':bool(d.get('pago_retiro_habilitado')),'proveedor_pago':'mercadopago','comision_porcentaje':pct,'comision_nombre':str(d.get('comision_nombre') or 'Comisión de gestión')[:120],'updated_at':datetime.now(pytz.UTC).isoformat()}
     h={**backend_headers(),'Prefer':'resolution=merge-duplicates,return=representation'};r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_config',headers=h,params={'on_conflict':'empresa_id'},json=pay,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];return portal_json({'ok':True,'config':rows[0] if rows else pay})
+
+@app.route('/portal/convocatorias/interesados/link',methods=['GET','OPTIONS'])
+def portal_conv_interesados_link():
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    p,eid=_conv_portal_empresa()
+    if not p or not eid:return portal_json({'ok':False,'error':'Sesión no autorizada'},401)
+    tok=_conv_interesado_token_crear(eid)
+    return portal_json({
+        'ok':True,
+        'url':f'{INTERESADOS_PUBLIC_URL}?token={quote(tok)}',
+        'expires_hours':INTERESADOS_TOKEN_HORAS,
+    })
+
+
+@app.route('/public/convocatorias/interesados/config',methods=['GET','OPTIONS'])
+def public_conv_interesados_config():
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    p=_conv_interesado_token_leer(request.args.get('token'))
+    if not p:return portal_json({'ok':False,'error':'Enlace inválido o vencido'},401)
+    eid=str(p.get('empresa_id') or '')
+    c=_conv_config_empresa(eid)
+    if not c.get('activo'):return portal_json({'ok':False,'error':'Esta convocatoria no está activa'},404)
+    return portal_json({
+        'ok':True,
+        'config':{
+            'nombre_publico':c.get('nombre_publico') or 'Convocatorias',
+            'descripcion':c.get('descripcion') or '',
+            'tipos_producto':_conv_lista(c.get('tipos_producto')),
+            'comunas':_conv_lista(c.get('comunas')),
+        }
+    })
+
+
+@app.route('/public/convocatorias/interesados',methods=['POST','OPTIONS'])
+def public_conv_interesados_registro():
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    d=request.get_json(silent=True) or {}
+    p=_conv_interesado_token_leer(d.get('token'))
+    if not p:return portal_json({'ok':False,'error':'Enlace inválido o vencido'},401)
+    eid=str(p.get('empresa_id') or '')
+    c=_conv_config_empresa(eid)
+    if not c.get('activo'):return portal_json({'ok':False,'error':'Esta convocatoria no está activa'},404)
+
+    nombre=str(d.get('nombre') or '').strip()
+    correo=str(d.get('correo') or '').strip()
+    telefono=re.sub(r'\D','',str(d.get('telefono') or ''))
+    tipos=_conv_lista(d.get('tipos_producto'))
+    comunas=_conv_lista(d.get('comunas'))
+    if not nombre:return portal_json({'ok':False,'error':'Nombre es obligatorio'},400)
+    if not correo:return portal_json({'ok':False,'error':'Correo es obligatorio'},400)
+    if not telefono:return portal_json({'ok':False,'error':'WhatsApp es obligatorio'},400)
+    if not tipos:return portal_json({'ok':False,'error':'Selecciona al menos un tipo de producto/material'},400)
+    if not comunas:return portal_json({'ok':False,'error':'Selecciona al menos una comuna'},400)
+    if d.get('consentimiento') is not True:return portal_json({'ok':False,'error':'Debes aceptar el uso de tus datos para registrarte'},400)
+
+    aporte=d.get('aporte_minimo')
+    try:
+        aporte=None if aporte in ('',None) else max(0,float(aporte))
+    except Exception:
+        return portal_json({'ok':False,'error':'Monto mínimo inválido'},400)
+
+    pay={
+        'empresa_id':eid,
+        'nombre':nombre[:120],
+        'apellido':str(d.get('apellido') or '')[:120],
+        'telefono':telefono,
+        'correo':correo[:320],
+        'tipos_producto':tipos,
+        'comunas':comunas,
+        'dias_disponibles':_conv_lista(d.get('dias_disponibles')),
+        'horarios':_conv_lista(d.get('horarios')),
+        'medio_transporte':str(d.get('medio_transporte') or '')[:120],
+        'capacidad':str(d.get('capacidad') or '')[:120],
+        'aporte_minimo':aporte,
+        'acepta_retiro_sin_aporte':bool(d.get('acepta_retiro_sin_aporte',True)),
+        'activo':bool(d.get('activo',True)),
+        'updated_at':datetime.now(pytz.UTC).isoformat(),
+    }
+    h={**backend_headers(),'Prefer':'return=representation'}
+    r=requests.post(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',
+        headers=h,
+        json=pay,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if not r.ok:
+        print('NEXI INTERESADO PUBLIC ERROR:',r.status_code,r.text[:1200])
+        return portal_json({'ok':False,'error':'No fue posible completar el registro'},502)
+    rows=r.json() if r.content else []
+    return portal_json({
+        'ok':True,
+        'mensaje':'Registro completado. Ya puedes recibir oportunidades compatibles con tu cobertura.',
+        'interesado':rows[0] if rows else pay,
+    },201)
+
 
 @app.route('/portal/convocatorias/interesados',methods=['GET','POST','OPTIONS'])
 def portal_conv_interesados():
