@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-15-NEXI-V3.5.1-CONVOCATORIAS-COMISION-CONFIGURABLE"
+APP_VERSION = "2026-09-16-NEXI-V3.5.2-CONVOCATORIAS-ROUTER-ACTIVO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8627,9 +8627,14 @@ def whatsapp_webhook():
 
         router_activar_ruta(route, "twilio")
 
-        # V3.5.0: Convocatorias transversales configuradas desde Portal.
-        conv_respuesta = _conv_trigger_respuesta(empresa_actual_id(), telefono, texto_procesado or texto)
+        # V3.5.2: Convocatorias transversales configuradas desde Portal.
+        # IMPORTANTE: usar la empresa de la ruta activa. El webhook puede haber
+        # entrado inicialmente por un número cuyo tenant base sea otro (por ejemplo
+        # Diego), mientras el router superior ya seleccionó una demo/empresa Core.
+        empresa_conv = str(route.get("empresa_id") or empresa_actual_id() or "").strip()
+        conv_respuesta = _conv_trigger_respuesta(empresa_conv, telefono, texto_procesado or texto)
         if conv_respuesta:
+            print("NEXI CONVOCATORIAS TRIGGER:", empresa_conv, telefono, repr(texto_procesado or texto))
             twiml.message(conv_respuesta)
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
@@ -13022,11 +13027,57 @@ def _conv_token_leer(token):
         return p
     except Exception:return None
 
+def _conv_trigger_coincide(config,texto):
+    """Detecta intención usando solo configuración de la empresa.
+
+    1) Respeta coincidencia literal de palabras/frases de activación.
+    2) Tolera variantes simples de una misma raíz (ej. reciclaje/reciclar).
+    3) Puede apoyarse en nombre, descripción y tipos de producto configurados,
+       sin hardcodear rubros ni empresas dentro del backend.
+    """
+    t=_conv_norm(texto)
+    if not t:return False
+
+    triggers=_conv_lista(config.get('palabras_activacion')) or ['participar en convocatoria']
+    trigger_norm=[_conv_norm(x) for x in triggers if _conv_norm(x)]
+    if any(x in t for x in trigger_norm):return True
+
+    stop={
+        'quiero','quieres','quiere','necesito','necesita','puedo','puede','para','como','donde',
+        'cuando','este','esta','estos','estas','sobre','tengo','hacer','participar','convocatoria',
+        'informacion','información','solicitud','servicio','servicios','producto','productos'
+    }
+    palabras_texto={x for x in re.findall(r'[a-z0-9áéíóúñü]+',t) if len(x)>=4 and x not in stop}
+    if not palabras_texto:return False
+
+    fuentes=list(trigger_norm)
+    for extra in [config.get('nombre_publico'),config.get('descripcion')]:
+        if extra:fuentes.append(_conv_norm(extra))
+    fuentes.extend(_conv_norm(x) for x in _conv_lista(config.get('tipos_producto')) if _conv_norm(x))
+
+    palabras_cfg=set()
+    for fuente in fuentes:
+        for x in re.findall(r'[a-z0-9áéíóúñü]+',fuente or ''):
+            if len(x)>=5 and x not in stop:
+                palabras_cfg.add(x)
+
+    if palabras_texto & palabras_cfg:return True
+
+    # Comparación por raíz conservadora para variaciones morfológicas comunes.
+    # Exige al menos 5 caracteres para evitar coincidencias demasiado amplias.
+    raices_texto={x[:5] for x in palabras_texto if len(x)>=6}
+    raices_cfg={x[:5] for x in palabras_cfg if len(x)>=6}
+    return bool(raices_texto & raices_cfg)
+
+
 def _conv_trigger_respuesta(empresa_id,telefono,texto):
     c=_conv_config_empresa(empresa_id)
-    if not c.get('activo'):return None
-    t=_conv_norm(texto);tr=_conv_lista(c.get('palabras_activacion')) or ['participar en convocatoria']
-    if not any(_conv_norm(x) in t for x in tr if _conv_norm(x)):return None
+    if not c.get('activo'):
+        print('NEXI CONVOCATORIAS SKIP: inactivo empresa=',empresa_id)
+        return None
+    if not _conv_trigger_coincide(c,texto):
+        print('NEXI CONVOCATORIAS SKIP: sin_match empresa=',empresa_id,'texto=',repr(str(texto or '')[:160]))
+        return None
     conv=obtener_conversacion_por_identificador(telefono,'whatsapp') or {};tok=_conv_token_crear(empresa_id,telefono,conv.get('id'))
     url=f'{CONVOCATORIAS_PUBLIC_URL}?token={quote(tok)}';name=str(c.get('nombre_publico') or 'la convocatoria')
     return f'Claro 😊 Para participar en {name}, completa este formulario:\n\n{url}\n\nTu número de WhatsApp ya viene asociado para que no tengas que escribirlo nuevamente.'
