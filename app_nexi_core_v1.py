@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-16-NEXI-V3.5.2-CONVOCATORIAS-ROUTER-ACTIVO"
+APP_VERSION = "2026-09-16-NEXI-V3.5.3-PORTAL-SESSION-REFRESH"
 load_dotenv()
 
 app = Flask(__name__)
@@ -10194,12 +10194,58 @@ def portal_login():
         return portal_json({
             "ok": True,
             "access_token": token,
+            "refresh_token": str(auth_data.get("refresh_token") or ""),
             "expires_in": auth_data.get("expires_in"),
             "token_type": auth_data.get("token_type") or "bearer",
         })
     except Exception as e:
         print("PORTAL LOGIN ERROR:", repr(e))
         return portal_json({"ok": False, "error": "No se pudo iniciar sesión en este momento"}, 502)
+
+
+@app.route("/portal/refresh", methods=["POST", "OPTIONS"])
+def portal_refresh():
+    if request.method == "OPTIONS":
+        return portal_json({"ok": True}, 204)
+
+    data = request.get_json(silent=True) or {}
+    refresh_token = str(data.get("refresh_token") or "").strip()
+    if not refresh_token:
+        return portal_json({"ok": False, "error": "Falta refresh token"}, 400)
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return portal_json({"ok": False, "error": "Supabase Auth no está configurado en el backend"}, 500)
+
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/auth/v1/token?grant_type=refresh_token",
+            headers={"apikey": SUPABASE_SERVICE_ROLE_KEY, "Content-Type": "application/json"},
+            json={"refresh_token": refresh_token},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        if not r.ok:
+            detalle = "La sesión venció. Inicia sesión nuevamente."
+            try:
+                detalle = (r.json() or {}).get("msg") or (r.json() or {}).get("error_description") or detalle
+            except Exception:
+                pass
+            return portal_json({"ok": False, "error": detalle}, 401)
+
+        auth_data = r.json() if r.content else {}
+        access_token = str(auth_data.get("access_token") or "").strip()
+        new_refresh_token = str(auth_data.get("refresh_token") or refresh_token).strip()
+        if not access_token:
+            return portal_json({"ok": False, "error": "Supabase no devolvió una sesión renovada"}, 502)
+
+        return portal_json({
+            "ok": True,
+            "access_token": access_token,
+            "refresh_token": new_refresh_token,
+            "expires_in": auth_data.get("expires_in"),
+            "token_type": auth_data.get("token_type") or "bearer",
+        })
+    except Exception as e:
+        print("PORTAL REFRESH ERROR:", repr(e))
+        return portal_json({"ok": False, "error": "No se pudo renovar la sesión"}, 502)
 
 
 
