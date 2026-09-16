@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-16-NEXI-V3.5.9-MATCH-APORTE-FIX"
+APP_VERSION = "2026-09-16-NEXI-V3.5.11-MATCH-POST-SIMPLE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -13425,28 +13425,58 @@ def _conv_matches(sol):
 
     for it in encontrados:
         try:
+            ahora=datetime.now(pytz.UTC).isoformat()
+
             p={
                 'empresa_id':sol.get('empresa_id'),
                 'solicitud_id':sol.get('id'),
                 'interesado_id':it.get('id'),
-                'estado':'notificado',
-                'notified_at':datetime.now(pytz.UTC).isoformat(),
+
+                # El CHECK de la tabla solo admite estados de ciclo de vida
+                # como pendiente/tomada/cerrada. "Notificado" se representa
+                # con sus columnas boolean/timestamp específicas.
+                'estado':'pendiente',
+                'notificado':True,
+                'notificado_at':ahora,
+
+                # Mantener compatibilidad con el campo legado/existente
+                # que también está presente en la tabla.
+                'notified_at':ahora,
             }
 
             r=requests.post(
                 f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',
                 headers={
                     **h,
-                    'Prefer':'resolution=ignore-duplicates,return=representation',
+                    'Prefer':'return=representation',
                 },
                 json=p,
                 timeout=SUPABASE_TIMEOUT,
             )
 
-            if r.status_code not in {200,201,409}:
+            # Si ya existe el mismo match por una restricción UNIQUE,
+            # recuperarlo en vez de abortar el flujo.
+            if r.status_code == 409:
+                print(
+                    'NEXI CONVOCATORIA MATCH DUPLICADO:',
+                    'solicitud=',sol.get('id'),
+                    'interesado=',it.get('id'),
+                    r.text[:1000],
+                )
+                rows=[]
+            elif not r.ok:
+                print(
+                    'NEXI CONVOCATORIA MATCH SUPABASE ERROR:',
+                    'status=',r.status_code,
+                    'solicitud=',sol.get('id'),
+                    'interesado=',it.get('id'),
+                    'body=',r.text[:2000],
+                    'payload=',p,
+                )
                 r.raise_for_status()
+            else:
+                rows=r.json() if r.content else []
 
-            rows=r.json() if r.content else []
             mid=rows[0].get('id') if rows else None
 
             if not mid:
@@ -13483,6 +13513,7 @@ def _conv_matches(sol):
         'solicitud=',sol.get('id'),
         'coincidencias=',len(encontrados),
         'matches=',matches_creados,
+        'estado_match=pendiente',
         'notificaciones_enviadas=',enviados,
     )
 
