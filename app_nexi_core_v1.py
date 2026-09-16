@@ -29,7 +29,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-16-NEXI-V3.5.5-COMUNAS-RECOLECTORES-ACTIVOS"
+APP_VERSION = "2026-09-16-NEXI-V3.5.6-SCOPE-CONVOCATORIAS-SUPERADMIN"
 load_dotenv()
 
 app = Flask(__name__)
@@ -13300,7 +13300,43 @@ def public_conv_tomar(match_id):
     return portal_json({'ok':True,'solicitud':sol,'portal_url':f'{PORTAL_ORIGIN}/portal.html?seccion=convocatorias&solicitud={quote(sid)}','mensaje':'Solicitud adjudicada. Los demás interesados quedaron cerrados.'})
 
 def _conv_portal_empresa():
-    p=portal_usuario_autorizado();return (p,str((p or {}).get('empresa_id') or '').strip()) if p else (None,None)
+    """
+    Empresa efectiva para el módulo Convocatorias.
+
+    - Usuario normal: siempre su propia empresa.
+    - Superadmin: puede enviar X-Nexia-Empresa-ID para trabajar sobre una
+      empresa concreta. Si no lo envía, usa la empresa de su perfil.
+    """
+    p=portal_usuario_autorizado()
+    if not p:
+        return (None,None)
+
+    eid=str((p or {}).get('empresa_id') or '').strip()
+
+    if es_superadmin(p):
+        solicitado=str(request.headers.get('X-Nexia-Empresa-ID') or '').strip()
+        if solicitado:
+            try:
+                r=requests.get(
+                    f'{SUPABASE_URL}/rest/v1/empresas',
+                    headers=backend_headers(),
+                    params={
+                        'select':'id',
+                        'id':f'eq.{solicitado}',
+                        'limit':'1',
+                    },
+                    timeout=SUPABASE_TIMEOUT,
+                )
+                r.raise_for_status()
+                rows=r.json() if r.content else []
+                if rows:
+                    eid=solicitado
+                else:
+                    print('NEXI CONVOCATORIAS SCOPE WARN: empresa inexistente', solicitado)
+            except Exception as e:
+                print('NEXI CONVOCATORIAS SCOPE ERROR:',repr(e))
+
+    return (p,eid)
 
 @app.route('/portal/convocatorias/config',methods=['GET','POST','OPTIONS'])
 def portal_conv_config():
