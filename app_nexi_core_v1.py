@@ -4,6 +4,7 @@ import html
 import json
 import hmac
 import hashlib
+import math
 import base64
 from datetime import datetime, timedelta
 from threading import Lock
@@ -29,7 +30,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-16-NEXI-V3.5.14-HUMANO-RETIRO-24H"
+APP_VERSION = "2026-09-18-NEXI-V3.5.16-HUMANO-CORE-GUARD"
 load_dotenv()
 
 app = Flask(__name__)
@@ -3492,6 +3493,66 @@ def _conv_aplicar_modo_retiro(conversacion_id, empresa_id, canal='whatsapp'):
           'humano' if ventana.get('abierta') else 'bot',
           'ventana=',ventana.get('motivo'))
     return bool(ventana.get('abierta'))
+
+
+def _conv_interceptar_whatsapp_humano(telefono, texto):
+    """Interrumpe el webhook ANTES del router/IA para un retiro adjudicado activo.
+
+    Resuelve empresa por sesión actual, asociación explícita y tenant; en todos
+    los casos comprueba conversación + retiro adjudicado dentro de ESA empresa.
+    No confunde el mismo teléfono usado en workspaces distintos.
+    """
+    ident = re.sub(r"\D", "", normalizar_telefono(telefono))
+    h = supabase_headers()
+    if not ident or not h:
+        return False
+
+    candidatos = []
+    sesion = router_contexto_obtener(telefono, canal="whatsapp") or {}
+    asociados = [
+        sesion.get("empresa_id"),
+        _conv_empresa_asociada_whatsapp(telefono),
+        empresa_actual_id(),
+    ]
+    for eid in asociados:
+        eid = str(eid or "").strip()
+        if eid and eid not in candidatos:
+            candidatos.append(eid)
+
+    for eid in candidatos:
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/conversaciones",
+                headers=h,
+                params={
+                    "select": "id,modo_atencion",
+                    "empresa_id": f"eq.{eid}",
+                    "telefono": f"eq.{ident}",
+                    "canal": "eq.whatsapp",
+                    "order": "ultima_fecha.desc.nullslast,created_at.desc",
+                    "limit": "5",
+                },
+                timeout=SUPABASE_TIMEOUT,
+            )
+            r.raise_for_status()
+            for conversacion in (r.json() if r.content else []):
+                cid = str(conversacion.get("id") or "").strip()
+                if not cid or not _conv_retiro_activo_en_conversacion(cid, eid):
+                    continue
+
+                # Registrar primero el mensaje del usuario: abre o renueva la
+                # ventana de WhatsApp verificable sin enviar una respuesta IA.
+                activar_por_empresa(eid, canal="whatsapp", provider="twilio")
+                if texto:
+                    guardar_mensaje_supabase(telefono, "entrante", texto, canal="whatsapp")
+                if _conv_aplicar_modo_retiro(cid, eid, "whatsapp"):
+                    print("NEXI RETIRO WHATSAPP HUMANO INTERCEPTADO:", cid, "empresa=", eid, "IA_BLOQUEADA")
+                    return True
+                print("NEXI RETIRO WHATSAPP VENTANA CERRADA:", cid, "empresa=", eid)
+                return False
+        except Exception as e:
+            print("NEXI RETIRO WHATSAPP INTERCEPTOR ERROR:", eid, repr(e))
+    return False
 
 
 def obtener_modo_atencion(identificador, canal="whatsapp"):
@@ -8660,6 +8721,12 @@ def whatsapp_webhook():
         if not telefono:
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
+        # La coordinación de retiro adjudicado tiene prioridad sobre pago,
+        # triggers, MENU, router y motor Core. Ninguna de esas ramas debe
+        # responder automáticamente mientras este retiro esté en modo humano.
+        if _conv_interceptar_whatsapp_humano(telefono, texto or texto_procesado):
+            return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
         # V2.4.1: selección de plan ANTES de consumir cuota.
         # Soporta ButtonPayload y también ButtonText/Body como fallback.
         codigo_pago, empresa_pago = _resolver_seleccion_pago_whatsapp(request.form, telefono)
@@ -8824,6 +8891,16 @@ def whatsapp_webhook():
 
         if str(route.get("motor") or "core").lower() != "legacy":
             demo_access = route.get("demo_access") or {"empresa_id": route.get("empresa_id")}
+            empresa_core = str((demo_access or {}).get("empresa_id") or route.get("empresa_id") or "").strip()
+            if empresa_core:
+                activar_por_empresa(empresa_core, canal="whatsapp", provider="twilio")
+                if obtener_modo_atencion(telefono, "whatsapp") == "ejecutivo":
+                    # Protección complementaria de handoffs Core generales.
+                    # No ejecutar IA, no descontar demo, no emitir mensajes.
+                    if texto_procesado:
+                        guardar_mensaje_supabase(telefono, "entrante", texto or texto_procesado, canal="whatsapp")
+                    print("NEXI CORE MODO HUMANO: empresa=", empresa_core, "IA_BLOQUEADA")
+                    return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
             if texto_procesado:
                 control_entrada = consumir_mensaje_entrante_demo()
                 if not bool(control_entrada.get("permitido", True)):
@@ -13397,7 +13474,40 @@ def _conv_trigger_respuesta(empresa_id,telefono,texto):
     url=f'{CONVOCATORIAS_PUBLIC_URL}?token={quote(tok)}';name=str(c.get('nombre_publico') or 'la convocatoria')
     return f'Claro 😊 Para participar en {name}, completa este formulario:\n\n{url}\n\nTu número de WhatsApp ya viene asociado para que no tengas que escribirlo nuevamente.'
 
-def _conv_interesados_match(empresa_id,comuna,tipos,monto):
+# Geolocalización opcional para convocatorias; sin API externa.
+# Todas las coordenadas requieren consentimiento expreso del formulario.
+CONVOCATORIAS_RADIO_KM_DEFAULT = float(os.getenv('CONVOCATORIAS_RADIO_KM_DEFAULT','10'))
+
+def _conv_coordenadas(data):
+    """Devuelve par validado o None; nunca interpreta 0 como ausencia."""
+    a,b=data.get('latitud'),data.get('longitud')
+    if a in (None,'') and b in (None,''):
+        return None
+    try:
+        lat,lon=float(a),float(b)
+        if not (math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180):
+            raise ValueError('Coordenadas fuera de rango')
+        return lat,lon
+    except (ValueError,TypeError):
+        raise ValueError('Latitud o longitud inválidas')
+
+def _conv_radio_km(value):
+    try:
+        r=float(value if value not in (None,'') else CONVOCATORIAS_RADIO_KM_DEFAULT)
+        if not math.isfinite(r) or not 0.5 <= r <= 100:
+            raise ValueError()
+        return r
+    except (ValueError,TypeError):
+        raise ValueError('El radio debe estar entre 0,5 y 100 km')
+
+def _conv_distancia_km(a,b):
+    """Distancia en línea recta; no representa duración ni ruta por calles."""
+    lat1,lon1=map(math.radians,a)
+    lat2,lon2=map(math.radians,b)
+    x=math.sin((lat2-lat1)/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin((lon2-lon1)/2)**2
+    return 6371.0088*2*math.asin(min(1,math.sqrt(x)))
+
+def _conv_interesados_match(empresa_id,comuna,tipos,monto,ubicacion=None):
     h=backend_headers()
     if not h:
         return []
@@ -13429,7 +13539,17 @@ def _conv_interesados_match(empresa_id,comuna,tipos,monto):
         comunas_row={_conv_norm(x) for x in _conv_lista(row.get('comunas'))}
         tipos_row={_conv_norm(x) for x in _conv_lista(row.get('tipos_producto'))}
 
-        if ck not in comunas_row:
+        # Si cliente entregó ubicación, se exige ubicación del recolector y
+        # se aplica su radio declarado. No se confunde cercanía con misma comuna.
+        if ubicacion is not None:
+            try:
+                pos=_conv_coordenadas(row)
+                if pos is None or _conv_distancia_km(ubicacion,pos)>_conv_radio_km(row.get('radio_km')):
+                    continue
+            except ValueError:
+                continue
+        elif ck not in comunas_row:
+            # Compatibilidad: solicitudes antiguas sin coordenadas usan comuna.
             continue
 
         if tk and not (tk & tipos_row):
@@ -13491,6 +13611,7 @@ def _conv_matches(sol):
         sol.get('comuna'),
         sol.get('tipos_producto'),
         sol.get('monto_ofrecido'),
+        ubicacion=_conv_coordenadas(sol),
     )
 
     enviados=0
@@ -13663,18 +13784,26 @@ def public_conv_solicitudes():
     monto=d.get('monto_ofrecido')
     try:monto=None if monto in ('',None) else max(0,float(monto))
     except:return portal_json({'ok':False,'error':'Monto ofrecido inválido'},400)
+    try:
+        ubicacion=_conv_coordenadas(d)
+    except ValueError as e:
+        return portal_json({'ok':False,'error':str(e)},400)
+    if ubicacion is not None and d.get('consentimiento_ubicacion') is not True:
+        return portal_json({'ok':False,'error':'Debes autorizar el uso de tu ubicación para buscar por radio'},400)
+    if (d.get('latitud') not in (None,'') or d.get('longitud') not in (None,'')) and ubicacion is None:
+        return portal_json({'ok':False,'error':'Ubicación incompleta'},400)
     economia=_conv_economia(c,monto)
     forma_pago=str(d.get('forma_pago') or '')[:80]
     if monto is not None and bool(c.get('pago_retiro_habilitado')):
         forma_pago='Mercado Pago'
-    payload={'empresa_id':eid,'conversacion_id':str(p.get('conversacion_id') or '') or None,'canal':'whatsapp','telefono':str(p.get('telefono') or ''),'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'direccion_retiro':str(d.get('direccion_retiro') or '')[:500],'comuna':str(d.get('comuna') or '')[:120],'fecha_retiro':str(d.get('fecha_retiro') or '') or None,'horario_retiro':str(d.get('horario_retiro') or '')[:120],'cantidad_bultos':bultos,'tipos_producto':tipos,'peso_aprox':str(d.get('peso_aprox') or '')[:120],'tipo_inmueble':str(d.get('tipo_inmueble') or '')[:80],'piso':str(d.get('piso') or '')[:50],'ascensor':d.get('ascensor') if isinstance(d.get('ascensor'),bool) else None,'requiere_vehiculo':d.get('requiere_vehiculo') if isinstance(d.get('requiere_vehiculo'),bool) else None,'observaciones':str(d.get('observaciones') or '')[:2000],'monto_ofrecido':monto,'moneda':'CLP','forma_pago':forma_pago,'monto_negociable':bool(d.get('monto_negociable')),'comision_porcentaje':economia['comision_porcentaje'],'comision_monto':economia['comision_monto'],'monto_neto_interesado':economia['monto_neto_interesado'],'pago_proveedor':economia['pago_proveedor'],'estado_pago':economia['estado_pago'],'estado':'disponible'}
+    payload={'empresa_id':eid,'conversacion_id':str(p.get('conversacion_id') or '') or None,'canal':'whatsapp','telefono':str(p.get('telefono') or ''),'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'direccion_retiro':str(d.get('direccion_retiro') or '')[:500],'comuna':str(d.get('comuna') or '')[:120],'fecha_retiro':str(d.get('fecha_retiro') or '') or None,'horario_retiro':str(d.get('horario_retiro') or '')[:120],'cantidad_bultos':bultos,'tipos_producto':tipos,'peso_aprox':str(d.get('peso_aprox') or '')[:120],'tipo_inmueble':str(d.get('tipo_inmueble') or '')[:80],'piso':str(d.get('piso') or '')[:50],'ascensor':d.get('ascensor') if isinstance(d.get('ascensor'),bool) else None,'requiere_vehiculo':d.get('requiere_vehiculo') if isinstance(d.get('requiere_vehiculo'),bool) else None,'observaciones':str(d.get('observaciones') or '')[:2000],'monto_ofrecido':monto,'moneda':'CLP','forma_pago':forma_pago,'monto_negociable':bool(d.get('monto_negociable')),'comision_porcentaje':economia['comision_porcentaje'],'comision_monto':economia['comision_monto'],'monto_neto_interesado':economia['monto_neto_interesado'],'pago_proveedor':economia['pago_proveedor'],'estado_pago':economia['estado_pago'],'estado':'disponible','latitud':ubicacion[0] if ubicacion else None,'longitud':ubicacion[1] if ubicacion else None}
     h=backend_headers();r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers={**h,'Prefer':'return=representation'},json=payload,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else []
     if not rows:return portal_json({'ok':False,'error':'No se creó la solicitud'},500)
     sol=rows[0]
     try:
         from threading import Thread;Thread(target=_conv_matches,args=(sol,),daemon=True).start()
     except:_conv_matches(sol)
-    return portal_json({'ok':True,'solicitud':sol,'mensaje':'Solicitud registrada. Notificaremos a las personas que coincidan con tu comuna y tipo de producto/material.'},201)
+    return portal_json({'ok':True,'solicitud':sol,'mensaje':('Solicitud registrada. Notificaremos a recolectores dentro de su radio de cobertura.' if ubicacion else 'Solicitud registrada. Notificaremos a recolectores según comuna y materiales.')},201)
 
 
 def _conv_match_row(match_id):
@@ -13877,8 +14006,12 @@ def public_conv_match(match_id):
                 'ventana_24h':ventana,
             }
     else:
-        for k in ['direccion_retiro','telefono','nombre','apellido','conversacion_id']:
+        # También sanear el objeto ANIDADO: devolver row sin editar filtraba
+        # igualmente dirección y teléfono antes de la adjudicación.
+        for k in ['direccion_retiro','telefono','nombre','apellido','conversacion_id','latitud','longitud']:
             sol.pop(k,None)
+        row=dict(row)
+        row['nexi_convocatorias_solicitudes']=dict(sol)
 
     return portal_json({
         'ok':True,
@@ -14177,6 +14310,15 @@ def public_conv_interesados_registro():
     if not tipos:return portal_json({'ok':False,'error':'Selecciona al menos un tipo de producto/material'},400)
     if not comunas:return portal_json({'ok':False,'error':'Selecciona al menos una comuna'},400)
     if d.get('consentimiento') is not True:return portal_json({'ok':False,'error':'Debes aceptar el uso de tus datos para registrarte'},400)
+    try:
+        ubicacion=_conv_coordenadas(d)
+        radio=_conv_radio_km(d.get('radio_km'))
+    except ValueError as e:
+        return portal_json({'ok':False,'error':str(e)},400)
+    if ubicacion is not None and d.get('consentimiento_ubicacion') is not True:
+        return portal_json({'ok':False,'error':'Debes autorizar el uso de tu ubicación para recibir solicitudes por cercanía'},400)
+    if (d.get('latitud') not in (None,'') or d.get('longitud') not in (None,'')) and ubicacion is None:
+        return portal_json({'ok':False,'error':'Ubicación incompleta'},400)
 
     aporte=d.get('aporte_minimo')
     try:
@@ -14199,6 +14341,9 @@ def public_conv_interesados_registro():
         'aporte_minimo':aporte,
         'acepta_retiro_sin_aporte':bool(d.get('acepta_retiro_sin_aporte',True)),
         'activo':bool(d.get('activo',True)),
+        'latitud':ubicacion[0] if ubicacion else None,
+        'longitud':ubicacion[1] if ubicacion else None,
+        'radio_km':radio,
         'updated_at':datetime.now(pytz.UTC).isoformat(),
     }
     h={**backend_headers(),'Prefer':'return=representation'}
@@ -14229,7 +14374,14 @@ def portal_conv_interesados():
         r=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',headers=h,params={'select':'*','empresa_id':f'eq.{eid}','order':'created_at.desc','limit':'500'},timeout=SUPABASE_TIMEOUT);r.raise_for_status();return portal_json({'ok':True,'interesados':r.json() if r.content else []})
     d=request.get_json(silent=True) or {}
     if not str(d.get('nombre') or '').strip() or not str(d.get('correo') or '').strip():return portal_json({'ok':False,'error':'Nombre y correo son obligatorios'},400)
-    pay={'empresa_id':eid,'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'telefono':re.sub(r'\D','',str(d.get('telefono') or '')),'correo':str(d.get('correo') or '')[:320],'tipos_producto':_conv_lista(d.get('tipos_producto')),'comunas':_conv_lista(d.get('comunas')),'dias_disponibles':_conv_lista(d.get('dias_disponibles')),'horarios':_conv_lista(d.get('horarios')),'medio_transporte':str(d.get('medio_transporte') or '')[:120],'capacidad':str(d.get('capacidad') or '')[:120],'aporte_minimo':d.get('aporte_minimo') if d.get('aporte_minimo') not in ('',None) else None,'acepta_retiro_sin_aporte':bool(d.get('acepta_retiro_sin_aporte',True)),'activo':True,'updated_at':datetime.now(pytz.UTC).isoformat()};r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',headers={**h,'Prefer':'return=representation'},json=pay,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];return portal_json({'ok':True,'interesado':rows[0] if rows else pay},201)
+    try:
+        ubicacion=_conv_coordenadas(d)
+        radio=_conv_radio_km(d.get('radio_km'))
+    except ValueError as e:
+        return portal_json({'ok':False,'error':str(e)},400)
+    if ubicacion and d.get('consentimiento_ubicacion') is not True:
+        return portal_json({'ok':False,'error':'Falta autorización de ubicación'},400)
+    pay={'empresa_id':eid,'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'telefono':re.sub(r'\D','',str(d.get('telefono') or '')),'correo':str(d.get('correo') or '')[:320],'tipos_producto':_conv_lista(d.get('tipos_producto')),'comunas':_conv_lista(d.get('comunas')),'dias_disponibles':_conv_lista(d.get('dias_disponibles')),'horarios':_conv_lista(d.get('horarios')),'medio_transporte':str(d.get('medio_transporte') or '')[:120],'capacidad':str(d.get('capacidad') or '')[:120],'aporte_minimo':d.get('aporte_minimo') if d.get('aporte_minimo') not in ('',None) else None,'acepta_retiro_sin_aporte':bool(d.get('acepta_retiro_sin_aporte',True)),'activo':True,'latitud':ubicacion[0] if ubicacion else None,'longitud':ubicacion[1] if ubicacion else None,'radio_km':radio,'updated_at':datetime.now(pytz.UTC).isoformat()};r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',headers={**h,'Prefer':'return=representation'},json=pay,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];return portal_json({'ok':True,'interesado':rows[0] if rows else pay},201)
 
 @app.route('/portal/convocatorias/interesados/<iid>',methods=['DELETE','OPTIONS'])
 def portal_conv_interesado_del(iid):
