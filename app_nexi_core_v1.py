@@ -14383,6 +14383,47 @@ def portal_conv_interesados():
         return portal_json({'ok':False,'error':'Falta autorización de ubicación'},400)
     pay={'empresa_id':eid,'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'telefono':re.sub(r'\D','',str(d.get('telefono') or '')),'correo':str(d.get('correo') or '')[:320],'tipos_producto':_conv_lista(d.get('tipos_producto')),'comunas':_conv_lista(d.get('comunas')),'dias_disponibles':_conv_lista(d.get('dias_disponibles')),'horarios':_conv_lista(d.get('horarios')),'medio_transporte':str(d.get('medio_transporte') or '')[:120],'capacidad':str(d.get('capacidad') or '')[:120],'aporte_minimo':d.get('aporte_minimo') if d.get('aporte_minimo') not in ('',None) else None,'acepta_retiro_sin_aporte':bool(d.get('acepta_retiro_sin_aporte',True)),'activo':True,'latitud':ubicacion[0] if ubicacion else None,'longitud':ubicacion[1] if ubicacion else None,'radio_km':radio,'updated_at':datetime.now(pytz.UTC).isoformat()};r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',headers={**h,'Prefer':'return=representation'},json=pay,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];return portal_json({'ok':True,'interesado':rows[0] if rows else pay},201)
 
+@app.route('/portal/convocatorias/interesados/<iid>',methods=['PATCH','OPTIONS'])
+def portal_conv_interesado_radio_update(iid):
+    if request.method=='OPTIONS':
+        return portal_json({'ok':True},204)
+    p,eid=_conv_portal_empresa()
+    if not p or not eid:
+        return portal_json({'ok':False,'error':'Sesión no autorizada'},401)
+    d=request.get_json(silent=True) or {}
+    campos=set(d.keys())
+    if campos == {'radio_km'}:
+        try:
+            cambios={'radio_km':_conv_radio_km(d.get('radio_km'))}
+        except ValueError as e:
+            return portal_json({'ok':False,'error':str(e)},400)
+    elif campos == {'latitud','longitud','consentimiento_ubicacion'}:
+        if d.get('consentimiento_ubicacion') is not True:
+            return portal_json({'ok':False,'error':'Falta autorización de ubicación'},400)
+        try:
+            pos=_conv_coordenadas(d)
+        except ValueError as e:
+            return portal_json({'ok':False,'error':str(e)},400)
+        if pos is None:
+            return portal_json({'ok':False,'error':'Se requieren ambas coordenadas'},400)
+        cambios={'latitud':pos[0],'longitud':pos[1]}
+    else:
+        return portal_json({'ok':False,'error':'Solo se permite cambiar el radio o la ubicación autorizada'},400)
+    # Nunca actualizar un registro de otra empresa: filtrar por ID y empresa.
+    r=requests.patch(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',
+        headers={**backend_headers(),'Prefer':'return=representation'},
+        params={'id':f'eq.{iid}','empresa_id':f'eq.{eid}'},
+        json={**cambios,'updated_at':datetime.now(pytz.UTC).isoformat()},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows=r.json() if r.content else []
+    if not rows:
+        return portal_json({'ok':False,'error':'Reciclador no encontrado'},404)
+    return portal_json({'ok':True,'interesado':rows[0]})
+
+
 @app.route('/portal/convocatorias/interesados/<iid>',methods=['DELETE','OPTIONS'])
 def portal_conv_interesado_del(iid):
     if request.method=='OPTIONS':return portal_json({'ok':True},204)
