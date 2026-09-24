@@ -30,7 +30,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-23-NEXI-V3.5.18-RECICLADOR-FOTOS"
+APP_VERSION = "2026-09-24-NEXIA-V3.5.19-WHATSAPP-PRIMERO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -13530,8 +13530,35 @@ def _conv_trigger_respuesta(empresa_id,telefono,texto):
     if not _conv_trigger_coincide(c,texto):
         print('NEXI CONVOCATORIAS SKIP: sin_match empresa=',empresa_id,'texto=',repr(str(texto or '')[:160]))
         return None
-    conv=obtener_conversacion_por_identificador(telefono,'whatsapp') or {};tok=_conv_token_crear(empresa_id,telefono,conv.get('id'))
-    url=f'{CONVOCATORIAS_PUBLIC_URL}?token={quote(tok)}';name=str(c.get('nombre_publico') or 'la convocatoria')
+
+    # V3.5.19 - WHATSAPP PRIMERO
+    # El mensaje que activa "Quiero reciclar" debe quedar registrado como
+    # ENTRANTE antes de crear el token. Así la solicitud nace vinculada a una
+    # conversación real y esa misma entrada abre la ventana de WhatsApp de 24 h.
+    try:
+        activar_por_empresa(empresa_id, canal='whatsapp', provider='twilio')
+        guardar_mensaje_supabase(
+            telefono,
+            'entrante',
+            str(texto or '').strip(),
+            canal='whatsapp',
+        )
+    except Exception as e:
+        print('NEXI CONVOCATORIAS REGISTRO ENTRANTE ERROR:',repr(e))
+
+    conv=obtener_conversacion_por_identificador(telefono,'whatsapp') or {}
+    conversacion_id=str(conv.get('id') or '').strip()
+    if not conversacion_id:
+        print('NEXI CONVOCATORIAS SIN CONVERSACION: empresa=',empresa_id,'telefono=',telefono)
+        return (
+            'No pude vincular tu conversación de WhatsApp en este momento. '
+            'Por favor, vuelve a escribir "Quiero reciclar" en unos segundos.'
+        )
+
+    tok=_conv_token_crear(empresa_id,telefono,conversacion_id)
+    url=f'{CONVOCATORIAS_PUBLIC_URL}?token={quote(tok)}'
+    name=str(c.get('nombre_publico') or 'la convocatoria')
+    print('NEXI CONVOCATORIAS TOKEN OK: empresa=',empresa_id,'conversacion_id=',conversacion_id)
     return f'Claro 😊 Para participar en {name}, completa este formulario:\n\n{url}\n\nTu número de WhatsApp ya viene asociado para que no tengas que escribirlo nuevamente.'
 
 # Geolocalización opcional para convocatorias; sin API externa.
@@ -13811,6 +13838,8 @@ def public_conv_config():
     if request.method=='OPTIONS':return portal_json({'ok':True},204)
     p=_conv_token_leer(request.args.get('token'))
     if not p:return portal_json({'ok':False,'error':'Enlace inválido o vencido'},401)
+    if not str(p.get('conversacion_id') or '').strip():
+        return portal_json({'ok':False,'error':'Este formulario debe iniciarse desde WhatsApp. Escribe "Quiero reciclar" para obtener un enlace válido.'},409)
     eid=str(p.get('empresa_id') or '')
     c=dict(_conv_config_empresa(eid) or {})
     if not c.get('activo'):return portal_json({'ok':False,'error':'Esta convocatoria no está activa'},404)
@@ -13833,6 +13862,8 @@ def public_conv_solicitudes():
     if request.method=='OPTIONS':return portal_json({'ok':True},204)
     d=request.get_json(silent=True) or {};p=_conv_token_leer(d.get('token'))
     if not p:return portal_json({'ok':False,'error':'Enlace inválido o vencido'},401)
+    if not str(p.get('conversacion_id') or '').strip():
+        return portal_json({'ok':False,'error':'La solicitud debe originarse desde una conversación de WhatsApp.'},409)
     eid=str(p.get('empresa_id') or '');c=_conv_config_empresa(eid)
     if not c.get('activo'):return portal_json({'ok':False,'error':'Esta convocatoria no está activa'},404)
     for k,l in [('nombre','nombre'),('direccion_retiro','dirección de retiro'),('comuna','comuna'),('horario_retiro','horario de retiro')]:
@@ -14274,6 +14305,8 @@ def public_conv_fotos_upload():
     token=request.form.get('token') or request.args.get('token')
     p=_conv_token_leer(token)
     if not p:return portal_json({'ok':False,'error':'Enlace inválido o vencido'},401)
+    if not str(p.get('conversacion_id') or '').strip():
+        return portal_json({'ok':False,'error':'Las fotos deben cargarse desde una solicitud iniciada en WhatsApp.'},409)
     eid=str(p.get('empresa_id') or '').strip()
     archivos=request.files.getlist('fotos')
     if not archivos:return portal_json({'ok':False,'error':'Selecciona al menos una foto'},400)
