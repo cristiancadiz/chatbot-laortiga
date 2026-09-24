@@ -30,7 +30,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-18-NEXI-V3.5.16-HUMANO-CORE-GUARD"
+APP_VERSION = "2026-09-23-NEXI-V3.5.18-RECICLADOR-FOTOS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -13216,6 +13216,11 @@ CONVOCATORIAS_PUBLIC_URL = os.getenv('CONVOCATORIAS_PUBLIC_URL', f'{PORTAL_ORIGI
 CONVOCATORIAS_TOKEN_HORAS = int(os.getenv('CONVOCATORIAS_TOKEN_HORAS','24'))
 INTERESADOS_PUBLIC_URL = os.getenv('INTERESADOS_PUBLIC_URL', f'{PORTAL_ORIGIN}/registro_interesado.html').strip()
 INTERESADOS_TOKEN_HORAS = int(os.getenv('INTERESADOS_TOKEN_HORAS','720'))
+RECICLADOR_PORTAL_URL = os.getenv('RECICLADOR_PORTAL_URL', f'{PORTAL_ORIGIN}/reciclador.html').strip()
+RECICLADOR_TOKEN_HORAS = int(os.getenv('RECICLADOR_TOKEN_HORAS','720'))
+CONVOCATORIAS_FOTOS_BUCKET = os.getenv('CONVOCATORIAS_FOTOS_BUCKET','convocatorias').strip() or 'convocatorias'
+CONVOCATORIAS_FOTO_MAX_MB = int(os.getenv('CONVOCATORIAS_FOTO_MAX_MB','6'))
+CONVOCATORIAS_FOTO_MAX_CANTIDAD = int(os.getenv('CONVOCATORIAS_FOTO_MAX_CANTIDAD','4'))
 
 def _conv_norm(v): return normalizar_texto(str(v or '')).strip()
 def _conv_lista(v):
@@ -13419,6 +13424,61 @@ def _conv_interesado_token_leer(token):
         return None
     return p
 
+
+def _conv_reciclador_token_crear(empresa_id, interesado_id):
+    p={
+        'empresa_id':str(empresa_id or ''),
+        'interesado_id':str(interesado_id or ''),
+        'purpose':'portal_reciclador',
+        'exp':int(datetime.now(pytz.UTC).timestamp())+RECICLADOR_TOKEN_HORAS*3600,
+    }
+    raw=json.dumps(p,separators=(',',':'),ensure_ascii=False).encode()
+    body=base64.urlsafe_b64encode(raw).decode().rstrip('=')
+    sig=hmac.new(_conv_secret(),body.encode(),hashlib.sha256).hexdigest()
+    return body+'.'+sig
+
+
+def _conv_reciclador_token_leer(token):
+    p=_conv_token_leer(token)
+    if not p or str(p.get('purpose') or '')!='portal_reciclador':
+        return None
+    if not str(p.get('empresa_id') or '').strip() or not str(p.get('interesado_id') or '').strip():
+        return None
+    return p
+
+
+def _conv_foto_signed_url(path, expires=3600):
+    path=str(path or '').strip().lstrip('/')
+    if not path or not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return ''
+    try:
+        r=requests.post(
+            f'{SUPABASE_URL}/storage/v1/object/sign/{CONVOCATORIAS_FOTOS_BUCKET}/{quote(path, safe="/")}',
+            headers={
+                'apikey':SUPABASE_SERVICE_ROLE_KEY,
+                'Authorization':f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
+                'Content-Type':'application/json',
+            },
+            json={'expiresIn':int(expires)},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        r.raise_for_status()
+        d=r.json() if r.content else {}
+        u=str(d.get('signedURL') or d.get('signedUrl') or '').strip()
+        if not u:return ''
+        return u if u.startswith('http') else SUPABASE_URL.rstrip('/')+'/storage/v1'+u
+    except Exception as e:
+        print('NEXI FOTO SIGN WARN:',repr(e))
+        return ''
+
+
+def _conv_fotos_expandir(sol):
+    out=dict(sol or {})
+    paths=out.get('fotos') or []
+    if not isinstance(paths,list):paths=[]
+    out['fotos']=[{'path':str(x),'url':_conv_foto_signed_url(x)} for x in paths if str(x or '').strip()]
+    return out
+
 def _conv_trigger_coincide(config,texto):
     """Detecta intención usando solo configuración de la empresa.
 
@@ -13596,9 +13656,9 @@ def _conv_notificar(match_id,sol,it):
     if not correo:return False
     try:mtxt='Sin aporte ofrecido' if sol.get('monto_ofrecido') in (None,'') else '$'+f"{int(float(sol.get('monto_ofrecido'))):,}".replace(',','.')+' CLP'
     except:mtxt=str(sol.get('monto_ofrecido') or 'Sin aporte')
-    tipos=', '.join(_conv_lista(sol.get('tipos_producto'))) or 'No especificado';url=f'{CONVOCATORIAS_PUBLIC_URL}?match={quote(str(match_id))}'
+    tipos=', '.join(_conv_lista(sol.get('tipos_producto'))) or 'No especificado';url=f'{CONVOCATORIAS_PUBLIC_URL}?match={quote(str(match_id))}';ptok=_conv_reciclador_token_crear(sol.get('empresa_id'),it.get('id'));portal_rec=f'{RECICLADOR_PORTAL_URL}?token={quote(ptok)}'
     asunto=f"Nueva solicitud disponible · {sol.get('comuna') or ''}"
-    txt=f"Hola {it.get('nombre') or ''},\n\nHay una nueva solicitud que coincide con tu cobertura.\nComuna: {sol.get('comuna') or '—'}\nProductos/materiales: {tipos}\nBultos: {sol.get('cantidad_bultos') or 1}\nDía: {sol.get('fecha_retiro') or 'A coordinar'}\nHorario: {sol.get('horario_retiro') or 'A coordinar'}\nAporte ofrecido: {mtxt}\nMonto neto estimado para quien realiza el retiro: {('$'+f"{int(float(sol.get('monto_neto_interesado'))):,}".replace(',','.')+' CLP') if sol.get('monto_neto_interesado') not in (None,'') else '—'}\n\nTomar solicitud: {url}\n\nLa dirección exacta se muestra solo a quien logre tomarla."
+    txt=f"Hola {it.get('nombre') or ''},\n\nHay una nueva solicitud que coincide con tu cobertura.\nComuna: {sol.get('comuna') or '—'}\nProductos/materiales: {tipos}\nBultos: {sol.get('cantidad_bultos') or 1}\nDía: {sol.get('fecha_retiro') or 'A coordinar'}\nHorario: {sol.get('horario_retiro') or 'A coordinar'}\nAporte ofrecido: {mtxt}\nMonto neto estimado para quien realiza el retiro: {('$'+f"{int(float(sol.get('monto_neto_interesado'))):,}".replace(',','.')+' CLP') if sol.get('monto_neto_interesado') not in (None,'') else '—'}\n\nTomar solicitud: {url}\nPortal del reciclador: {portal_rec}\n\nLa dirección exacta se muestra solo a quien logre tomarla."
     return enviar_correo_resend(correo,asunto,texto=txt)
 
 def _conv_matches(sol):
@@ -13796,7 +13856,7 @@ def public_conv_solicitudes():
     forma_pago=str(d.get('forma_pago') or '')[:80]
     if monto is not None and bool(c.get('pago_retiro_habilitado')):
         forma_pago='Mercado Pago'
-    payload={'empresa_id':eid,'conversacion_id':str(p.get('conversacion_id') or '') or None,'canal':'whatsapp','telefono':str(p.get('telefono') or ''),'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'direccion_retiro':str(d.get('direccion_retiro') or '')[:500],'comuna':str(d.get('comuna') or '')[:120],'fecha_retiro':str(d.get('fecha_retiro') or '') or None,'horario_retiro':str(d.get('horario_retiro') or '')[:120],'cantidad_bultos':bultos,'tipos_producto':tipos,'peso_aprox':str(d.get('peso_aprox') or '')[:120],'tipo_inmueble':str(d.get('tipo_inmueble') or '')[:80],'piso':str(d.get('piso') or '')[:50],'ascensor':d.get('ascensor') if isinstance(d.get('ascensor'),bool) else None,'requiere_vehiculo':d.get('requiere_vehiculo') if isinstance(d.get('requiere_vehiculo'),bool) else None,'observaciones':str(d.get('observaciones') or '')[:2000],'monto_ofrecido':monto,'moneda':'CLP','forma_pago':forma_pago,'monto_negociable':bool(d.get('monto_negociable')),'comision_porcentaje':economia['comision_porcentaje'],'comision_monto':economia['comision_monto'],'monto_neto_interesado':economia['monto_neto_interesado'],'pago_proveedor':economia['pago_proveedor'],'estado_pago':economia['estado_pago'],'estado':'disponible','latitud':ubicacion[0] if ubicacion else None,'longitud':ubicacion[1] if ubicacion else None}
+    payload={'empresa_id':eid,'conversacion_id':str(p.get('conversacion_id') or '') or None,'canal':'whatsapp','telefono':str(p.get('telefono') or ''),'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'direccion_retiro':str(d.get('direccion_retiro') or '')[:500],'comuna':str(d.get('comuna') or '')[:120],'fecha_retiro':str(d.get('fecha_retiro') or '') or None,'horario_retiro':str(d.get('horario_retiro') or '')[:120],'cantidad_bultos':bultos,'tipos_producto':tipos,'peso_aprox':str(d.get('peso_aprox') or '')[:120],'tipo_inmueble':str(d.get('tipo_inmueble') or '')[:80],'piso':str(d.get('piso') or '')[:50],'ascensor':d.get('ascensor') if isinstance(d.get('ascensor'),bool) else None,'requiere_vehiculo':d.get('requiere_vehiculo') if isinstance(d.get('requiere_vehiculo'),bool) else None,'observaciones':str(d.get('observaciones') or '')[:2000],'monto_ofrecido':monto,'moneda':'CLP','forma_pago':forma_pago,'monto_negociable':bool(d.get('monto_negociable')),'comision_porcentaje':economia['comision_porcentaje'],'comision_monto':economia['comision_monto'],'monto_neto_interesado':economia['monto_neto_interesado'],'pago_proveedor':economia['pago_proveedor'],'estado_pago':economia['estado_pago'],'estado':'disponible','latitud':ubicacion[0] if ubicacion else None,'longitud':ubicacion[1] if ubicacion else None,'fotos':[str(x)[:500] for x in (d.get('fotos') or [])[:CONVOCATORIAS_FOTO_MAX_CANTIDAD] if str(x or '').strip().startswith(eid+'/')]}
     h=backend_headers();r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers={**h,'Prefer':'return=representation'},json=payload,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else []
     if not rows:return portal_json({'ok':False,'error':'No se creó la solicitud'},500)
     sol=rows[0]
@@ -13817,7 +13877,7 @@ def _conv_match_row(match_id):
             'select':'id,empresa_id,estado,solicitud_id,interesado_id,'
                      'nexi_convocatorias_solicitudes('
                      'id,empresa_id,estado,comuna,fecha_retiro,horario_retiro,'
-                     'cantidad_bultos,tipos_producto,monto_ofrecido,moneda,'
+                     'cantidad_bultos,tipos_producto,fotos,monto_ofrecido,moneda,'
                      'forma_pago,monto_negociable,comision_porcentaje,'
                      'comision_monto,monto_neto_interesado,pago_proveedor,'
                      'estado_pago,direccion_retiro,telefono,nombre,apellido,'
@@ -13987,7 +14047,7 @@ def public_conv_match(match_id):
     if not row:
         return portal_json({'ok':False,'error':'Invitación no encontrada'},404)
 
-    sol=dict(row.get('nexi_convocatorias_solicitudes') or {})
+    sol=_conv_fotos_expandir(row.get('nexi_convocatorias_solicitudes') or {})
     estado=str(row.get('estado') or '').strip().lower()
 
     chat=None
@@ -14207,6 +14267,106 @@ def public_conv_match_mensaje(match_id):
     },201)
 
 
+
+@app.route('/public/convocatorias/fotos',methods=['POST','OPTIONS'])
+def public_conv_fotos_upload():
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    token=request.form.get('token') or request.args.get('token')
+    p=_conv_token_leer(token)
+    if not p:return portal_json({'ok':False,'error':'Enlace inválido o vencido'},401)
+    eid=str(p.get('empresa_id') or '').strip()
+    archivos=request.files.getlist('fotos')
+    if not archivos:return portal_json({'ok':False,'error':'Selecciona al menos una foto'},400)
+    if len(archivos)>CONVOCATORIAS_FOTO_MAX_CANTIDAD:return portal_json({'ok':False,'error':f'Máximo {CONVOCATORIAS_FOTO_MAX_CANTIDAD} fotos'},400)
+    max_bytes=CONVOCATORIAS_FOTO_MAX_MB*1024*1024
+    permitidos={'image/jpeg':'jpg','image/png':'png','image/webp':'webp'}
+    out=[]
+    import uuid
+    for f in archivos:
+        mime=str(f.mimetype or '').lower()
+        ext=permitidos.get(mime)
+        if not ext:return portal_json({'ok':False,'error':'Formato no permitido. Usa JPG, PNG o WEBP.'},400)
+        data=f.read(max_bytes+1)
+        if not data or len(data)>max_bytes:return portal_json({'ok':False,'error':f'Cada foto debe pesar máximo {CONVOCATORIAS_FOTO_MAX_MB} MB'},400)
+        path=f'{eid}/{datetime.now(pytz.UTC).strftime("%Y/%m")}/{uuid.uuid4().hex}.{ext}'
+        rr=requests.post(
+            f'{SUPABASE_URL}/storage/v1/object/{CONVOCATORIAS_FOTOS_BUCKET}/{path}',
+            headers={
+                'apikey':SUPABASE_SERVICE_ROLE_KEY,
+                'Authorization':f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
+                'Content-Type':mime,
+                'x-upsert':'false',
+            },
+            data=data,timeout=SUPABASE_TIMEOUT,
+        )
+        if not rr.ok:
+            print('NEXI FOTO UPLOAD ERROR:',rr.status_code,rr.text[:1200])
+            return portal_json({'ok':False,'error':'No fue posible guardar la foto'},502)
+        out.append({'path':path,'url':_conv_foto_signed_url(path)})
+    return portal_json({'ok':True,'fotos':out},201)
+
+
+def _conv_reciclador_match_permitido(token_payload, match_id):
+    h=backend_headers()
+    r=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',headers=h,
+        params={'select':'id','id':f'eq.{match_id}','empresa_id':f"eq.{token_payload.get('empresa_id')}",'interesado_id':f"eq.{token_payload.get('interesado_id')}",'limit':'1'},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status();return bool(r.json() if r.content else [])
+
+
+@app.route('/public/recicladores/solicitudes',methods=['GET','OPTIONS'])
+def public_reciclador_solicitudes():
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    p=_conv_reciclador_token_leer(request.args.get('token'))
+    if not p:return portal_json({'ok':False,'error':'Acceso de reciclador inválido o vencido'},401)
+    h=backend_headers()
+    r=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',headers=h,
+        params={
+            'select':'id,estado,notificado_at,created_at,solicitud_id,nexi_convocatorias_solicitudes(*)',
+            'empresa_id':f"eq.{p.get('empresa_id')}",'interesado_id':f"eq.{p.get('interesado_id')}",
+            'order':'created_at.desc','limit':'200',
+        },timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status();rows=r.json() if r.content else []
+    salida=[]
+    for row in rows:
+        x=dict(row);sol=_conv_fotos_expandir(x.get('nexi_convocatorias_solicitudes') or {})
+        if str(x.get('estado') or '').lower()!='tomada':
+            for k in ['direccion_retiro','telefono','nombre','apellido','conversacion_id','latitud','longitud']:
+                sol.pop(k,None)
+        x['solicitud']=sol;x.pop('nexi_convocatorias_solicitudes',None);salida.append(x)
+    return portal_json({'ok':True,'solicitudes':salida,'interesado_id':p.get('interesado_id')})
+
+
+@app.route('/public/recicladores/match/<match_id>',methods=['GET','OPTIONS'])
+def public_reciclador_match(match_id):
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    p=_conv_reciclador_token_leer(request.args.get('token'))
+    if not p:return portal_json({'ok':False,'error':'Acceso inválido o vencido'},401)
+    if not _conv_reciclador_match_permitido(p,match_id):return portal_json({'ok':False,'error':'Solicitud no autorizada'},403)
+    return public_conv_match(match_id)
+
+
+@app.route('/public/recicladores/match/<match_id>/tomar',methods=['POST','OPTIONS'])
+def public_reciclador_tomar(match_id):
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    d=request.get_json(silent=True) or {};p=_conv_reciclador_token_leer(d.get('token'))
+    if not p:return portal_json({'ok':False,'error':'Acceso inválido o vencido'},401)
+    if not _conv_reciclador_match_permitido(p,match_id):return portal_json({'ok':False,'error':'Solicitud no autorizada'},403)
+    return public_conv_tomar(match_id)
+
+
+@app.route('/public/recicladores/match/<match_id>/mensaje',methods=['POST','OPTIONS'])
+def public_reciclador_mensaje(match_id):
+    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    d=request.get_json(silent=True) or {};p=_conv_reciclador_token_leer(d.get('token'))
+    if not p:return portal_json({'ok':False,'error':'Acceso inválido o vencido'},401)
+    if not _conv_reciclador_match_permitido(p,match_id):return portal_json({'ok':False,'error':'Solicitud no autorizada'},403)
+    return public_conv_match_mensaje(match_id)
+
 def _conv_portal_empresa():
     """
     Empresa efectiva para el módulo Convocatorias.
@@ -14360,6 +14520,7 @@ def public_conv_interesados_registro():
     return portal_json({
         'ok':True,
         'mensaje':'Registro completado. Ya puedes recibir oportunidades compatibles con tu cobertura.',
+        'portal_reciclador_url':(f"{RECICLADOR_PORTAL_URL}?token={quote(_conv_reciclador_token_crear(eid,(rows[0] if rows else pay).get('id')))}" if (rows[0] if rows else pay).get('id') else ''),
         'interesado':rows[0] if rows else pay,
     },201)
 
@@ -14381,7 +14542,7 @@ def portal_conv_interesados():
         return portal_json({'ok':False,'error':str(e)},400)
     if ubicacion and d.get('consentimiento_ubicacion') is not True:
         return portal_json({'ok':False,'error':'Falta autorización de ubicación'},400)
-    pay={'empresa_id':eid,'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'telefono':re.sub(r'\D','',str(d.get('telefono') or '')),'correo':str(d.get('correo') or '')[:320],'tipos_producto':_conv_lista(d.get('tipos_producto')),'comunas':_conv_lista(d.get('comunas')),'dias_disponibles':_conv_lista(d.get('dias_disponibles')),'horarios':_conv_lista(d.get('horarios')),'medio_transporte':str(d.get('medio_transporte') or '')[:120],'capacidad':str(d.get('capacidad') or '')[:120],'aporte_minimo':d.get('aporte_minimo') if d.get('aporte_minimo') not in ('',None) else None,'acepta_retiro_sin_aporte':bool(d.get('acepta_retiro_sin_aporte',True)),'activo':True,'latitud':ubicacion[0] if ubicacion else None,'longitud':ubicacion[1] if ubicacion else None,'radio_km':radio,'updated_at':datetime.now(pytz.UTC).isoformat()};r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',headers={**h,'Prefer':'return=representation'},json=pay,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];return portal_json({'ok':True,'interesado':rows[0] if rows else pay},201)
+    pay={'empresa_id':eid,'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'telefono':re.sub(r'\D','',str(d.get('telefono') or '')),'correo':str(d.get('correo') or '')[:320],'tipos_producto':_conv_lista(d.get('tipos_producto')),'comunas':_conv_lista(d.get('comunas')),'dias_disponibles':_conv_lista(d.get('dias_disponibles')),'horarios':_conv_lista(d.get('horarios')),'medio_transporte':str(d.get('medio_transporte') or '')[:120],'capacidad':str(d.get('capacidad') or '')[:120],'aporte_minimo':d.get('aporte_minimo') if d.get('aporte_minimo') not in ('',None) else None,'acepta_retiro_sin_aporte':bool(d.get('acepta_retiro_sin_aporte',True)),'activo':True,'latitud':ubicacion[0] if ubicacion else None,'longitud':ubicacion[1] if ubicacion else None,'radio_km':radio,'updated_at':datetime.now(pytz.UTC).isoformat()};r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',headers={**h,'Prefer':'return=representation'},json=pay,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];inter=rows[0] if rows else pay;ptok=_conv_reciclador_token_crear(eid,inter.get('id'));return portal_json({'ok':True,'interesado':inter,'portal_reciclador_url':f'{RECICLADOR_PORTAL_URL}?token={quote(ptok)}'},201)
 
 @app.route('/portal/convocatorias/interesados/<iid>',methods=['PATCH','OPTIONS'])
 def portal_conv_interesado_radio_update(iid):
@@ -14436,7 +14597,7 @@ def portal_conv_solicitudes():
     if request.method=='OPTIONS':return portal_json({'ok':True},204)
     p,eid=_conv_portal_empresa()
     if not p or not eid:return portal_json({'ok':False,'error':'Sesión no autorizada'},401)
-    r=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers=backend_headers(),params={'select':'*,nexi_convocatorias_interesados(id,nombre,apellido,telefono,correo)','empresa_id':f'eq.{eid}','order':'created_at.desc','limit':'500'},timeout=SUPABASE_TIMEOUT);r.raise_for_status();return portal_json({'ok':True,'solicitudes':r.json() if r.content else []})
+    r=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers=backend_headers(),params={'select':'*,nexi_convocatorias_interesados(id,nombre,apellido,telefono,correo)','empresa_id':f'eq.{eid}','order':'created_at.desc','limit':'500'},timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];return portal_json({'ok':True,'solicitudes':[_conv_fotos_expandir(x) for x in rows]})
 
 @app.route('/portal/convocatorias/solicitudes/<sid>',methods=['PATCH','OPTIONS'])
 def portal_conv_solicitud_patch(sid):
