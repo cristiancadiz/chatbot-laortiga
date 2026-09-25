@@ -30,7 +30,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.1-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -126,6 +126,8 @@ SUPERADMIN_EMAIL = os.getenv("SUPERADMIN_EMAIL", "contacto@nexia-tech.com").stri
 DEFAULT_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "10cdafab-db2d-4046-8f80-8cd9da680235")
 # Despliegue genérico de negocio único: un servicio Render = una empresa/canal.
 SINGLE_BUSINESS_MODE = True
+# Compatibilidad con funciones legacy aún presentes; en negocio único no enruta empresas.
+NEXIA_ROUTER_CONTEXTO_HORAS = int(os.getenv("NEXIA_ROUTER_CONTEXTO_HORAS", "24"))
 NEXIA_DEMO_URL = os.getenv("NEXIA_DEMO_URL", "https://nexia-tech.com").strip()
 # Empresa administrativa/superadmin histórica. Se mantiene separada del cliente Nexia.
 ADMIN_EMPRESA_ID = os.getenv(
@@ -8552,8 +8554,8 @@ def enviar_laortiga_menu(destino):
 
 
 def _laortiga_normalizar_opcion(form, texto):
-    payload = str(router_payload_interactivo(form) or "").replace("\\\\", "").strip().lower()
-    body = normalizar_texto(texto or "")
+    payload = str(router_payload_interactivo(form) or "").replace("\\", "").strip().lower()
+    body = normalizar_texto(str(texto or "").replace("\\", ""))
     if payload.startswith("laortiga:"):
         return payload
 
