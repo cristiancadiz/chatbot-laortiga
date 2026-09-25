@@ -30,7 +30,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-MENU-V1"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-MENU-V2"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8444,27 +8444,27 @@ LAORTIGA_MENU_OPCIONES = [
     {
         "item": "Retiro de reciclaje",
         "id": "laortiga:retiro",
-        "description": "Quiero que retiren reciclaje en mi domicilio",
+        "description": "Solicitar retiro a domicilio",
     },
     {
         "item": "Dónde reciclar",
         "id": "laortiga:donde",
-        "description": "Buscar puntos de reciclaje cercanos",
+        "description": "Ver puntos de reciclaje",
     },
     {
         "item": "Quiero ser reciclador",
         "id": "laortiga:registro",
-        "description": "Registrarme para recibir solicitudes",
+        "description": "Registrarme como reciclador",
     },
     {
         "item": "Soy reciclador",
         "id": "laortiga:portal",
-        "description": "Entrar a mi portal de reciclador",
+        "description": "Abrir mi portal",
     },
     {
         "item": "Hablar con ejecutivo",
         "id": "laortiga:ejecutivo",
-        "description": "Solicitar atención de una persona",
+        "description": "Hablar con una persona",
     },
 ]
 
@@ -8474,13 +8474,13 @@ LAORTIGA_MENU_CONTENT_LOCK = Lock()
 
 def _laortiga_menu_texto():
     return (
-        "Hola 👋 Bienvenido a *La Ortiga Recicla* ♻️\\n\\n"
-        "¿Qué necesitas hacer?\\n\\n"
-        "1. 🚚 Quiero que me retiren un reciclaje\\n"
-        "2. 📍 Quiero llevar a un punto de reciclaje\\n"
-        "3. 🙋 Quiero ser reciclador\\n"
-        "4. ♻️ Soy reciclador\\n"
-        "5. 👤 Hablar con un ejecutivo\\n\\n"
+        "Hola 👋 Bienvenido a *La Ortiga Recicla* ♻️\n\n"
+        "¿Qué necesitas hacer?\n\n"
+        "1. 🚚 Quiero que me retiren un reciclaje\n"
+        "2. 📍 Quiero llevar a un punto de reciclaje\n"
+        "3. 🙋 Quiero ser reciclador\n"
+        "4. ♻️ Soy reciclador\n"
+        "5. 👤 Hablar con un ejecutivo\n\n"
         "Selecciona una opción."
     )
 
@@ -8498,8 +8498,8 @@ def _laortiga_menu_content_sid():
             "language": "es",
             "types": {
                 "twilio/list-picker": {
-                    "body": "Hola 👋 Bienvenido a La Ortiga Recicla ♻️\\n¿Qué necesitas hacer?",
-                    "button": "Ver opciones",
+                    "body": "Hola 👋 Bienvenido a La Ortiga Recicla ♻️\n¿Qué necesitas hacer?",
+                    "button": "Elegir opción",
                     "items": LAORTIGA_MENU_OPCIONES,
                 }
             },
@@ -8650,21 +8650,21 @@ def _laortiga_responder_opcion(twiml, telefono, opcion, texto_original):
 
     if opcion == "laortiga:retiro":
         twiml.message(
-            "🚚 Perfecto. Completa este formulario para solicitar el retiro de tu reciclaje:\\n\\n"
+            "🚚 Perfecto. Completa este formulario para solicitar el retiro de tu reciclaje:\n\n"
             + _laortiga_link_retiro(telefono)
         )
         return True
 
     if opcion == "laortiga:donde":
         twiml.message(
-            "📍 Puedes buscar puntos de reciclaje en Chile aquí:\\n\\n"
+            "📍 Puedes buscar puntos de reciclaje en Chile aquí:\n\n"
             + LAORTIGA_DONDE_RECICLAR_URL
         )
         return True
 
     if opcion == "laortiga:registro":
         twiml.message(
-            "🙋 ¡Genial! Completa este formulario para registrarte como reciclador:\\n\\n"
+            "🙋 ¡Genial! Completa este formulario para registrarte como reciclador:\n\n"
             + _laortiga_link_registro_reciclador()
         )
         return True
@@ -8673,7 +8673,7 @@ def _laortiga_responder_opcion(twiml, telefono, opcion, texto_original):
         url = _laortiga_link_portal_reciclador(telefono)
         if url:
             twiml.message(
-                "♻️ Este es tu Portal del Reciclador:\\n\\n" + url
+                "♻️ Este es tu Portal del Reciclador:\n\n" + url
             )
         else:
             twiml.message(
