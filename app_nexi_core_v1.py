@@ -30,7 +30,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-NEXIA-GENERICO-SINGLE-V1"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-MENU-V1"
 load_dotenv()
 
 app = Flask(__name__)
@@ -50,8 +50,8 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 # CONFIGURACIÓN GENERAL
 # ============================================================
 
-DEFAULT_ASISTENTE_NOMBRE = os.getenv("ASISTENTE_NOMBRE", "Asistente")
-DEFAULT_NEGOCIO_NOMBRE = os.getenv("NEGOCIO_NOMBRE", "Mi negocio")
+DEFAULT_ASISTENTE_NOMBRE = os.getenv("ASISTENTE_NOMBRE", "La Ortiga Recicla")
+DEFAULT_NEGOCIO_NOMBRE = os.getenv("NEGOCIO_NOMBRE", "La Ortiga Recicla")
 TIMEZONE = os.getenv("TIMEZONE", "America/Santiago")
 
 # ============================================================
@@ -123,7 +123,7 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
 # Usuario maestro Nexia. Este correo siempre se trata como superadmin global.
 SUPERADMIN_EMAIL = os.getenv("SUPERADMIN_EMAIL", "contacto@nexia-tech.com").strip().lower()
-DEFAULT_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "97be347a-51d6-467d-be49-839a254a4ad0")
+DEFAULT_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "10cdafab-db2d-4046-8f80-8cd9da680235")
 # Despliegue genérico de negocio único: un servicio Render = una empresa/canal.
 SINGLE_BUSINESS_MODE = True
 NEXIA_DEMO_URL = os.getenv("NEXIA_DEMO_URL", "https://nexia-tech.com").strip()
@@ -135,6 +135,21 @@ ADMIN_EMPRESA_ID = os.getenv(
 SUPABASE_TIMEOUT = int(os.getenv("SUPABASE_TIMEOUT", "15"))
 
 PORTAL_ORIGIN = os.getenv("PORTAL_ORIGIN", "https://nexia-tech.com").rstrip("/")
+
+# ============================================================
+# LA ORTIGA RECICLA - MENÚ WHATSAPP NEGOCIO ÚNICO
+# ============================================================
+LAORTIGA_EMPRESA_ID = os.getenv(
+    "SUPABASE_EMPRESA_ID",
+    "10cdafab-db2d-4046-8f80-8cd9da680235",
+).strip()
+LAORTIGA_DONDE_RECICLAR_URL = os.getenv(
+    "LAORTIGA_DONDE_RECICLAR_URL",
+    "https://chilesinbasura.cl/donde-reciclar/",
+).strip()
+LAORTIGA_MENU_ACTIVO = os.getenv(
+    "LAORTIGA_MENU_ACTIVO", "true"
+).strip().lower() in {"1", "true", "yes", "si", "sí"}
 
 # ============================================================
 # NEXIA V2.0 - PLANES + MERCADO PAGO
@@ -193,7 +208,7 @@ RESEND_FROM_EMAIL = os.getenv(
 
 # Correo general de respaldo.
 # Cada empresa puede definir su propio correo_ejecutivo en configuracion_bot.
-EJECUTIVO_EMAIL = os.getenv("EJECUTIVO_EMAIL", "").strip()
+EJECUTIVO_EMAIL = os.getenv("EJECUTIVO_EMAIL", "afernandez@laortiga.cl").strip()
 
 
 # 0=lunes ... 5=sábado. Domingo cerrado.
@@ -211,7 +226,7 @@ def tenant_default():
     return {
         "empresa_id": DEFAULT_EMPRESA_ID,
         "empresa_nombre": DEFAULT_NEGOCIO_NOMBRE,
-        "tipo_negocio": os.getenv("TIPO_NEGOCIO", "general"),
+        "tipo_negocio": os.getenv("TIPO_NEGOCIO", "reciclaje"),
         "descripcion_empresa": os.getenv("DESCRIPCION_EMPRESA", ""),
         "asistente_nombre": DEFAULT_ASISTENTE_NOMBRE,
         "direccion": DEFAULT_DIRECCION_ATENCION,
@@ -8420,6 +8435,275 @@ def _twilio_send_ecommerce_carousel(destino, products):
     return True
 
 
+
+# ============================================================
+# LA ORTIGA RECICLA - FLUJO FIJO DE WHATSAPP
+# ============================================================
+
+LAORTIGA_MENU_OPCIONES = [
+    {
+        "item": "Retiro de reciclaje",
+        "id": "laortiga:retiro",
+        "description": "Quiero que retiren reciclaje en mi domicilio",
+    },
+    {
+        "item": "Dónde reciclar",
+        "id": "laortiga:donde",
+        "description": "Buscar puntos de reciclaje cercanos",
+    },
+    {
+        "item": "Quiero ser reciclador",
+        "id": "laortiga:registro",
+        "description": "Registrarme para recibir solicitudes",
+    },
+    {
+        "item": "Soy reciclador",
+        "id": "laortiga:portal",
+        "description": "Entrar a mi portal de reciclador",
+    },
+    {
+        "item": "Hablar con ejecutivo",
+        "id": "laortiga:ejecutivo",
+        "description": "Solicitar atención de una persona",
+    },
+]
+
+LAORTIGA_MENU_CONTENT_SID = None
+LAORTIGA_MENU_CONTENT_LOCK = Lock()
+
+
+def _laortiga_menu_texto():
+    return (
+        "Hola 👋 Bienvenido a *La Ortiga Recicla* ♻️\\n\\n"
+        "¿Qué necesitas hacer?\\n\\n"
+        "1. 🚚 Quiero que me retiren un reciclaje\\n"
+        "2. 📍 Quiero llevar a un punto de reciclaje\\n"
+        "3. 🙋 Quiero ser reciclador\\n"
+        "4. ♻️ Soy reciclador\\n"
+        "5. 👤 Hablar con un ejecutivo\\n\\n"
+        "Selecciona una opción."
+    )
+
+
+def _laortiga_menu_content_sid():
+    """Crea/reutiliza un list-picker con 5 opciones para La Ortiga Recicla."""
+    global LAORTIGA_MENU_CONTENT_SID
+    with LAORTIGA_MENU_CONTENT_LOCK:
+        if LAORTIGA_MENU_CONTENT_SID:
+            return LAORTIGA_MENU_CONTENT_SID
+
+        account_sid, auth_token, _ = _router_twilio_credenciales()
+        payload = {
+            "friendly_name": "laortiga_recicla_menu_v1",
+            "language": "es",
+            "types": {
+                "twilio/list-picker": {
+                    "body": "Hola 👋 Bienvenido a La Ortiga Recicla ♻️\\n¿Qué necesitas hacer?",
+                    "button": "Ver opciones",
+                    "items": LAORTIGA_MENU_OPCIONES,
+                }
+            },
+        }
+        r = requests.post(
+            "https://content.twilio.com/v1/Content",
+            auth=(account_sid, auth_token),
+            json=payload,
+            timeout=20,
+        )
+        if not r.ok:
+            raise RuntimeError(
+                f"Twilio Content API La Ortiga HTTP {r.status_code}: {r.text[:500]}"
+            )
+        data = r.json() if r.content else {}
+        sid = str(data.get("sid") or "").strip()
+        if not sid:
+            raise RuntimeError("Twilio no devolvió ContentSid para menú La Ortiga")
+        LAORTIGA_MENU_CONTENT_SID = sid
+        print("LAORTIGA MENU CONTENT SID OK:", sid)
+        return sid
+
+
+def enviar_laortiga_menu(destino):
+    """Envía el menú visual; si falla, el webhook usa texto como fallback."""
+    try:
+        account_sid, auth_token, from_value = _router_twilio_credenciales()
+        digits = _router_identificador(destino)
+        if not digits:
+            return False
+        r = requests.post(
+            f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+            auth=(account_sid, auth_token),
+            data={
+                "To": f"whatsapp:+{digits}",
+                "From": from_value,
+                "ContentSid": _laortiga_menu_content_sid(),
+            },
+            timeout=20,
+        )
+        if not r.ok:
+            raise RuntimeError(
+                f"Twilio envío menú La Ortiga HTTP {r.status_code}: {r.text[:500]}"
+            )
+        print("LAORTIGA MENU ENVIADO:", digits, (r.json() or {}).get("sid"))
+        return True
+    except Exception as e:
+        print("LAORTIGA MENU ERROR:", repr(e))
+        return False
+
+
+def _laortiga_normalizar_opcion(form, texto):
+    payload = str(router_payload_interactivo(form) or "").replace("\\\\", "").strip().lower()
+    body = normalizar_texto(texto or "")
+    if payload.startswith("laortiga:"):
+        return payload
+
+    alias = {
+        "1": "laortiga:retiro",
+        "retiro": "laortiga:retiro",
+        "quiero reciclar": "laortiga:retiro",
+        "quiero que me retiren un reciclaje": "laortiga:retiro",
+        "retirar reciclaje": "laortiga:retiro",
+
+        "2": "laortiga:donde",
+        "donde reciclar": "laortiga:donde",
+        "punto de reciclaje": "laortiga:donde",
+        "quiero llevar a un punto de reciclaje": "laortiga:donde",
+
+        "3": "laortiga:registro",
+        "quiero ser reciclador": "laortiga:registro",
+        "ser reciclador": "laortiga:registro",
+
+        "4": "laortiga:portal",
+        "soy reciclador": "laortiga:portal",
+        "portal reciclador": "laortiga:portal",
+
+        "5": "laortiga:ejecutivo",
+        "ejecutivo": "laortiga:ejecutivo",
+        "hablar con un ejecutivo": "laortiga:ejecutivo",
+        "hablar con ejecutivo": "laortiga:ejecutivo",
+        "humano": "laortiga:ejecutivo",
+    }
+    return alias.get(body)
+
+
+def _laortiga_guardar_entrada(telefono, mensaje):
+    """Registra la entrada ANTES de generar links para conservar la ventana WhatsApp."""
+    activar_por_empresa(LAORTIGA_EMPRESA_ID, canal="whatsapp", provider="twilio")
+    guardar_mensaje_supabase(
+        telefono,
+        "entrante",
+        str(mensaje or "").strip() or "Interacción menú La Ortiga",
+        canal="whatsapp",
+    )
+
+
+def _laortiga_link_retiro(telefono):
+    conv = obtener_conversacion_por_identificador(telefono, "whatsapp") or {}
+    tok = _conv_token_crear(
+        LAORTIGA_EMPRESA_ID,
+        telefono,
+        conv.get("id"),
+    )
+    return f"{CONVOCATORIAS_PUBLIC_URL}?token={quote(tok)}"
+
+
+def _laortiga_link_registro_reciclador():
+    tok = _conv_interesado_token_crear(LAORTIGA_EMPRESA_ID)
+    return f"{INTERESADOS_PUBLIC_URL}?token={quote(tok)}"
+
+
+def _laortiga_buscar_reciclador_por_telefono(telefono):
+    h = backend_headers()
+    ident = re.sub(r"\\D", "", normalizar_telefono(telefono))
+    if not h or not ident:
+        return None
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados",
+        headers=h,
+        params={
+            "select": "id,empresa_id,nombre,telefono,correo,activo",
+            "empresa_id": f"eq.{LAORTIGA_EMPRESA_ID}",
+            "telefono": f"eq.{ident}",
+            "activo": "eq.true",
+            "order": "created_at.desc",
+            "limit": "1",
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if not r.ok:
+        print("LAORTIGA RECICLADOR LOOKUP ERROR:", r.status_code, r.text[:500])
+        return None
+    rows = r.json() if r.content else []
+    return rows[0] if rows else None
+
+
+def _laortiga_link_portal_reciclador(telefono):
+    inter = _laortiga_buscar_reciclador_por_telefono(telefono)
+    if not inter:
+        return None
+    tok = _conv_reciclador_token_crear(LAORTIGA_EMPRESA_ID, inter.get("id"))
+    return f"{RECICLADOR_PORTAL_URL}?token={quote(tok)}"
+
+
+def _laortiga_responder_opcion(twiml, telefono, opcion, texto_original):
+    _laortiga_guardar_entrada(telefono, texto_original)
+
+    if opcion == "laortiga:retiro":
+        twiml.message(
+            "🚚 Perfecto. Completa este formulario para solicitar el retiro de tu reciclaje:\\n\\n"
+            + _laortiga_link_retiro(telefono)
+        )
+        return True
+
+    if opcion == "laortiga:donde":
+        twiml.message(
+            "📍 Puedes buscar puntos de reciclaje en Chile aquí:\\n\\n"
+            + LAORTIGA_DONDE_RECICLAR_URL
+        )
+        return True
+
+    if opcion == "laortiga:registro":
+        twiml.message(
+            "🙋 ¡Genial! Completa este formulario para registrarte como reciclador:\\n\\n"
+            + _laortiga_link_registro_reciclador()
+        )
+        return True
+
+    if opcion == "laortiga:portal":
+        url = _laortiga_link_portal_reciclador(telefono)
+        if url:
+            twiml.message(
+                "♻️ Este es tu Portal del Reciclador:\\n\\n" + url
+            )
+        else:
+            twiml.message(
+                "Todavía no encuentro un registro de reciclador asociado a este WhatsApp. "
+                "Primero selecciona *Quiero ser reciclador* para registrarte."
+            )
+        return True
+
+    if opcion == "laortiga:ejecutivo":
+        try:
+            derivar_a_ejecutivo(
+                telefono,
+                "whatsapp",
+                estado={"nombre": "Cliente La Ortiga"},
+                motivo="Solicita hablar con un ejecutivo desde el menú La Ortiga Recicla",
+            )
+            twiml.message(
+                "👤 Listo. Avisé al equipo de La Ortiga para que continúe la conversación contigo por aquí."
+            )
+        except Exception as e:
+            print("LAORTIGA DERIVACION ERROR:", repr(e))
+            twiml.message(
+                "No pude avisar al ejecutivo en este momento. Intenta nuevamente en unos minutos."
+            )
+        return True
+
+    return False
+
+
+
 @app.route("/whatsapp/webhook", methods=["POST"])
 def whatsapp_webhook():
     twiml = MessagingResponse()
@@ -8527,6 +8811,40 @@ def whatsapp_webhook():
         # triggers, MENU, router y motor Core. Ninguna de esas ramas debe
         # responder automáticamente mientras este retiro esté en modo humano.
         if _conv_interceptar_whatsapp_humano(telefono, texto or texto_procesado):
+            return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+        # ------------------------------------------------------------
+        # LA ORTIGA RECICLA: menú fijo de 5 opciones
+        # ------------------------------------------------------------
+        if LAORTIGA_MENU_ACTIVO:
+            opcion_laortiga = _laortiga_normalizar_opcion(request.form, texto)
+
+            if opcion_laortiga:
+                _laortiga_responder_opcion(
+                    twiml,
+                    telefono,
+                    opcion_laortiga,
+                    texto or request.form.get("ButtonText") or opcion_laortiga,
+                )
+                return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+            texto_norm_laortiga = normalizar_texto(texto or "")
+            if texto_norm_laortiga in {
+                "", "hola", "holaa", "buenas", "buenos dias", "buenas tardes",
+                "buenas noches", "menu", "menu principal", "inicio", "ayuda"
+            }:
+                _laortiga_guardar_entrada(telefono, texto or "Hola")
+                if enviar_laortiga_menu(telefono):
+                    return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+                twiml.message(_laortiga_menu_texto())
+                return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+            # En esta instancia el WhatsApp funciona como recepción guiada.
+            # Ante texto libre se vuelve a mostrar el menú en vez de derivar a otro negocio.
+            _laortiga_guardar_entrada(telefono, texto)
+            if enviar_laortiga_menu(telefono):
+                return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
+            twiml.message(_laortiga_menu_texto())
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
         # V2.4.1: selección de plan ANTES de consumir cuota.
