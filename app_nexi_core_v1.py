@@ -30,7 +30,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.4-RESEND-DEBUG"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.5-SENDER-FIJO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -14287,6 +14287,7 @@ def public_conv_tomar(match_id):
 
 
 @app.route('/public/convocatorias/match/<match_id>/mensaje',methods=['POST','OPTIONS'])
+@app.route('/public/convocatorias/match/<match_id>/mensaje',methods=['POST','OPTIONS'])
 def public_conv_match_mensaje(match_id):
     if request.method=='OPTIONS':
         return portal_json({'ok':True},204)
@@ -14305,18 +14306,28 @@ def public_conv_match_mensaje(match_id):
     if str(row.get('estado') or '').lower()!='tomada':
         return portal_json({
             'ok':False,
-            'error':'Solo la persona que tomó la solicitud puede usar este chat.',
+            'error':'Solo el reciclador seleccionado puede usar este chat.',
         },403)
 
     sol=dict(row.get('nexi_convocatorias_solicitudes') or {})
     if sol.get('estado') in {'completada','no_concretada','cancelada'}:
         return portal_json({'ok':False,'error':'El retiro ya finalizó. Chat cerrado.'},409)
+
     eid=str(sol.get('empresa_id') or row.get('empresa_id') or '').strip()
     telefono=str(sol.get('telefono') or '').strip()
     canal=str(sol.get('canal') or 'whatsapp').lower()
 
     if not eid or not telefono:
         return portal_json({'ok':False,'error':'Solicitud incompleta'},500)
+
+    # Esta instancia es exclusivamente La Ortiga Recicla.
+    # Evitar que una fila legacy de canales_empresa cargue el sender antiguo.
+    if eid != LAORTIGA_EMPRESA_ID:
+        print(
+            'LAORTIGA CHAT EMPRESA WARN:',
+            'solicitud_empresa=',eid,
+            'esperada=',LAORTIGA_EMPRESA_ID,
+        )
 
     conv_id=_conv_asegurar_conversacion_solicitud(sol)
     if not conv_id:
@@ -14331,45 +14342,29 @@ def public_conv_match_mensaje(match_id):
             'ventana_24h':ventana,
         },409)
 
-    # Resolver proveedor del canal para esta empresa.
-    provider='twilio'
-    canal_cfg={}
-    hb=backend_headers()
-    if hb:
-        rc=requests.get(
-            f'{SUPABASE_URL}/rest/v1/canales_empresa',
-            headers=hb,
-            params={
-                'select':'*',
-                'empresa_id':f'eq.{eid}',
-                'canal':f'eq.{canal}',
-                'activo':'eq.true',
-                'es_principal':'eq.true',
-                'limit':'1',
-            },
-            timeout=SUPABASE_TIMEOUT,
-        )
-        if rc.ok:
-            rr=rc.json() if rc.content else []
-            if rr:
-                canal_cfg=rr[0]
-                provider=str(canal_cfg.get('provider') or provider).lower()
-
-    activar_por_empresa(
-        eid,
-        canal=canal,
-        provider=provider,
-        canal_config=canal_cfg,
-    )
-    _conv_aplicar_modo_retiro(conv_id,eid,canal)
-
     if canal!='whatsapp':
         return portal_json({'ok':False,'error':f'Canal no soportado: {canal}'},400)
 
-    if provider=='gupshup':
-        enviar_gupshup_texto(telefono,mensaje)
-    else:
-        enviar_twilio_texto(telefono,mensaje)
+    # IMPORTANTE:
+    # canal_config={} evita tomar un sender antiguo desde canales_empresa.
+    # enviar_twilio_texto() usará TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y
+    # TWILIO_WHATSAPP_FROM de ESTE servicio Render (Reciclaje La Ortiga).
+    activar_por_empresa(
+        LAORTIGA_EMPRESA_ID,
+        canal='whatsapp',
+        provider='twilio',
+        canal_config={},
+    )
+    _conv_aplicar_modo_retiro(conv_id,LAORTIGA_EMPRESA_ID,'whatsapp')
+
+    print(
+        'LAORTIGA CHAT SENDER:',
+        'from=',TWILIO_WHATSAPP_FROM,
+        'to=',telefono,
+        'match=',match_id,
+    )
+
+    msg=enviar_twilio_texto(telefono,mensaje)
 
     guardar_mensaje_supabase(
         telefono,
@@ -14379,21 +14374,23 @@ def public_conv_match_mensaje(match_id):
             str(sol.get('nombre') or '').strip(),
             str(sol.get('apellido') or '').strip(),
         ])).strip() or None,
-        canal=canal,
+        canal='whatsapp',
     )
 
     print(
-        'NEXI CONVOCATORIA CHAT MENSAJE OK:',
+        'LAORTIGA CHAT MENSAJE OK:',
         'match=',match_id,
-        'empresa=',eid,
-        'telefono=',telefono,
-        'provider=',provider,
+        'empresa=',LAORTIGA_EMPRESA_ID,
+        'from=',TWILIO_WHATSAPP_FROM,
+        'to=',telefono,
+        'sid=',getattr(msg,'sid',''),
     )
 
     return portal_json({
         'ok':True,
         'mensaje':'Mensaje enviado',
         'conversacion_id':conv_id,
+        'from':TWILIO_WHATSAPP_FROM,
     },201)
 
 
