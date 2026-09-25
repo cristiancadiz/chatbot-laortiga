@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.9-KILOS-RECICLADOS"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.10-REGISTRO-OPCION3"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8729,7 +8729,9 @@ def _laortiga_responder_opcion(twiml, telefono, opcion, texto_original):
             url = _laortiga_link_registro_reciclador()
             print("LAORTIGA REGISTRO URL GENERADA:", url[:180])
             return enviar(
-                "🙋 ¡Genial! Completa este formulario para registrarte como reciclador:\n\n"
+                "🙋 *Registro de reciclador*\n\n"
+                "Completa este formulario con tus datos, materiales que recibes y zona de cobertura. "
+                "Cuando termines, podrás recibir solicitudes compatibles y enviar cotizaciones.\n\n"
                 + url
             )
 
@@ -13390,7 +13392,7 @@ def portal_google_calendar_desconectar():
 # ============================================================
 CONVOCATORIAS_PUBLIC_URL = os.getenv('CONVOCATORIAS_PUBLIC_URL', f'{PORTAL_ORIGIN}/convocatoria.html').strip()
 CONVOCATORIAS_TOKEN_HORAS = int(os.getenv('CONVOCATORIAS_TOKEN_HORAS','24'))
-INTERESADOS_PUBLIC_URL = os.getenv('INTERESADOS_PUBLIC_URL', f'{PORTAL_ORIGIN}/registro_interesado.html').strip()
+INTERESADOS_PUBLIC_URL = os.getenv('INTERESADOS_PUBLIC_URL', f'{PORTAL_ORIGIN}/registro_reciclador.html').strip()
 INTERESADOS_TOKEN_HORAS = int(os.getenv('INTERESADOS_TOKEN_HORAS','720'))
 RECICLADOR_PORTAL_URL = os.getenv('RECICLADOR_PORTAL_URL', f'{PORTAL_ORIGIN}/reciclador.html').strip()
 RECICLADOR_TOKEN_HORAS = int(os.getenv('RECICLADOR_TOKEN_HORAS','720'))
