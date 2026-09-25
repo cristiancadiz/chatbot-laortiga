@@ -30,7 +30,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-MENU-V2"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3"
 load_dotenv()
 
 app = Flask(__name__)
@@ -13323,6 +13323,8 @@ INTERESADOS_PUBLIC_URL = os.getenv('INTERESADOS_PUBLIC_URL', f'{PORTAL_ORIGIN}/r
 INTERESADOS_TOKEN_HORAS = int(os.getenv('INTERESADOS_TOKEN_HORAS','720'))
 RECICLADOR_PORTAL_URL = os.getenv('RECICLADOR_PORTAL_URL', f'{PORTAL_ORIGIN}/reciclador.html').strip()
 RECICLADOR_TOKEN_HORAS = int(os.getenv('RECICLADOR_TOKEN_HORAS','720'))
+COTIZACIONES_PUBLIC_URL = os.getenv('COTIZACIONES_PUBLIC_URL', f'{PORTAL_ORIGIN}/cotizaciones.html').strip()
+COTIZACIONES_TOKEN_HORAS = int(os.getenv('COTIZACIONES_TOKEN_HORAS','72'))
 CONVOCATORIAS_FOTOS_BUCKET = os.getenv('CONVOCATORIAS_FOTOS_BUCKET','convocatorias').strip() or 'convocatorias'
 CONVOCATORIAS_FOTO_MAX_MB = int(os.getenv('CONVOCATORIAS_FOTO_MAX_MB','6'))
 CONVOCATORIAS_FOTO_MAX_CANTIDAD = int(os.getenv('CONVOCATORIAS_FOTO_MAX_CANTIDAD','4'))
@@ -13470,6 +13472,29 @@ def _conv_token_leer(token):
         if int(p.get('exp') or 0)<int(datetime.now(pytz.UTC).timestamp()):return None
         return p
     except Exception:return None
+
+
+def _conv_cotizaciones_token_crear(empresa_id, solicitud_id, telefono=''):
+    p={
+        'empresa_id':str(empresa_id or ''),
+        'solicitud_id':str(solicitud_id or ''),
+        'telefono':_normalizar_identificador_demo(telefono,'whatsapp'),
+        'purpose':'cotizaciones_cliente',
+        'exp':int(datetime.now(pytz.UTC).timestamp())+COTIZACIONES_TOKEN_HORAS*3600,
+    }
+    raw=json.dumps(p,separators=(',',':'),ensure_ascii=False).encode()
+    body=base64.urlsafe_b64encode(raw).decode().rstrip('=')
+    sig=hmac.new(_conv_secret(),body.encode(),hashlib.sha256).hexdigest()
+    return body+'.'+sig
+
+
+def _conv_cotizaciones_token_leer(token):
+    p=_conv_token_leer(token)
+    if not p or p.get('purpose')!='cotizaciones_cliente':
+        return None
+    if not p.get('empresa_id') or not p.get('solicitud_id'):
+        return None
+    return p
 
 
 def _conv_interesado_token_crear(empresa_id):
@@ -14184,75 +14209,11 @@ def public_conv_match(match_id):
 def public_conv_tomar(match_id):
     if request.method=='OPTIONS':
         return portal_json({'ok':True},204)
-
-    h=backend_headers()
-    r=requests.post(
-        f'{SUPABASE_URL}/rest/v1/rpc/nexi_tomar_convocatoria',
-        headers=h,
-        json={'p_match_id':match_id},
-        timeout=SUPABASE_TIMEOUT,
-    )
-
-    if not r.ok:
-        print(
-            'NEXI CONVOCATORIA TOMAR RPC ERROR:',
-            r.status_code,
-            r.text[:2000],
-        )
-        r.raise_for_status()
-
-    data=r.json() if r.content else {}
-    if isinstance(data,list):
-        data=data[0] if data else {}
-
-    if not data.get('ok'):
-        return portal_json({
-            'ok':False,
-            'error':'Esta solicitud ya fue tomada por otra persona.',
-            'resultado':data,
-        },409)
-
-    sid=str(data.get('solicitud_id') or '')
-    q=requests.get(
-        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
-        headers=h,
-        params={'select':'*','id':f'eq.{sid}','limit':'1'},
-        timeout=SUPABASE_TIMEOUT,
-    )
-    q.raise_for_status()
-    rows=q.json() if q.content else []
-    sol=rows[0] if rows else {}
-    if sol and str(sol.get('estado') or '')=='disponible':
-        upd=requests.patch(
-            f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
-            headers={**h,'Prefer':'return=representation'},
-            params={'id':f'eq.{sid}','empresa_id':f"eq.{sol.get('empresa_id')}",'estado':'eq.disponible'},
-            json={'estado':'reclamada','updated_at':datetime.now(pytz.UTC).isoformat()},
-            timeout=SUPABASE_TIMEOUT,
-        )
-        if not upd.ok:
-            print('NEXI RETIRO ESTADO SOLICITUD ERROR:',upd.status_code,upd.text[:1000])
-        else:
-            changed=upd.json() if upd.content else []
-            if changed: sol=changed[0]
-
-    conv_id=_conv_asegurar_conversacion_solicitud(sol)
-    if conv_id:
-        sol['conversacion_id']=conv_id
-
     return portal_json({
-        'ok':True,
-        'solicitud':sol,
-        'chat':{
-            'habilitado':bool(conv_id),
-            'conversacion_id':conv_id,
-        },
-        'portal_url':(
-            f'{PORTAL_ORIGIN}/portal.html?seccion=conversaciones'
-            + (f'&conversacion={quote(conv_id)}' if conv_id else '')
-        ),
-        'mensaje':'Solicitud adjudicada. Ya puedes coordinar el retiro por el chat de Nexia.',
-    })
+        'ok':False,
+        'codigo':'COTIZACION_REQUERIDA',
+        'error':'Esta solicitud funciona mediante cotizaciones. Envía una propuesta desde el Portal del Reciclador.',
+    },410)
 
 
 @app.route('/public/convocatorias/match/<match_id>/mensaje',methods=['POST','OPTIONS'])
@@ -14453,11 +14414,13 @@ def public_reciclador_match(match_id):
 
 @app.route('/public/recicladores/match/<match_id>/tomar',methods=['POST','OPTIONS'])
 def public_reciclador_tomar(match_id):
-    if request.method=='OPTIONS':return portal_json({'ok':True},204)
-    d=request.get_json(silent=True) or {};p=_conv_reciclador_token_leer(d.get('token'))
-    if not p:return portal_json({'ok':False,'error':'Acceso inválido o vencido'},401)
-    if not _conv_reciclador_match_permitido(p,match_id):return portal_json({'ok':False,'error':'Solicitud no autorizada'},403)
-    return public_conv_tomar(match_id)
+    if request.method=='OPTIONS':
+        return portal_json({'ok':True},204)
+    return portal_json({
+        'ok':False,
+        'codigo':'COTIZACION_REQUERIDA',
+        'error':'Ya no se adjudica por orden de llegada. Debes enviar una cotización.',
+    },410)
 
 
 @app.route('/public/recicladores/match/<match_id>/mensaje',methods=['POST','OPTIONS'])
@@ -14720,6 +14683,388 @@ def portal_conv_solicitud_patch(sid):
             print('NEXI RETIRO FINALIZADO MODO BOT:',sid,conv_id)
     return portal_json({'ok':True,'solicitud':sol})
 
+
+
+# ============================================================
+# LA ORTIGA RECICLA - COTIZACIONES
+# ============================================================
+
+def _cot_float(value, default=None, minimum=None):
+    if value in (None, ''):
+        return default
+    try:
+        n=float(value)
+    except Exception:
+        raise ValueError('Valor numérico inválido')
+    if minimum is not None and n < minimum:
+        raise ValueError(f'El valor debe ser mayor o igual a {minimum}')
+    return n
+
+
+def _cot_monto_texto(cot):
+    modalidad=str(cot.get('modalidad') or '').strip().lower()
+    total=cot.get('monto_total')
+    retiro=cot.get('costo_retiro')
+    neto=cot.get('monto_neto_cliente')
+    def clp2(v):
+        try:
+            return '$'+f"{int(round(float(v))):,}".replace(',','.')+' CLP'
+        except Exception:
+            return '—'
+    if modalidad=='retiro_gratis':
+        return 'Retiro gratis'
+    if modalidad=='a_convenir':
+        return 'Monto a convenir'
+    if modalidad=='cobra_retiro':
+        return f"Cobro por retiro: {clp2(total)}"
+    return f"Pago por material: {clp2(total)} · Neto estimado cliente: {clp2(neto)}"
+
+
+def _cotizacion_por_match(match_id):
+    h=backend_headers()
+    if not h:
+        return None
+    r=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_cotizaciones',
+        headers=h,
+        params={
+            'select':'*',
+            'match_id':f'eq.{match_id}',
+            'limit':'1',
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if r.status_code==404:
+        return None
+    r.raise_for_status()
+    rows=r.json() if r.content else []
+    return rows[0] if rows else None
+
+
+def _cotizacion_notificar_cliente(sol, cot):
+    telefono=str(sol.get('telefono') or '').strip()
+    if not telefono:
+        return False
+    tok=_conv_cotizaciones_token_crear(
+        sol.get('empresa_id'),
+        sol.get('id'),
+        telefono,
+    )
+    url=f"{COTIZACIONES_PUBLIC_URL}?token={quote(tok)}"
+    mensaje=(
+        "♻️ *Nueva cotización para tu reciclaje*\n\n"
+        f"{_cot_monto_texto(cot)}\n"
+        "Puedes revisar las propuestas y elegir la que prefieras aquí:\n"
+        f"{url}"
+    )
+    try:
+        activar_por_empresa(str(sol.get('empresa_id') or LAORTIGA_EMPRESA_ID), canal='whatsapp', provider='twilio')
+        enviar_twilio_texto(telefono,mensaje)
+        print('NEXI COTIZACION CLIENTE NOTIFICADO:',sol.get('id'))
+        return True
+    except Exception as e:
+        print('NEXI COTIZACION NOTIFICACION WARN:',repr(e))
+        return False
+
+
+@app.route('/public/recicladores/match/<match_id>/cotizacion',methods=['GET','POST','OPTIONS'])
+def public_reciclador_cotizacion(match_id):
+    if request.method=='OPTIONS':
+        return portal_json({'ok':True},204)
+
+    if request.method=='GET':
+        token=request.args.get('token')
+        p=_conv_reciclador_token_leer(token)
+        if not p:
+            return portal_json({'ok':False,'error':'Acceso inválido o vencido'},401)
+        if not _conv_reciclador_match_permitido(p,match_id):
+            return portal_json({'ok':False,'error':'Solicitud no autorizada'},403)
+        return portal_json({'ok':True,'cotizacion':_cotizacion_por_match(match_id)})
+
+    d=request.get_json(silent=True) or {}
+    p=_conv_reciclador_token_leer(d.get('token'))
+    if not p:
+        return portal_json({'ok':False,'error':'Acceso inválido o vencido'},401)
+    if not _conv_reciclador_match_permitido(p,match_id):
+        return portal_json({'ok':False,'error':'Solicitud no autorizada'},403)
+
+    row=_conv_match_row(match_id)
+    if not row:
+        return portal_json({'ok':False,'error':'Solicitud no encontrada'},404)
+    if str(row.get('estado') or '').lower() in {'tomada','cerrada'}:
+        return portal_json({'ok':False,'error':'Esta solicitud ya fue adjudicada.'},409)
+
+    sol=dict(row.get('nexi_convocatorias_solicitudes') or {})
+    if str(sol.get('estado') or '').lower() in {'reclamada','en_gestion','completada','no_concretada','cancelada'}:
+        return portal_json({'ok':False,'error':'La solicitud ya no acepta cotizaciones.'},409)
+
+    modalidad=str(d.get('modalidad') or 'paga_cliente').strip().lower()
+    tipo_tarifa=str(d.get('tipo_tarifa') or 'fijo').strip().lower()
+    if modalidad not in {'paga_cliente','cobra_retiro','retiro_gratis','a_convenir'}:
+        return portal_json({'ok':False,'error':'Modalidad de cotización inválida'},400)
+    if tipo_tarifa not in {'por_kg','por_unidad','por_m3','por_lote','fijo','a_convenir'}:
+        return portal_json({'ok':False,'error':'Tipo de tarifa inválido'},400)
+
+    try:
+        valor_unitario=_cot_float(d.get('valor_unitario'),None,0)
+        cantidad=_cot_float(d.get('cantidad'),None,0)
+        monto_total=_cot_float(d.get('monto_total'),None,0)
+        costo_retiro=_cot_float(d.get('costo_retiro'),0,0) or 0
+    except ValueError as e:
+        return portal_json({'ok':False,'error':str(e)},400)
+
+    if monto_total is None and valor_unitario is not None and cantidad is not None:
+        monto_total=round(valor_unitario*cantidad,2)
+
+    if modalidad=='retiro_gratis':
+        monto_total=0
+        costo_retiro=0
+    elif modalidad=='a_convenir':
+        monto_total=None
+    elif monto_total is None:
+        return portal_json({'ok':False,'error':'Indica un monto total o valor unitario y cantidad.'},400)
+
+    if modalidad=='paga_cliente':
+        monto_neto_cliente=(float(monto_total or 0)-float(costo_retiro or 0))
+    elif modalidad=='cobra_retiro':
+        # Un valor negativo significa que el cliente paga por el retiro.
+        monto_neto_cliente=-float(monto_total or 0)
+        costo_retiro=float(monto_total or 0)
+    elif modalidad=='retiro_gratis':
+        monto_neto_cliente=0
+    else:
+        monto_neto_cliente=None
+
+    payload={
+        'empresa_id':str(p.get('empresa_id')),
+        'solicitud_id':str(sol.get('id') or row.get('solicitud_id')),
+        'interesado_id':str(p.get('interesado_id')),
+        'match_id':str(match_id),
+        'modalidad':modalidad,
+        'tipo_tarifa':tipo_tarifa,
+        'valor_unitario':valor_unitario,
+        'cantidad':cantidad,
+        'unidad':str(d.get('unidad') or '').strip()[:40] or None,
+        'monto_total':monto_total,
+        'costo_retiro':costo_retiro,
+        'monto_neto_cliente':monto_neto_cliente,
+        'comentario':str(d.get('comentario') or '').strip()[:1200] or None,
+        'estado':'pendiente',
+        'updated_at':datetime.now(pytz.UTC).isoformat(),
+    }
+
+    h={**backend_headers(),'Prefer':'resolution=merge-duplicates,return=representation'}
+    r=requests.post(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_cotizaciones',
+        headers=h,
+        params={'on_conflict':'match_id'},
+        json=payload,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows=r.json() if r.content else []
+    cot=rows[0] if rows else payload
+
+    # Cada nueva/actualizada cotización vuelve a avisar al cliente.
+    _cotizacion_notificar_cliente(sol,cot)
+
+    return portal_json({
+        'ok':True,
+        'cotizacion':cot,
+        'mensaje':'Cotización enviada. La persona podrá compararla con otras propuestas.',
+    },201)
+
+
+@app.route('/public/cotizaciones',methods=['GET','OPTIONS'])
+def public_cotizaciones_cliente():
+    if request.method=='OPTIONS':
+        return portal_json({'ok':True},204)
+
+    p=_conv_cotizaciones_token_leer(request.args.get('token'))
+    if not p:
+        return portal_json({'ok':False,'error':'Enlace inválido o vencido'},401)
+
+    h=backend_headers()
+    sid=str(p.get('solicitud_id'))
+    eid=str(p.get('empresa_id'))
+
+    rs=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
+        headers=h,
+        params={
+            'select':'id,empresa_id,estado,comuna,fecha_retiro,horario_retiro,cantidad_bultos,tipos_producto,peso_aprox,created_at',
+            'id':f'eq.{sid}',
+            'empresa_id':f'eq.{eid}',
+            'limit':'1',
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    rs.raise_for_status()
+    sols=rs.json() if rs.content else []
+    if not sols:
+        return portal_json({'ok':False,'error':'Solicitud no encontrada'},404)
+    sol=sols[0]
+
+    rc=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_cotizaciones',
+        headers=h,
+        params={
+            'select':'*',
+            'solicitud_id':f'eq.{sid}',
+            'empresa_id':f'eq.{eid}',
+            'estado':'in.(pendiente,aceptada)',
+            'order':'created_at.asc',
+            'limit':'100',
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    rc.raise_for_status()
+    cots=rc.json() if rc.content else []
+
+    ids=list({str(x.get('interesado_id') or '') for x in cots if x.get('interesado_id')})
+    nombres={}
+    if ids:
+        ri=requests.get(
+            f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',
+            headers=h,
+            params={
+                'select':'id,nombre,apellido',
+                'id':f"in.({','.join(ids)})",
+                'limit':'100',
+            },
+            timeout=SUPABASE_TIMEOUT,
+        )
+        ri.raise_for_status()
+        for x in (ri.json() if ri.content else []):
+            nombre=(' '.join([str(x.get('nombre') or '').strip(),str(x.get('apellido') or '').strip()])).strip()
+            nombres[str(x.get('id'))]=nombre or 'Reciclador'
+
+    salida=[]
+    for c in cots:
+        x=dict(c)
+        x['reciclador_nombre']=nombres.get(str(c.get('interesado_id')),'Reciclador')
+        x['resumen']=_cot_monto_texto(x)
+        # No exponer datos de contacto antes de seleccionar.
+        salida.append(x)
+
+    return portal_json({
+        'ok':True,
+        'solicitud':sol,
+        'cotizaciones':salida,
+        'seleccionada':next((x for x in salida if str(x.get('estado'))=='aceptada'),None),
+    })
+
+
+@app.route('/public/cotizaciones/<cotizacion_id>/aceptar',methods=['POST','OPTIONS'])
+def public_cotizacion_aceptar(cotizacion_id):
+    if request.method=='OPTIONS':
+        return portal_json({'ok':True},204)
+
+    d=request.get_json(silent=True) or {}
+    p=_conv_cotizaciones_token_leer(d.get('token'))
+    if not p:
+        return portal_json({'ok':False,'error':'Enlace inválido o vencido'},401)
+
+    h=backend_headers()
+    sid=str(p.get('solicitud_id'))
+    eid=str(p.get('empresa_id'))
+
+    rq=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_cotizaciones',
+        headers=h,
+        params={
+            'select':'*',
+            'id':f'eq.{cotizacion_id}',
+            'solicitud_id':f'eq.{sid}',
+            'empresa_id':f'eq.{eid}',
+            'limit':'1',
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    rq.raise_for_status()
+    rows=rq.json() if rq.content else []
+    if not rows:
+        return portal_json({'ok':False,'error':'Cotización no encontrada'},404)
+    cot=rows[0]
+
+    rr=requests.post(
+        f'{SUPABASE_URL}/rest/v1/rpc/nexi_aceptar_cotizacion',
+        headers=h,
+        json={'p_cotizacion_id':cotizacion_id,'p_solicitud_id':sid},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if not rr.ok:
+        print('NEXI ACEPTAR COTIZACION RPC ERROR:',rr.status_code,rr.text[:1500])
+        rr.raise_for_status()
+    data=rr.json() if rr.content else {}
+    if isinstance(data,list):
+        data=data[0] if data else {}
+    if not data.get('ok'):
+        return portal_json({'ok':False,'error':data.get('error') or 'No se pudo aceptar la cotización'},409)
+
+    rs=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
+        headers=h,
+        params={'select':'*','id':f'eq.{sid}','limit':'1'},
+        timeout=SUPABASE_TIMEOUT,
+    )
+    rs.raise_for_status()
+    sols=rs.json() if rs.content else []
+    sol=sols[0] if sols else {}
+
+    conv_id=_conv_asegurar_conversacion_solicitud(sol)
+    if conv_id:
+        sol['conversacion_id']=conv_id
+        try:
+            _conv_aplicar_modo_retiro(conv_id,eid,sol.get('canal') or 'whatsapp')
+        except Exception as e:
+            print('NEXI COTIZACION HANDOFF WARN:',repr(e))
+
+    # Notificar reciclador seleccionado por email.
+    try:
+        interesado_id=str(cot.get('interesado_id') or '')
+        ri=requests.get(
+            f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',
+            headers=h,
+            params={'select':'nombre,apellido,correo','id':f'eq.{interesado_id}','limit':'1'},
+            timeout=SUPABASE_TIMEOUT,
+        )
+        ri.raise_for_status()
+        ints=ri.json() if ri.content else []
+        if ints:
+            it=ints[0]
+            portal_tok=_conv_reciclador_token_crear(eid,interesado_id)
+            portal_url=f'{RECICLADOR_PORTAL_URL}?token={quote(portal_tok)}'
+            enviar_correo_resend(
+                it.get('correo'),
+                'Tu cotización fue aceptada · La Ortiga Recicla',
+                texto=(
+                    f"Hola {it.get('nombre') or ''},\n\n"
+                    "La persona aceptó tu cotización. Ya puedes revisar los datos del retiro "
+                    "y coordinar desde tu Portal del Reciclador:\n"
+                    f"{portal_url}"
+                ),
+            )
+    except Exception as e:
+        print('NEXI COTIZACION EMAIL RECICLADOR WARN:',repr(e))
+
+    try:
+        if sol.get('telefono'):
+            activar_por_empresa(eid,canal='whatsapp',provider='twilio')
+            enviar_twilio_texto(
+                sol.get('telefono'),
+                "✅ Cotización seleccionada.\n\n"
+                "El reciclador elegido ya fue informado. Puedes continuar la coordinación por este WhatsApp.",
+            )
+    except Exception as e:
+        print('NEXI COTIZACION CLIENTE CONFIRMACION WARN:',repr(e))
+
+    return portal_json({
+        'ok':True,
+        'resultado':data,
+        'solicitud':sol,
+        'mensaje':'Cotización aceptada. El reciclador fue adjudicado.',
+    })
 
 if __name__ == "__main__":
     print("APP_VERSION:", APP_VERSION)
