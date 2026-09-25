@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.11-CERTIFICADO-CANTIDAD"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.12-CERTIFICADO-RECICLADOR"
 load_dotenv()
 
 app = Flask(__name__)
@@ -14840,6 +14840,7 @@ def public_conv_interesados_registro():
         'aporte_minimo':aporte,
         'acepta_retiro_sin_aporte':bool(d.get('acepta_retiro_sin_aporte',True)),
         'activo':bool(d.get('activo',True)),
+        'entrega_certificado_reciclaje':bool(d.get('entrega_certificado_reciclaje',False)),
         'latitud':ubicacion[0] if ubicacion else None,
         'longitud':ubicacion[1] if ubicacion else None,
         'radio_km':radio,
