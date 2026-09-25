@@ -30,7 +30,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.3-MATCHING-SIMPLE"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.4-RESEND-DEBUG"
 load_dotenv()
 
 app = Flask(__name__)
@@ -4174,31 +4174,38 @@ def obtener_conversacion_por_identificador(identificador, canal="whatsapp"):
 
 
 def enviar_correo_resend(destinatario, asunto, texto=None, html_body=None):
-    """
-    Envía una notificación con Resend.
-    Retorna True si Resend acepta el envío.
-    """
+    """Envía email por Resend con diagnóstico explícito sin imprimir secretos."""
     destinatario = str(destinatario or "").strip()
+    print(
+        "RESEND DEBUG:",
+        "destinatario=", destinatario or "(vacío)",
+        "api_key_presente=", bool(RESEND_API_KEY),
+        "from=", RESEND_FROM_EMAIL,
+        "api_url=", RESEND_API_URL,
+    )
+
     if not destinatario:
-        print("RESEND: empresa sin correo_ejecutivo; no se envía notificación")
+        print("RESEND EMAIL SKIP: destinatario vacío")
         return False
 
     if not RESEND_API_KEY:
-        print("RESEND: falta RESEND_API_KEY en Render")
+        print("RESEND EMAIL SKIP: falta RESEND_API_KEY")
         return False
 
     payload = {
         "from": RESEND_FROM_EMAIL,
         "to": [destinatario],
-        "subject": str(asunto or "Nueva conversación derivada"),
+        "subject": str(asunto or "Nueva notificación"),
     }
-
     if html_body:
         payload["html"] = html_body
     if texto:
         payload["text"] = texto
+    if not payload.get("text") and not payload.get("html"):
+        payload["text"] = "Tienes una nueva notificación."
 
     try:
+        print("RESEND REQUEST START:", destinatario, payload["subject"])
         r = requests.post(
             RESEND_API_URL,
             headers={
@@ -4206,19 +4213,15 @@ def enviar_correo_resend(destinatario, asunto, texto=None, html_body=None):
                 "Content-Type": "application/json",
             },
             json=payload,
-            timeout=15,
+            timeout=20,
         )
+        print("RESEND RESPONSE:", r.status_code, r.text[:1000])
         r.raise_for_status()
         data = r.json() if r.content else {}
         print("RESEND EMAIL OK:", destinatario, data.get("id"))
         return True
     except Exception as e:
-        detalle = ""
-        try:
-            detalle = f" | {r.status_code} {r.text[:600]}"
-        except Exception:
-            pass
-        print("RESEND EMAIL ERROR:", repr(e), detalle)
+        print("RESEND EMAIL ERROR:", repr(e))
         return False
 
 
@@ -13833,6 +13836,7 @@ def _conv_notificar(match_id, sol, it):
 def _conv_matches(sol):
     h=backend_headers()
     if not h:
+        print("NEXI CONVOCATORIA RESULTADO: sin backend_headers")
         return
 
     encontrados=_conv_interesados_match(
@@ -13849,52 +13853,34 @@ def _conv_matches(sol):
     for it in encontrados:
         try:
             ahora=datetime.now(pytz.UTC).isoformat()
-
             p={
                 'empresa_id':sol.get('empresa_id'),
                 'solicitud_id':sol.get('id'),
                 'interesado_id':it.get('id'),
-
-                # El CHECK de la tabla solo admite estados de ciclo de vida
-                # como pendiente/tomada/cerrada. "Notificado" se representa
-                # con sus columnas boolean/timestamp específicas.
                 'estado':'pendiente',
-                'notificado':True,
-                'notificado_at':ahora,
-
-                # Mantener compatibilidad con el campo legado/existente
-                # que también está presente en la tabla.
-                'notified_at':ahora,
+                'notificado':False,
+                'notificado_at':None,
+                'notified_at':None,
             }
 
             r=requests.post(
                 f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',
-                headers={
-                    **h,
-                    'Prefer':'return=representation',
-                },
+                headers={**h,'Prefer':'return=representation'},
                 json=p,
                 timeout=SUPABASE_TIMEOUT,
             )
 
-            # Si ya existe el mismo match por una restricción UNIQUE,
-            # recuperarlo en vez de abortar el flujo.
             if r.status_code == 409:
                 print(
                     'NEXI CONVOCATORIA MATCH DUPLICADO:',
                     'solicitud=',sol.get('id'),
                     'interesado=',it.get('id'),
-                    r.text[:1000],
                 )
                 rows=[]
             elif not r.ok:
                 print(
                     'NEXI CONVOCATORIA MATCH SUPABASE ERROR:',
-                    'status=',r.status_code,
-                    'solicitud=',sol.get('id'),
-                    'interesado=',it.get('id'),
-                    'body=',r.text[:2000],
-                    'payload=',p,
+                    r.status_code, r.text[:1500]
                 )
                 r.raise_for_status()
             else:
@@ -13918,10 +13904,46 @@ def _conv_matches(sol):
                 qr=q.json() if q.content else []
                 mid=qr[0].get('id') if qr else None
 
-            if mid:
-                matches_creados+=1
-                if _conv_notificar(mid,sol,it):
-                    enviados+=1
+            if not mid:
+                print(
+                    'NEXI CONVOCATORIA MATCH SIN ID:',
+                    'solicitud=',sol.get('id'),
+                    'interesado=',it.get('id'),
+                )
+                continue
+
+            matches_creados+=1
+            print(
+                'NEXI CONVOCATORIA ANTES EMAIL:',
+                'match=',mid,
+                'reciclador=',it.get('nombre'),
+                'correo=',it.get('correo'),
+            )
+
+            ok=_conv_notificar(mid,sol,it)
+
+            if ok:
+                enviados+=1
+                fecha=datetime.now(pytz.UTC).isoformat()
+                upd=requests.patch(
+                    f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',
+                    headers={**h,'Prefer':'return=minimal'},
+                    params={'id':f'eq.{mid}'},
+                    json={
+                        'notificado':True,
+                        'notificado_at':fecha,
+                        'notified_at':fecha,
+                    },
+                    timeout=SUPABASE_TIMEOUT,
+                )
+                if not upd.ok:
+                    print('NEXI CONVOCATORIA MARCAR NOTIFICADO ERROR:',upd.status_code,upd.text[:1000])
+            else:
+                print(
+                    'NEXI CONVOCATORIA EMAIL NO ENVIADO:',
+                    'match=',mid,
+                    'correo=',it.get('correo'),
+                )
 
         except Exception as e:
             print(
@@ -13936,7 +13958,6 @@ def _conv_matches(sol):
         'solicitud=',sol.get('id'),
         'coincidencias=',len(encontrados),
         'matches=',matches_creados,
-        'estado_match=pendiente',
         'notificaciones_enviadas=',enviados,
     )
 
