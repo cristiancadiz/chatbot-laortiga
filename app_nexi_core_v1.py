@@ -30,20 +30,28 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-24-NEXIA-V3.5.19-WHATSAPP-PRIMERO"
+APP_VERSION = "2026-09-25-NEXIA-GENERICO-SINGLE-V1"
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "change-me-in-render")
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
+# ============================================================
+# NEXIA GENERICO - NEGOCIO UNICO
+# ============================================================
+# Este archivo está pensado para un servicio Render por empresa.
+# No usa recepción multiempresa ni selección de negocios por WhatsApp.
+# La empresa activa se define con SUPABASE_EMPRESA_ID y su configuración
+# se carga desde Supabase / Environment.
+
 
 # ============================================================
 # CONFIGURACIÓN GENERAL
 # ============================================================
 
-DEFAULT_ASISTENTE_NOMBRE = os.getenv("ESTILISTA_NOMBRE", "Cleo")
-DEFAULT_NEGOCIO_NOMBRE = os.getenv("NEGOCIO_NOMBRE", "Estilista Diego")
+DEFAULT_ASISTENTE_NOMBRE = os.getenv("ASISTENTE_NOMBRE", "Asistente")
+DEFAULT_NEGOCIO_NOMBRE = os.getenv("NEGOCIO_NOMBRE", "Mi negocio")
 TIMEZONE = os.getenv("TIMEZONE", "America/Santiago")
 
 # ============================================================
@@ -67,8 +75,8 @@ NEXIA_CLIENTE_EMPRESA_ID = os.getenv(
     "1675736f-e605-405a-b7bb-eed29e013dd1",
 ).strip()
 DEFAULT_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
-DEFAULT_DIRECCION_ATENCION = os.getenv("DIRECCION_ATENCION", "3 Poniente 382, Viña del Mar")
-DEFAULT_TELEFONO_EJECUTIVO = os.getenv("TELEFONO_EJECUTIVO", "+56966461436")
+DEFAULT_DIRECCION_ATENCION = os.getenv("DIRECCION_ATENCION", "").strip()
+DEFAULT_TELEFONO_EJECUTIVO = os.getenv("TELEFONO_EJECUTIVO", "").strip()
 
 # Twilio WhatsApp: recepción y respuestas manuales desde Portal Nexia.
 # Las credenciales deben guardarse SOLO en Render > Environment.
@@ -116,10 +124,8 @@ SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
 # Usuario maestro Nexia. Este correo siempre se trata como superadmin global.
 SUPERADMIN_EMAIL = os.getenv("SUPERADMIN_EMAIL", "contacto@nexia-tech.com").strip().lower()
 DEFAULT_EMPRESA_ID = os.getenv("SUPABASE_EMPRESA_ID", "97be347a-51d6-467d-be49-839a254a4ad0")
-# Router superior WhatsApp: permite que un solo número atienda Diego, demos y nuevos negocios.
-DIEGO_EMPRESA_ID = os.getenv("DIEGO_EMPRESA_ID", DEFAULT_EMPRESA_ID).strip()
-NEXIA_ROUTER_SUPERIOR_ACTIVO = os.getenv("NEXIA_ROUTER_SUPERIOR_ACTIVO", "true").strip().lower() in {"1", "true", "yes", "si", "sí"}
-NEXIA_ROUTER_CONTEXTO_HORAS = int(os.getenv("NEXIA_ROUTER_CONTEXTO_HORAS", "24"))
+# Despliegue genérico de negocio único: un servicio Render = una empresa/canal.
+SINGLE_BUSINESS_MODE = True
 NEXIA_DEMO_URL = os.getenv("NEXIA_DEMO_URL", "https://nexia-tech.com").strip()
 # Empresa administrativa/superadmin histórica. Se mantiene separada del cliente Nexia.
 ADMIN_EMPRESA_ID = os.getenv(
@@ -202,7 +208,34 @@ TENANT_CACHE_LOCK = Lock()
 TENANT_CACHE_TTL = int(os.getenv("TENANT_CACHE_TTL", "60"))
 
 def tenant_default():
-    return {"empresa_id": DEFAULT_EMPRESA_ID,"empresa_nombre": DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":"reservas","descripcion_empresa":"","asistente_nombre":DEFAULT_ASISTENTE_NOMBRE,"direccion":DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":DEFAULT_TELEFONO_EJECUTIVO,"correo_ejecutivo":EJECUTIVO_EMAIL,"timezone":TIMEZONE,"calendar_id":DEFAULT_CALENDAR_ID,"hora_apertura":DEFAULT_HORA_APERTURA,"hora_cierre":DEFAULT_HORA_CIERRE,"duracion_reserva":DEFAULT_DURACION_RESERVA,"dias_atencion":[0,1,2,3,4,5],"prompt_extra":"","modulos":{"ia":True,"reservas":True,"handoff_humano":True,"whatsapp":True,"instagram":True},"servicios":None,"canal":None,"provider":None,"canal_config":{}}
+    return {
+        "empresa_id": DEFAULT_EMPRESA_ID,
+        "empresa_nombre": DEFAULT_NEGOCIO_NOMBRE,
+        "tipo_negocio": os.getenv("TIPO_NEGOCIO", "general"),
+        "descripcion_empresa": os.getenv("DESCRIPCION_EMPRESA", ""),
+        "asistente_nombre": DEFAULT_ASISTENTE_NOMBRE,
+        "direccion": DEFAULT_DIRECCION_ATENCION,
+        "telefono_ejecutivo": DEFAULT_TELEFONO_EJECUTIVO,
+        "correo_ejecutivo": EJECUTIVO_EMAIL,
+        "timezone": TIMEZONE,
+        "calendar_id": DEFAULT_CALENDAR_ID,
+        "hora_apertura": DEFAULT_HORA_APERTURA,
+        "hora_cierre": DEFAULT_HORA_CIERRE,
+        "duracion_reserva": DEFAULT_DURACION_RESERVA,
+        "dias_atencion": [0,1,2,3,4,5],
+        "prompt_extra": "",
+        "modulos": {
+            "ia": True,
+            "reservas": os.getenv("MODULO_RESERVAS", "false").strip().lower() in {"1","true","yes","si","sí"},
+            "handoff_humano": True,
+            "whatsapp": True,
+            "instagram": True,
+        },
+        "servicios": None,
+        "canal": None,
+        "provider": None,
+        "canal_config": {},
+    }
 
 def tenant_actual(): return TENANT_CTX.get() or tenant_default()
 def set_tenant(data): TENANT_CTX.set(data or tenant_default())
@@ -301,7 +334,7 @@ def estado_suscripcion_empresa(empresa_id=None):
     """Obtiene estado de plan para Portal/diagnóstico.
 
     Si una empresa aún no tiene fila en suscripciones_empresa se considera
-    cliente normal/legacy para no interrumpir a Diego ni a clientes existentes.
+    cliente normal/legacy para no interrumpir a negocio ni a clientes existentes.
     """
     headers = backend_headers()
     empresa_id = str(empresa_id or empresa_actual_id() or "").strip()
@@ -551,7 +584,7 @@ def cargar_empresa_config(empresa_id,canal=None,provider=None,canal_config=None)
         for row in rows:
             codigo=str(row.get("codigo") or "").strip()
             if codigo:servicios[codigo]={"numero":row.get("numero"),"nombre":row.get("nombre") or codigo,"precio":int(row.get("precio") or 0),"precio_texto":row.get("precio_texto") or "","detalle":row.get("detalle") or "","categoria":row.get("categoria") or "Servicios","aliases":row.get("aliases") or [],"duracion_minutos":row.get("duracion_minutos")}
-        base=tenant_default();base.update({"empresa_id":empresa_id,"empresa_nombre":empresas[0].get("nombre") or DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":conf.get("tipo_negocio") or "reservas","descripcion_empresa":conf.get("descripcion_empresa") or "","asistente_nombre":("Cleo" if empresa_id == DIEGO_EMPRESA_ID else (conf.get("asistente_nombre") or DEFAULT_ASISTENTE_NOMBRE)),"direccion":conf.get("direccion") or DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":conf.get("telefono_ejecutivo") or DEFAULT_TELEFONO_EJECUTIVO,"correo_ejecutivo":conf.get("correo_ejecutivo") or EJECUTIVO_EMAIL,"timezone":conf.get("timezone") or TIMEZONE,"calendar_id":conf.get("calendar_id") or DEFAULT_CALENDAR_ID,"hora_apertura":conf.get("hora_apertura") if conf.get("hora_apertura") is not None else DEFAULT_HORA_APERTURA,"hora_cierre":conf.get("hora_cierre") if conf.get("hora_cierre") is not None else DEFAULT_HORA_CIERRE,"duracion_reserva":conf.get("duracion_reserva") if conf.get("duracion_reserva") is not None else DEFAULT_DURACION_RESERVA,"dias_atencion":conf.get("dias_atencion") or [0,1,2,3,4,5],"prompt_extra":conf.get("prompt_extra") or "","modulos":conf.get("modulos") or tenant_default()["modulos"],"servicios":servicios or None});_cache_set(key,base)
+        base=tenant_default();base.update({"empresa_id":empresa_id,"empresa_nombre":empresas[0].get("nombre") or DEFAULT_NEGOCIO_NOMBRE,"tipo_negocio":conf.get("tipo_negocio") or "reservas","descripcion_empresa":conf.get("descripcion_empresa") or "","asistente_nombre":(conf.get("asistente_nombre") or DEFAULT_ASISTENTE_NOMBRE),"direccion":conf.get("direccion") or DEFAULT_DIRECCION_ATENCION,"telefono_ejecutivo":conf.get("telefono_ejecutivo") or DEFAULT_TELEFONO_EJECUTIVO,"correo_ejecutivo":conf.get("correo_ejecutivo") or EJECUTIVO_EMAIL,"timezone":conf.get("timezone") or TIMEZONE,"calendar_id":conf.get("calendar_id") or DEFAULT_CALENDAR_ID,"hora_apertura":conf.get("hora_apertura") if conf.get("hora_apertura") is not None else DEFAULT_HORA_APERTURA,"hora_cierre":conf.get("hora_cierre") if conf.get("hora_cierre") is not None else DEFAULT_HORA_CIERRE,"duracion_reserva":conf.get("duracion_reserva") if conf.get("duracion_reserva") is not None else DEFAULT_DURACION_RESERVA,"dias_atencion":conf.get("dias_atencion") or [0,1,2,3,4,5],"prompt_extra":conf.get("prompt_extra") or "","modulos":conf.get("modulos") or tenant_default()["modulos"],"servicios":servicios or None});_cache_set(key,base)
     if base is None:base=tenant_default();base["empresa_id"]=empresa_id
     out=dict(base);out["canal"]=canal;out["provider"]=provider;out["canal_config"]=dict(canal_config or {});return out
 
@@ -790,14 +823,14 @@ def normalizar_telefono(valor):
 # NEXI V1.8 - ROUTER SUPERIOR DE CONVERSACIONES WHATSAPP
 # ============================================================
 # El teléfono identifica a la persona; este router guarda con qué negocio está
-# hablando en ese momento. Así un mismo número receptor puede servir a Diego,
+# hablando en ese momento. Así un mismo número receptor puede servir a negocio,
 # demos y clientes Nexia sin mezclar contexto, datos ni herramientas.
 
 ROUTER_MENU_COMMANDS = {
     "menu", "menu principal", "inicio nexia", "cambiar negocio",
     "cambiar de negocio", "cambiar empresa", "recepcion", "recepción",
 }
-ROUTER_DIEGO_COMMANDS = {"diego", "diego estilista", "hablar con diego"}
+ROUTER_NEGOCIO_COMMANDS = {"negocio"}
 ROUTER_DEMO_COMMANDS = {"mi demo", "demo", "mi prueba", "prueba", "probar mi demo", "probar demo", "probar mi prueba", "probar mi asistente", "mi asistente"}
 NEXIA_PRUEBA_URL = os.getenv("NEXIA_PRUEBA_URL", "https://nexia-tech.com/prueba.html").strip()
 
@@ -1248,7 +1281,7 @@ def router_demo_publica_por_empresa(empresa_id):
 
 
 def router_empresas_pagadas_activas():
-    """Devuelve empresas pagadas y activas visibles en recepción. Diego se agrega aparte."""
+    """Devuelve empresas pagadas y activas visibles en recepción. negocio se agrega aparte."""
     headers = _router_headers()
     if not headers:
         return []
@@ -1278,7 +1311,7 @@ def router_empresas_pagadas_activas():
             if limite and usados >= limite:
                 continue
             eid = str(p.get("empresa_id") or "").strip()
-            if eid and eid != str(DIEGO_EMPRESA_ID or "").strip() and eid not in ids:
+            if eid and eid != str(DEFAULT_EMPRESA_ID or "").strip() and eid not in ids:
                 ids.append(eid)
         if not ids:
             return []
@@ -1311,7 +1344,7 @@ def router_empresas_pagadas_activas():
 
 
 def router_opciones_menu(telefono, pagina=0, canal="whatsapp"):
-    """Genera el menú global: acceso propio, Diego, empresas pagadas y demos públicas."""
+    """Genera el menú global: acceso propio, negocio, empresas pagadas y demos públicas."""
     pagadas = router_empresas_pagadas_activas()
     demos = router_demos_publicas_activas()
     pagina = max(0, int(pagina or 0))
@@ -1354,9 +1387,9 @@ def router_opciones_menu(telefono, pagina=0, canal="whatsapp"):
 
     todas.append({
         "id": "nexi:diego",
-        "item": _router_item_produccion("Diego Estilista"),
+        "item": _router_item_produccion("Negocio"),
         "description": "Producción · Peluquería y estilismo",
-        "empresa_id": str(DIEGO_EMPRESA_ID or ""),
+        "empresa_id": str(DEFAULT_EMPRESA_ID or ""),
         "motor": "legacy",
         "origen": "diego",
     })
@@ -1848,8 +1881,8 @@ def agenda_payload_a_texto(payload):
     Convierte una selección interactiva en el número que ya entiende procesar_agenda().
 
     Twilio puede entregar el ListId/ButtonPayload escapado, por ejemplo:
-    agenda\:hora\_num:1
-    agenda\:servicio\_num:2
+    agenda\\:hora\\_num:1
+    agenda\\:servicio\\_num:2
 
     Para la lógica interna quitamos esos backslashes antes de interpretar el id.
     """
@@ -2292,262 +2325,38 @@ def router_vincular_demo_a_whatsapp(empresa_id, telefono):
 
 
 def router_superior_resolver(telefono, texto, canal="whatsapp"):
-    """Devuelve accion=menu|seleccionado|ruta y la empresa/motor cuando corresponda."""
-    if not NEXIA_ROUTER_SUPERIOR_ACTIVO:
-        demo = router_demo_access_sin_activar(telefono)
-        if demo:
-            return {"accion": "ruta", "empresa_id": demo.get("empresa_id"), "motor": "core", "origen": "demo", "demo_access": demo}
-        return {"accion": "ruta", "empresa_id": DIEGO_EMPRESA_ID, "motor": "legacy", "origen": "legacy"}
+    """Compatibilidad interna en modo negocio único.
 
-    raw_texto = str(texto or "").strip()
-    t = normalizar_texto(raw_texto)
-
-    # Selecciones del list-picker de WhatsApp. No dependen del texto visible.
-    if raw_texto.lower().startswith("nexi:pagina:"):
-        try:
-            pagina = int(raw_texto.rsplit(":", 1)[1])
-        except Exception:
-            pagina = 0
-        router_contexto_borrar(telefono, canal=canal)
-        return {"accion": "menu", "pagina": pagina}
-
-    if raw_texto.lower() == "nexi:mi_asistente" and canal == "whatsapp":
-        propio = router_asistente_propio(telefono) if canal == "whatsapp" else None
-        if not propio:
-            return {
-                "accion": "menu",
-                "respuesta": (
-                    "Todavía no tienes un asistente asociado a este WhatsApp.\n\n"
-                    f"Puedes crear tu prueba gratis aquí:\n{NEXIA_PRUEBA_URL}"
-                ),
-            }
-
-        empresa_id = str(propio.get("empresa_id") or "").strip()
-        origen = str(propio.get("origen") or "demo").strip().lower()
-        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen=origen, canal=canal) or {}
-        row.update({
-            "accion": "seleccionado",
-            "empresa_id": empresa_id,
-            "motor": "core",
-            "origen": origen,
-            "telefono": telefono,
-        })
-        if origen == "demo":
-            row["demo_access"] = propio.get("demo_access") or {"empresa_id": empresa_id}
-        return row
-
-    if raw_texto.lower() == "nexi:nueva_prueba":
-        router_contexto_borrar(telefono, canal=canal)
-        return {
-            "accion": "mensaje",
-            "respuesta": (
-                "🚀 Crea tu asistente Nexia gratis.\n\n"
-                "Configura tu negocio y luego podrás probar tu propio asistente por WhatsApp.\n"
-                "La prueba incluye 50 mensajes o 24 horas, lo que ocurra primero.\n\n"
-                f"👉 {NEXIA_PRUEBA_URL}"
-            ),
-        }
-
-    if raw_texto.lower() == "nexi:diego":
-        row = router_contexto_guardar(telefono, DIEGO_EMPRESA_ID, motor="legacy", origen="diego", canal=canal) or {}
-        row.update({"accion": "seleccionado", "empresa_id": DIEGO_EMPRESA_ID, "motor": "legacy", "telefono": telefono})
-        return row
-
-    m_empresa = re.fullmatch(r"(?i)nexi:empresa:([0-9a-f-]{36})", raw_texto)
-    if m_empresa:
-        empresa_id = m_empresa.group(1)
-        # Seguridad: una empresa seleccionada desde el menú debe seguir pagada y activa.
-        visibles = {e["empresa_id"]: e for e in router_empresas_pagadas_activas()}
-        destino = visibles.get(empresa_id)
-        if not destino:
-            return {"accion": "menu", "respuesta": "Ese negocio ya no está disponible.\n\n" + router_menu_superior(telefono, canal=canal)}
-        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="pagado", canal=canal) or {}
-        row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": "core", "telefono": telefono})
-        return row
-
-    m_prueba = re.fullmatch(r"(?i)nexi:prueba:([0-9a-f-]{36})", raw_texto)
-    if m_prueba:
-        empresa_id = m_prueba.group(1)
-        demo = router_demo_publica_por_empresa(empresa_id)
-        if not demo:
-            return {
-                "accion": "menu",
-                "respuesta": "Esta demo ya no está disponible.\n\n" + router_menu_superior(telefono, canal=canal),
-            }
-        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen="demo", canal=canal) or {}
-        row.update({
-            "accion": "seleccionado",
-            "empresa_id": empresa_id,
-            "motor": "core",
-            "demo_access": demo.get("demo_access") or {"empresa_id": empresa_id},
-            "telefono": telefono,
-        })
-        return row
-
-    if t in {normalizar_texto(x) for x in ROUTER_MENU_COMMANDS}:
-        router_contexto_borrar(telefono, canal=canal)
-        return {"accion": "menu", "pagina": 0}
-
-    actual = router_contexto_obtener(telefono, canal=canal)
-    if actual:
-        actual = dict(actual)
-        actual["accion"] = "ruta"
-        if str(actual.get("origen") or "") == "demo":
-            demo_publica = router_demo_publica_por_empresa(actual.get("empresa_id"))
-            if not demo_publica:
-                router_contexto_borrar(telefono, canal=canal)
-                return {"accion": "menu", "pagina": 0}
-            actual["demo_access"] = demo_publica.get("demo_access") or {
-                "empresa_id": actual.get("empresa_id")
-            }
-        return actual
-
-    # Compatibilidad textual: Diego por nombre/1 y prueba por palabras explícitas.
-    if t == "1" or t in {normalizar_texto(x) for x in ROUTER_DIEGO_COMMANDS}:
-        row = router_contexto_guardar(telefono, DIEGO_EMPRESA_ID, motor="legacy", origen="diego", canal=canal) or {}
-        row.update({"accion": "seleccionado", "empresa_id": DIEGO_EMPRESA_ID, "motor": "legacy", "telefono": telefono})
-        return row
-
-    if t in {normalizar_texto(x) for x in ROUTER_DEMO_COMMANDS}:
-        propio = router_asistente_propio(telefono) if canal == "whatsapp" else None
-        if not propio:
-            return {
-                "accion": "menu",
-                "respuesta": "No encontré una prueba o plan activo asociado a este WhatsApp.\n\n" + router_menu_superior(telefono, canal=canal),
-            }
-        empresa_id = str(propio.get("empresa_id") or "")
-        origen = str(propio.get("origen") or "demo").lower()
-        row = router_contexto_guardar(telefono, empresa_id, motor="core", origen=origen, canal=canal) or {}
-        row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": "core", "origen": origen, "telefono": telefono})
-        if origen == "demo":
-            row["demo_access"] = propio.get("demo_access") or {"empresa_id": empresa_id}
-        return row
-
-    # Fallback por número si el cliente escribe en vez de tocar: usa el orden de la primera página.
-    if re.fullmatch(r"\d{1,2}", t):
-        idx = int(t) - 1
-        opciones = router_opciones_menu(telefono, pagina=0, canal=canal)
-        if 0 <= idx < len(opciones):
-            op = opciones[idx]
-            return router_superior_resolver(telefono, op.get("id") or "")
-
-    codigo = router_codigo_desde_texto(texto)
-    if codigo:
-        destino = router_destino_por_codigo(codigo)
-        if not destino:
-            return {"accion": "menu", "respuesta": "Ese acceso no está disponible o ya no es válido.\n\n" + router_menu_superior(telefono, canal=canal)}
-        empresa_id = str(destino.get("empresa_id") or "")
-        motor = str(destino.get("motor") or "core").lower()
-
-        if motor == "core" and canal == "whatsapp":
-            router_vincular_demo_a_whatsapp(empresa_id, telefono)
-
-        row = router_contexto_guardar(telefono, empresa_id, motor=motor, origen="codigo", codigo=codigo, canal=canal) or {}
-        row.update({"accion": "seleccionado", "empresa_id": empresa_id, "motor": motor, "codigo": codigo, "telefono": telefono})
-        return row
-
-    # Primera entrada sin contexto: recepción. "Hola" no queda amarrado a Diego.
-    return {"accion": "menu", "pagina": 0}
+    No muestra recepción, no permite elegir negocios y no usa sesiones de router.
+    Cada servicio Render atiende exclusivamente DEFAULT_EMPRESA_ID.
+    """
+    return {
+        "accion": "ruta",
+        "empresa_id": str(DEFAULT_EMPRESA_ID or "").strip(),
+        "motor": "core",
+        "origen": "single_business",
+        "telefono": telefono,
+        "canal": canal,
+    }
 
 
 def router_activar_ruta(route, provider, canal="whatsapp"):
-    empresa_id = str((route or {}).get("empresa_id") or "").strip()
-    if not empresa_id:
-        raise RuntimeError("Router sin empresa_id")
-    activar_por_empresa(empresa_id, canal=canal, provider=provider)
-    return empresa_id
+    """Activa siempre la empresa única configurada para este despliegue."""
+    activar_por_empresa(
+        str(DEFAULT_EMPRESA_ID or "").strip(),
+        canal=canal,
+        provider=provider,
+    )
+    return tenant_actual()
 
 
 # ============================================================
 # servicios_actuales()
 # ============================================================
 
-SERVICIOS_DEFAULT = {
-    "corte_hombre": {
-        "numero": 1,
-        "nombre": "Corte de cabello hombre",
-        "precio": 17000,
-        "precio_texto": "$17.000",
-        "detalle": "Incluye perfilado de cejas, lavado de cabello y aplicación de producto.",
-    },
-    "perfilado_barba": {
-        "numero": 2,
-        "nombre": "Perfilado de barba",
-        "precio": 10000,
-        "precio_texto": "$10.000",
-        "detalle": "",
-    },
-    "base_rizos": {
-        "numero": 3,
-        "nombre": "Base de rizos permanente",
-        "precio": 65000,
-        "precio_texto": "$65.000",
-        "detalle": "",
-    },
-    "mechas_hombre": {
-        "numero": 4,
-        "nombre": "Mechas",
-        "precio": 70000,
-        "precio_texto": "desde $70.000",
-        "detalle": "",
-    },
-    "decoloracion_global": {
-        "numero": 5,
-        "nombre": "Decoloración global",
-        "precio": 120000,
-        "precio_texto": "$120.000",
-        "detalle": "",
-    },
-    "corte_mujer": {
-        "numero": 6,
-        "nombre": "Corte de cabello mujer",
-        "precio": 30000,
-        "precio_texto": "$30.000",
-        "detalle": "Incluye lavado de cabello, hidratación y brushing.",
-    },
-    "masaje_hidratacion": {
-        "numero": 7,
-        "nombre": "Masaje de hidratación",
-        "precio": 45000,
-        "precio_texto": "$45.000",
-        "detalle": "",
-    },
-    "botox_capilar": {
-        "numero": 8,
-        "nombre": "Botox capilar",
-        "precio": 65000,
-        "precio_texto": "desde $65.000",
-        "detalle": "",
-    },
-    "alisado_permanente": {
-        "numero": 9,
-        "nombre": "Alisado permanente",
-        "precio": 70000,
-        "precio_texto": "desde $70.000",
-        "detalle": "",
-    },
-    "retoque_raiz": {
-        "numero": 10,
-        "nombre": "Retoque de color de raíz",
-        "precio": 50000,
-        "precio_texto": "$50.000",
-        "detalle": "",
-    },
-    "bano_color": {
-        "numero": 11,
-        "nombre": "Baño de color",
-        "precio": 30000,
-        "precio_texto": "$30.000",
-        "detalle": "",
-    },
-    "diagnostico_balayage": {
-        "numero": 12,
-        "nombre": "Diagnóstico capilar gratuito para Balayage",
-        "precio": 0,
-        "precio_texto": "Diagnóstico gratuito · Balayage estimado desde $150.000",
-        "detalle": "El valor final del Balayage se define después del diagnóstico capilar.",
-    },
-}
+SERVICIOS_DEFAULT = {}
+# En esta versión genérica no existen servicios hardcodeados.
+# El catálogo se carga desde public.servicios usando SUPABASE_EMPRESA_ID.
 
 SERVICIO_POR_NUMERO_DEFAULT = {v["numero"]: k for k, v in SERVICIOS_DEFAULT.items()}
 
@@ -2560,8 +2369,7 @@ def negocio_usa_reservas():
     tipo = tipo_negocio_actual()
     tipos_reserva = {
         "reservas", "agenda", "agendamiento", "servicios",
-        "peluqueria", "barberia", "salon", "salon de belleza",
-        "estilista", "spa", "clinica", "consulta"
+        "clinica", "consulta"
     }
     return tipo in tipos_reserva and cfg_modulo("reservas", True)
 
@@ -2647,14 +2455,13 @@ def google_calendar_conexion(empresa_id=None):
         return None
 
 
-def es_diego_calendar_legacy(empresa_id=None):
-    """Permite usar el refresh token global SOLO a la empresa legacy de Diego."""
-    empresa_id = str(empresa_id or empresa_actual_id() or "").strip()
-    return bool(empresa_id and DIEGO_EMPRESA_ID and empresa_id == str(DIEGO_EMPRESA_ID).strip())
+def calendar_env_disponible():
+    """Fallback opcional para despliegues de negocio único configurados por Environment."""
+    return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN)
 
 
 def google_credentials():
-    # 1) Cada cliente/empresa usa primero su propia conexión OAuth.
+    # 1) Prioridad: conexión OAuth guardada en Supabase para la empresa.
     conn = google_calendar_conexion()
     if conn and conn.get("refresh_token"):
         if not all([GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET]):
@@ -2668,13 +2475,9 @@ def google_credentials():
             scopes=GOOGLE_SCOPES,
         )
 
-    # 2) Fallback legacy EXCLUSIVO para Diego.
-    # Ninguna otra empresa puede caer en GOOGLE_REFRESH_TOKEN aunque no tenga OAuth propio.
-    if not es_diego_calendar_legacy():
+    # 2) Fallback genérico por variables de entorno del propio servicio.
+    if not calendar_env_disponible():
         raise RuntimeError("Google Calendar no está conectado para esta empresa")
-
-    if not all([GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN]):
-        raise RuntimeError("Google Calendar legacy de Diego no está configurado")
 
     return Credentials(
         token=None,
@@ -2691,8 +2494,7 @@ def google_calendar_id_actual():
     if conn and conn.get("calendar_id"):
         return str(conn.get("calendar_id"))
 
-    # El calendar_id global/legacy también queda restringido a Diego.
-    if es_diego_calendar_legacy():
+    if calendar_env_disponible():
         return str(cfg("calendar_id", DEFAULT_CALENDAR_ID) or DEFAULT_CALENDAR_ID)
 
     raise RuntimeError("Google Calendar no está conectado para esta empresa")
@@ -2703,11 +2505,11 @@ def calendar_service():
 
 
 def negocio_tiene_calendar_real():
-    """True si el tenant tiene OAuth propio o si es Diego con su Calendar legacy."""
+    """True si existe OAuth en Supabase o credenciales Calendar en Environment."""
     if google_calendar_conexion():
         return True
     return bool(
-        es_diego_calendar_legacy()
+        calendar_env_disponible()
         and GOOGLE_CLIENT_ID
         and GOOGLE_CLIENT_SECRET
         and GOOGLE_REFRESH_TOKEN
@@ -3883,7 +3685,7 @@ def guardar_mensaje(telefono, rol, mensaje, canal="whatsapp"):
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 # Nexia Core usa un modelo más nuevo y rápido para respuestas conversacionales.
-# Se mantiene separado del modelo legacy para no alterar Diego ni otros flujos.
+# Se mantiene separado del modelo legacy para no alterar negocio ni otros flujos.
 OPENAI_CORE_MODEL = os.getenv("OPENAI_CORE_MODEL", "gpt-5.4-mini").strip()
 OPENAI_CORE_REASONING_EFFORT = os.getenv("OPENAI_CORE_REASONING_EFFORT", "none").strip().lower()
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "8"))
@@ -4308,9 +4110,9 @@ def pregunta_servicios(texto):
 def quiere_hablar_con_persona(texto):
     t = normalizar_texto(texto)
     frases = (
-        "hablar con diego", "hablar con una persona", "hablar con persona",
+        "hablar con el negocio", "hablar con una persona", "hablar con persona",
         "hablar con ejecutivo", "hablar con un ejecutivo", "hablar con alguien",
-        "quiero hablar con diego", "quiero hablar con una persona",
+        "quiero hablar con el negocio", "quiero hablar con una persona",
         "quiero hablar con un ejecutivo", "contactar a diego", "contacto diego",
         "ejecutivo", "persona real", "humano", "asesor",
     )
@@ -4737,7 +4539,7 @@ def procesar_agenda(estado, texto):
 # ============================================================
 # NEXI CORE V1 - RAMA EXPERIMENTAL AISLADA
 # ============================================================
-# Esta capa NO reemplaza los flujos productivos existentes (ej. Diego).
+# Esta capa NO reemplaza los flujos productivos existentes (ej. el negocio).
 # Se usa mediante endpoints /core/* y crea tenants demo separados.
 
 import uuid
@@ -4774,7 +4576,7 @@ CORE_QUESTIONS = {
     "nombre_negocio": {
         "text": "¿Cómo se llama tu negocio, marca o actividad?",
         "kind": "text",
-        "placeholder": "Ej: Veterinaria Luna, Diego Estilista, Estudio Pérez",
+        "placeholder": "Ej: Veterinaria Luna, Negocio, Estudio Pérez",
     },
     "nombre_asistente": {
         "text": "¿Qué nombre quieres darle a tu asistente?",
@@ -6459,7 +6261,7 @@ def _core_parse_days(valor):
 
 
 def _core_agenda_catalog(datos):
-    """Crea un catálogo seguro para Core sin caer jamás en SERVICIOS_DEFAULT de Diego."""
+    """Crea un catálogo seguro para Core sin caer jamás en SERVICIOS_DEFAULT de negocio."""
     raw = str(datos.get("agenda_que") or datos.get("productos_servicios") or "").strip()
     if not raw:
         items = ["Reserva"]
@@ -6488,7 +6290,7 @@ def _core_agenda_catalog(datos):
 
 
 def _core_prepare_calendar_runtime(datos):
-    """Adapta la configuración de agenda del onboarding al mismo motor usado por Diego."""
+    """Adapta la configuración de agenda del onboarding al mismo motor usado por negocio."""
     actual = dict(tenant_actual())
     apertura, cierre = _core_parse_business_hours(
         datos.get("agenda_horario"),
@@ -6503,17 +6305,17 @@ def _core_prepare_calendar_runtime(datos):
     )
     actual["dias_atencion"] = _core_parse_days(datos.get("agenda_dias"))
     # CRÍTICO: si Core no tiene servicios estructurados propios, crear un catálogo
-    # desde el onboarding para impedir cualquier fallback a los servicios de Diego.
+    # desde el onboarding para impedir cualquier fallback a los servicios de negocio.
     if not actual.get("servicios"):
         actual["servicios"] = _core_agenda_catalog(datos)
-    # Las empresas Core no heredan la dirección privada/default de Diego.
+    # Las empresas Core no heredan la dirección privada/default de negocio.
     actual["direccion"] = str(datos.get("direccion") or "").strip()
     set_tenant(actual)
     return actual
 
 
 def _core_procesar_agenda_estandar(empresa_id, telefono, texto, datos):
-    """Usa el mismo motor conversacional y de disponibilidad de Diego, aislado por empresa_id."""
+    """Usa el mismo motor conversacional y de disponibilidad de negocio, aislado por empresa_id."""
     _core_prepare_calendar_runtime(datos)
     session_key = f"core:{empresa_id}:{_normalizar_identificador_demo(telefono, 'whatsapp')}"
     estado = get_estado(session_key)
@@ -8168,7 +7970,7 @@ def _core_responder_demo_whatsapp(demo_access, telefono, texto):
         # handoff pendiente de una conversación anterior.
 
         if negocio_tiene_calendar_real() and (agente_previsto == "agenda" or agenda_activa):
-            # Agenda estándar Nexia: mismo flujo probado de Diego, pero con el
+            # Agenda estándar Nexia: mismo flujo probado de negocio, pero con el
             # Calendar, horarios, duración y servicios del empresa_id actual.
             respuesta = _core_procesar_agenda_estandar(empresa_id, telefono, texto, datos_perfil)
             agente_usado = "agenda"
@@ -8759,23 +8561,8 @@ def whatsapp_webhook():
         )
 
         if empresa_conv_pre:
-            try:
-                router_contexto_guardar(
-                    telefono,
-                    empresa_conv_pre,
-                    motor="core",
-                    origen="convocatorias",
-                    canal="whatsapp",
-                )
-                activar_por_empresa(empresa_conv_pre, "whatsapp", "twilio")
-                print(
-                    "NEXI CONVOCATORIAS PRE-ROUTER:",
-                    empresa_conv_pre,
-                    telefono,
-                    repr(texto_conv_pre),
-                )
-            except Exception as e:
-                print("NEXI CONVOCATORIAS PRE-ROUTER CONTEXTO ERROR:", repr(e))
+            activar_por_empresa(empresa_conv_pre, "whatsapp", "twilio")
+            print("NEXI CONVOCATORIAS SINGLE:", empresa_conv_pre, telefono, repr(texto_conv_pre))
 
             conv_respuesta_pre = _conv_trigger_respuesta(
                 empresa_conv_pre,
@@ -8794,7 +8581,7 @@ def whatsapp_webhook():
                     "Content-Type": "application/xml; charset=utf-8"
                 }
 
-        # V1.8: capa superior. El mismo número puede atender Diego, una demo o
+        # V1.8: capa superior. El mismo número puede atender negocio, una demo o
         # cualquier nuevo negocio registrado en nexi_router_destinos.
         route = router_superior_resolver(telefono, texto_router)
         if route.get("accion") == "menu":
@@ -9190,7 +8977,7 @@ def gupshup_webhook():
         if not telefono:
             return "OK", 200
 
-        # V1.8: recepción superior compartida para Diego, demos y nuevos negocios.
+        # V1.8: recepción superior compartida para negocio, demos y nuevos negocios.
         if tipo == "text":
             route = router_superior_resolver(telefono, texto)
             if route.get("accion") == "menu":
@@ -9218,7 +9005,7 @@ def gupshup_webhook():
                 return "OK", 200
 
         # Para multimedia conservamos el tenant activo del router. Si todavía no
-        # hay contexto, mostramos recepción en lugar de caer accidentalmente en Diego.
+        # hay contexto, mostramos recepción en lugar de caer accidentalmente en negocio.
         if tipo != "text":
             route = router_superior_resolver(telefono, "")
             if route.get("accion") == "menu":
@@ -11676,12 +11463,12 @@ def portal_pagos():
 def health():
     return {
         "ok": True,
-        "app": "Nexia Core - Multiempresa",
+        "app": "Nexia Core - Genérico",
         "version": APP_VERSION,
         "channel": "Twilio WhatsApp + Gupshup WhatsApp + Instagram Meta API",
         "calendar": "Google Calendar",
         "payments": "Mercado Pago Checkout Pro",
-        "saas": "multiempresa",
+        "deployment": "single-business",
         "prueba_gratuita": f"{DEMO_LIMITE_MENSAJES_DEFAULT} mensajes / {DEMO_DURACION_HORAS_DEFAULT} horas",
         "history": "Supabase",
     }, 200
@@ -11705,7 +11492,7 @@ def portal_admin_autorizado():
     clientes, por ejemplo:
 
         Administración General (empresa administrativa)
-            ├── Estilista Diego
+            ├── Negocio
             ├── Nexia
             └── futuros clientes
     """
@@ -13339,54 +13126,17 @@ def _conv_empresa_asociada_whatsapp(telefono):
 
 
 def _conv_resolver_empresa_trigger(route, telefono, texto):
-    """
-    Determina qué empresa debe recibir un trigger de Convocatorias.
-
-    Prioridad:
-    1) Empresa más recientemente asociada al WhatsApp, si tiene Convocatorias
-       activas y el texto coincide con sus palabras de activación.
-    2) Empresa de la ruta activa.
-    3) Tenant actual como último fallback.
-
-    Esto evita que una sesión antigua del router genere el token para otra empresa.
-    """
-    candidatos=[]
-
-    propia=_conv_empresa_asociada_whatsapp(telefono)
-    if propia:
-        candidatos.append(('whatsapp_asociado',propia))
-
-    ruta=str((route or {}).get('empresa_id') or '').strip()
-    if ruta:
-        candidatos.append(('router',ruta))
-
-    tenant=str(empresa_actual_id() or '').strip()
-    if tenant:
-        candidatos.append(('tenant',tenant))
-
-    vistos=set()
-    for origen,eid in candidatos:
-        if not eid or eid in vistos:
-            continue
-        vistos.add(eid)
-
-        cfg_conv=_conv_config_empresa(eid)
-        if not bool(cfg_conv.get('activo')):
-            continue
-
-        if not _conv_trigger_coincide(cfg_conv,texto):
-            continue
-
-        print(
-            'NEXI CONVOCATORIAS ROUTE:',
-            origen,
-            'empresa=',eid,
-            'router_empresa=',ruta or '-',
-            'whatsapp_empresa=',propia or '-',
-        )
-        return eid
-
-    return ''
+    """Resuelve Convocatorias únicamente para la empresa de este despliegue."""
+    eid = str(DEFAULT_EMPRESA_ID or empresa_actual_id() or "").strip()
+    if not eid:
+        return ""
+    cfg_conv = _conv_config_empresa(eid)
+    if not bool(cfg_conv.get("activo")):
+        return ""
+    if not _conv_trigger_coincide(cfg_conv, texto):
+        return ""
+    print("NEXI CONVOCATORIAS ROUTE: single_business empresa=", eid)
+    return eid
 
 
 def _conv_secret(): return str(app.secret_key or os.getenv('SECRET_KEY') or 'change-me-in-render').encode()
