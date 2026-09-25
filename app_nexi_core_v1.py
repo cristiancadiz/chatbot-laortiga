@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.10-REGISTRO-OPCION3"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.11-CERTIFICADO-CANTIDAD"
 load_dotenv()
 
 app = Flask(__name__)
@@ -14098,7 +14098,9 @@ def public_conv_solicitudes():
         'apellido':str(d.get('apellido') or '')[:120],'direccion_retiro':str(d.get('direccion_retiro') or '')[:500],
         'comuna':str(d.get('comuna') or '')[:120],'fecha_retiro':str(d.get('fecha_retiro') or '') or None,
         'horario_retiro':str(d.get('horario_retiro') or '')[:120],'cantidad_bultos':bultos,
+        'cantidad_aprox':str(d.get('cantidad_aprox') or '')[:120],
         'tipos_producto':tipos,'peso_aprox':str(d.get('peso_aprox') or '')[:120],
+        'requiere_certificado_reciclaje':bool(d.get('requiere_certificado_reciclaje',False)),
         'tipo_inmueble':str(d.get('tipo_inmueble') or '')[:80],'piso':str(d.get('piso') or '')[:50],
         'ascensor':d.get('ascensor') if isinstance(d.get('ascensor'),bool) else None,
         'requiere_vehiculo':d.get('requiere_vehiculo') if isinstance(d.get('requiere_vehiculo'),bool) else None,
