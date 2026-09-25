@@ -5,9 +5,10 @@ import json
 import hmac
 import hashlib
 import math
+import time
 import base64
 from datetime import datetime, timedelta
-from threading import Lock
+from threading import Lock, Thread
 from contextvars import ContextVar
 from urllib.parse import urljoin, urlparse, urldefrag, urlencode, quote
 from html.parser import HTMLParser
@@ -30,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.5-SENDER-FIJO"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.8-3COT-24H"
 load_dotenv()
 
 app = Flask(__name__)
@@ -3300,26 +3301,46 @@ def _conv_retiro_activo_en_conversacion(conversacion_id, empresa_id):
 
 
 def _conv_aplicar_modo_retiro(conversacion_id, empresa_id, canal='whatsapp'):
-    """Human only while an accepted request is active and the real 24h window is open."""
+    """
+    Durante un retiro adjudicado la conversación queda siempre en atención humana.
+
+    La ventana de 24 h de WhatsApp se sigue validando para permitir mensajes
+    salientes, pero ya no cambia la conversación a modo "bot".
+    """
     if not conversacion_id or not empresa_id:
         return False
     if not _conv_retiro_activo_en_conversacion(conversacion_id,empresa_id):
         return False
-    ventana=estado_ventana_whatsapp_24h(conversacion_id) if canal=='whatsapp' else {'abierta':True}
-    activar_por_empresa(empresa_id,canal=canal)
-    establecer_modo_atencion(conversacion_id,'ejecutivo' if ventana.get('abierta') else 'bot')
-    print('NEXI RETIRO MODO:',conversacion_id,
-          'humano' if ventana.get('abierta') else 'bot',
-          'ventana=',ventana.get('motivo'))
-    return bool(ventana.get('abierta'))
+
+    activar_por_empresa(
+        empresa_id,
+        canal=canal,
+        provider='twilio' if canal=='whatsapp' else None,
+    )
+
+    # Retiro activo = conversación humana hasta finalizar el caso.
+    establecer_modo_atencion(conversacion_id,'ejecutivo')
+
+    ventana = (
+        estado_ventana_whatsapp_24h(conversacion_id)
+        if canal=='whatsapp'
+        else {'abierta':True,'motivo':'canal_no_whatsapp'}
+    )
+
+    print(
+        'LAORTIGA RETIRO ATENCION HUMANA:',
+        conversacion_id,
+        'empresa=',empresa_id,
+        'ventana_whatsapp=', 'abierta' if ventana.get('abierta') else 'cerrada',
+        'motivo=',ventana.get('motivo'),
+    )
+    return True
 
 
 def _conv_interceptar_whatsapp_humano(telefono, texto):
-    """Interrumpe el webhook ANTES del router/IA para un retiro adjudicado activo.
-
-    Resuelve empresa por sesión actual, asociación explícita y tenant; en todos
-    los casos comprueba conversación + retiro adjudicado dentro de ESA empresa.
-    No confunde el mismo teléfono usado en workspaces distintos.
+    """
+    Si existe un retiro adjudicado activo, el mensaje queda en la conversación
+    humana y no vuelve al menú automático.
     """
     ident = re.sub(r"\D", "", normalizar_telefono(telefono))
     h = supabase_headers()
@@ -3332,7 +3353,9 @@ def _conv_interceptar_whatsapp_humano(telefono, texto):
         sesion.get("empresa_id"),
         _conv_empresa_asociada_whatsapp(telefono),
         empresa_actual_id(),
+        LAORTIGA_EMPRESA_ID,
     ]
+
     for eid in asociados:
         eid = str(eid or "").strip()
         if eid and eid not in candidatos:
@@ -3344,33 +3367,50 @@ def _conv_interceptar_whatsapp_humano(telefono, texto):
                 f"{SUPABASE_URL}/rest/v1/conversaciones",
                 headers=h,
                 params={
-                    "select": "id,modo_atencion",
-                    "empresa_id": f"eq.{eid}",
-                    "telefono": f"eq.{ident}",
-                    "canal": "eq.whatsapp",
-                    "order": "ultima_fecha.desc.nullslast,created_at.desc",
-                    "limit": "5",
+                    "select":"id,modo_atencion",
+                    "empresa_id":f"eq.{eid}",
+                    "telefono":f"eq.{ident}",
+                    "canal":"eq.whatsapp",
+                    "order":"ultima_fecha.desc.nullslast,created_at.desc",
+                    "limit":"5",
                 },
                 timeout=SUPABASE_TIMEOUT,
             )
             r.raise_for_status()
+
             for conversacion in (r.json() if r.content else []):
                 cid = str(conversacion.get("id") or "").strip()
-                if not cid or not _conv_retiro_activo_en_conversacion(cid, eid):
+                if not cid or not _conv_retiro_activo_en_conversacion(cid,eid):
                     continue
 
-                # Registrar primero el mensaje del usuario: abre o renueva la
-                # ventana de WhatsApp verificable sin enviar una respuesta IA.
-                activar_por_empresa(eid, canal="whatsapp", provider="twilio")
+                activar_por_empresa(
+                    eid,
+                    canal="whatsapp",
+                    provider="twilio",
+                    canal_config={},
+                )
+
                 if texto:
-                    guardar_mensaje_supabase(telefono, "entrante", texto, canal="whatsapp")
-                if _conv_aplicar_modo_retiro(cid, eid, "whatsapp"):
-                    print("NEXI RETIRO WHATSAPP HUMANO INTERCEPTADO:", cid, "empresa=", eid, "IA_BLOQUEADA")
-                    return True
-                print("NEXI RETIRO WHATSAPP VENTANA CERRADA:", cid, "empresa=", eid)
-                return False
+                    guardar_mensaje_supabase(
+                        telefono,
+                        "entrante",
+                        texto,
+                        canal="whatsapp",
+                    )
+
+                _conv_aplicar_modo_retiro(cid,eid,"whatsapp")
+
+                print(
+                    "LAORTIGA RETIRO MENSAJE CLIENTE:",
+                    cid,
+                    "empresa=",eid,
+                    "atencion=humana",
+                )
+                return True
+
         except Exception as e:
-            print("NEXI RETIRO WHATSAPP INTERCEPTOR ERROR:", eid, repr(e))
+            print("LAORTIGA RETIRO INTERCEPTOR ERROR:",eid,repr(e))
+
     return False
 
 
@@ -8842,9 +8882,11 @@ def whatsapp_webhook():
             return str(twiml), 200, {"Content-Type": "application/xml; charset=utf-8"}
 
         # ------------------------------------------------------------
-        # LA ORTIGA RECICLA: menú fijo de 5 opciones
+        # LA ORTIGA RECICLA: flujo 100% guiado, SIN IA.
+        # Toda entrada que no pertenezca a un retiro humano adjudicado
+        # se resuelve aquí y retorna antes de cualquier motor Core/IA.
         # ------------------------------------------------------------
-        if LAORTIGA_MENU_ACTIVO:
+        if LAORTIGA_SIN_IA or LAORTIGA_MENU_ACTIVO:
             opcion_laortiga = _laortiga_normalizar_opcion(request.form, texto)
 
             if opcion_laortiga:
@@ -13798,39 +13840,36 @@ def _conv_interesados_match(empresa_id, comuna, tipos, monto=None, ubicacion=Non
 def _conv_notificar(match_id, sol, it):
     correo=str(it.get('correo') or '').strip()
     if not correo:
-        print(
-            'NEXI CONVOCATORIA EMAIL SKIP:',
-            'interesado=',it.get('id'),
-            'motivo=sin_correo',
-        )
+        print('NEXI CONVOCATORIA EMAIL SKIP:','interesado=',it.get('id'),'motivo=sin_correo')
         return False
 
     tipos=', '.join(_conv_lista(sol.get('tipos_producto'))) or 'No especificado'
     ptok=_conv_reciclador_token_crear(sol.get('empresa_id'),it.get('id'))
     portal_rec=f'{RECICLADOR_PORTAL_URL}?token={quote(ptok)}'
 
-    asunto=f"Nueva solicitud para cotizar · {sol.get('comuna') or ''}"
+    asunto=f"Nueva solicitud de reciclaje disponible para cotizar · {sol.get('comuna') or ''}"
     txt=(
         f"Hola {it.get('nombre') or ''},\n\n"
-        "Hay una nueva solicitud de reciclaje que coincide con tu cobertura.\n\n"
+        "Hay una nueva solicitud de reciclaje que coincide con tu cobertura y los materiales que recibes.\n\n"
         f"Comuna: {sol.get('comuna') or '—'}\n"
         f"Productos/materiales: {tipos}\n"
         f"Bultos: {sol.get('cantidad_bultos') or 1}\n"
         f"Cantidad/peso aproximado: {sol.get('peso_aprox') or 'No indicado'}\n"
         f"Día: {sol.get('fecha_retiro') or 'A coordinar'}\n"
         f"Horario: {sol.get('horario_retiro') or 'A coordinar'}\n\n"
-        "Ingresa a tu Portal del Reciclador para revisar la solicitud y enviar tu cotización:\n"
+        "Puedes indicar las condiciones de tu propuesta: si pagarás por el material, "
+        "si el retiro tiene costo, si es gratuito o si prefieres acordar el valor directamente.\n\n"
+        f"La recepción se cerrará al completar {COTIZACIONES_MAX_PROPUESTAS} cotizaciones o al cumplirse "
+        f"{COTIZACIONES_PLAZO_HORAS} horas desde la creación de la solicitud, lo que ocurra primero.\n\n"
+        "Revisar solicitud y enviar cotización:\n"
         f"{portal_rec}\n\n"
-        "La dirección exacta y los datos personales se muestran solo si tu cotización es seleccionada."
+        "La persona podrá comparar las propuestas recibidas y elegir la que prefiera.\n"
+        "Los datos de contacto y la dirección exacta se habilitarán únicamente si tu cotización es seleccionada.\n\n"
+        "La Ortiga Recicla ♻️"
     )
 
     enviado=enviar_correo_resend(correo,asunto,texto=txt)
-    print(
-        'NEXI CONVOCATORIA EMAIL:',
-        'interesado=',it.get('id'),
-        'correo=',correo,
-        'enviado=',enviado,
-    )
+    print('NEXI CONVOCATORIA EMAIL:','interesado=',it.get('id'),'correo=',correo,'enviado=',enviado)
     return enviado
 
 def _conv_matches(sol):
@@ -14048,16 +14087,57 @@ def public_conv_solicitudes():
         return portal_json({'ok':False,'error':'Ubicación incompleta'},400)
     economia=_conv_economia(c,monto)
     forma_pago=str(d.get('forma_pago') or '')[:80]
-    if monto is not None and bool(c.get('pago_retiro_habilitado')):
-        forma_pago='Mercado Pago'
-    payload={'empresa_id':eid,'conversacion_id':str(p.get('conversacion_id') or '') or None,'canal':'whatsapp','telefono':str(p.get('telefono') or ''),'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'direccion_retiro':str(d.get('direccion_retiro') or '')[:500],'comuna':str(d.get('comuna') or '')[:120],'fecha_retiro':str(d.get('fecha_retiro') or '') or None,'horario_retiro':str(d.get('horario_retiro') or '')[:120],'cantidad_bultos':bultos,'tipos_producto':tipos,'peso_aprox':str(d.get('peso_aprox') or '')[:120],'tipo_inmueble':str(d.get('tipo_inmueble') or '')[:80],'piso':str(d.get('piso') or '')[:50],'ascensor':d.get('ascensor') if isinstance(d.get('ascensor'),bool) else None,'requiere_vehiculo':d.get('requiere_vehiculo') if isinstance(d.get('requiere_vehiculo'),bool) else None,'observaciones':str(d.get('observaciones') or '')[:2000],'monto_ofrecido':monto,'moneda':'CLP','forma_pago':forma_pago,'monto_negociable':bool(d.get('monto_negociable')),'comision_porcentaje':economia['comision_porcentaje'],'comision_monto':economia['comision_monto'],'monto_neto_interesado':economia['monto_neto_interesado'],'pago_proveedor':economia['pago_proveedor'],'estado_pago':economia['estado_pago'],'estado':'disponible','latitud':ubicacion[0] if ubicacion else None,'longitud':ubicacion[1] if ubicacion else None,'fotos':[str(x)[:500] for x in (d.get('fotos') or [])[:CONVOCATORIAS_FOTO_MAX_CANTIDAD] if str(x or '').strip().startswith(eid+'/')]}
-    h=backend_headers();r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers={**h,'Prefer':'return=representation'},json=payload,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else []
+    if monto is not None and bool(c.get('pago_retiro_habilitado')):forma_pago='Mercado Pago'
+
+    ahora=datetime.now(pytz.UTC)
+    payload={
+        'empresa_id':eid,'conversacion_id':str(p.get('conversacion_id') or '') or None,'canal':'whatsapp',
+        'telefono':str(p.get('telefono') or ''),'nombre':str(d.get('nombre') or '')[:120],
+        'apellido':str(d.get('apellido') or '')[:120],'direccion_retiro':str(d.get('direccion_retiro') or '')[:500],
+        'comuna':str(d.get('comuna') or '')[:120],'fecha_retiro':str(d.get('fecha_retiro') or '') or None,
+        'horario_retiro':str(d.get('horario_retiro') or '')[:120],'cantidad_bultos':bultos,
+        'tipos_producto':tipos,'peso_aprox':str(d.get('peso_aprox') or '')[:120],
+        'tipo_inmueble':str(d.get('tipo_inmueble') or '')[:80],'piso':str(d.get('piso') or '')[:50],
+        'ascensor':d.get('ascensor') if isinstance(d.get('ascensor'),bool) else None,
+        'requiere_vehiculo':d.get('requiere_vehiculo') if isinstance(d.get('requiere_vehiculo'),bool) else None,
+        'observaciones':str(d.get('observaciones') or '')[:2000],'monto_ofrecido':monto,'moneda':'CLP',
+        'forma_pago':forma_pago,'monto_negociable':bool(d.get('monto_negociable')),
+        'comision_porcentaje':economia['comision_porcentaje'],'comision_monto':economia['comision_monto'],
+        'monto_neto_interesado':economia['monto_neto_interesado'],'pago_proveedor':economia['pago_proveedor'],
+        'estado_pago':economia['estado_pago'],'estado':'disponible',
+        'latitud':ubicacion[0] if ubicacion else None,'longitud':ubicacion[1] if ubicacion else None,
+        'fotos':[str(x)[:500] for x in (d.get('fotos') or [])[:CONVOCATORIAS_FOTO_MAX_CANTIDAD] if str(x or '').strip().startswith(eid+'/')],
+        'cotizaciones_max':COTIZACIONES_MAX_PROPUESTAS,
+        'cotizaciones_plazo_horas':COTIZACIONES_PLAZO_HORAS,
+        'cotizaciones_limite_at':(ahora+timedelta(hours=COTIZACIONES_PLAZO_HORAS)).isoformat(),
+        'cotizaciones_cerradas_at':None,
+        'cotizaciones_cierre_motivo':None,
+        'cotizaciones_cierre_notificado_at':None,
+    }
+    h=backend_headers()
+    r=requests.post(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
+        headers={**h,'Prefer':'return=representation'},json=payload,timeout=SUPABASE_TIMEOUT
+    )
+    r.raise_for_status();rows=r.json() if r.content else []
     if not rows:return portal_json({'ok':False,'error':'No se creó la solicitud'},500)
     sol=rows[0]
+
+    _cot_notificar_solicitud_creada(sol)
+
     try:
-        from threading import Thread;Thread(target=_conv_matches,args=(sol,),daemon=True).start()
-    except:_conv_matches(sol)
-    return portal_json({'ok':True,'solicitud':sol,'mensaje':('Solicitud registrada. Notificaremos a recolectores dentro de su radio de cobertura.' if ubicacion else 'Solicitud registrada. Notificaremos a recolectores según comuna y materiales.')},201)
+        Thread(target=_conv_matches,args=(sol,),daemon=True).start()
+    except Exception:
+        _conv_matches(sol)
+
+    return portal_json({
+        'ok':True,
+        'solicitud':sol,
+        'mensaje':(
+            f'Solicitud registrada. Podrás recibir hasta {COTIZACIONES_MAX_PROPUESTAS} cotizaciones '
+            f'durante {COTIZACIONES_PLAZO_HORAS} horas.'
+        ),
+    },201)
 
 
 def _conv_match_row(match_id):
@@ -14756,6 +14836,228 @@ def portal_conv_solicitud_patch(sid):
 # LA ORTIGA RECICLA - COTIZACIONES
 # ============================================================
 
+
+COTIZACIONES_MAX_PROPUESTAS = int(os.getenv("COTIZACIONES_MAX_PROPUESTAS", "3"))
+COTIZACIONES_PLAZO_HORAS = int(os.getenv("COTIZACIONES_PLAZO_HORAS", "24"))
+COTIZACIONES_SCAN_MINUTOS = int(os.getenv("COTIZACIONES_SCAN_MINUTOS", "5"))
+
+
+def _cot_parse_dt(v):
+    if not v:
+        return None
+    try:
+        d=datetime.fromisoformat(str(v).replace("Z","+00:00"))
+        if d.tzinfo is None:
+            d=pytz.UTC.localize(d)
+        return d.astimezone(pytz.UTC)
+    except Exception:
+        return None
+
+
+def _cot_contar_solicitud(solicitud_id):
+    h=backend_headers()
+    if not h or not solicitud_id:
+        return 0
+    r=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_cotizaciones',
+        headers=h,
+        params={
+            'select':'id',
+            'solicitud_id':f'eq.{solicitud_id}',
+            'limit':'100',
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    return len(r.json() if r.content else [])
+
+
+def _cot_estado_recepcion(sol, contar=True):
+    """Estado único de recepción de cotizaciones: máximo 3 o 24h, lo que ocurra primero."""
+    ahora=datetime.now(pytz.UTC)
+    cread=_cot_parse_dt(sol.get('created_at')) or ahora
+    limite=cread+timedelta(hours=COTIZACIONES_PLAZO_HORAS)
+    recibidas=_cot_contar_solicitud(sol.get('id')) if contar else int(sol.get('cotizaciones_recibidas') or 0)
+
+    estado_sol=str(sol.get('estado') or '').lower()
+    cerrada_at=_cot_parse_dt(sol.get('cotizaciones_cerradas_at'))
+    motivo=str(sol.get('cotizaciones_cierre_motivo') or '').strip().lower()
+
+    if estado_sol in {'reclamada','en_gestion','completada','no_concretada','cancelada'}:
+        cerrada=True
+        motivo=motivo or ('seleccionada' if estado_sol in {'reclamada','en_gestion'} else estado_sol)
+    elif cerrada_at:
+        cerrada=True
+    elif recibidas >= COTIZACIONES_MAX_PROPUESTAS:
+        cerrada=True
+        motivo='maximo'
+    elif ahora >= limite:
+        cerrada=True
+        motivo='plazo'
+    else:
+        cerrada=False
+
+    return {
+        'abierta':not cerrada,
+        'cerrada':cerrada,
+        'motivo':motivo or None,
+        'recibidas':recibidas,
+        'maximo':COTIZACIONES_MAX_PROPUESTAS,
+        'restantes':max(0,COTIZACIONES_MAX_PROPUESTAS-recibidas),
+        'plazo_horas':COTIZACIONES_PLAZO_HORAS,
+        'limite_at':limite.isoformat(),
+    }
+
+
+def _cot_marcar_cierre(sol, motivo):
+    h=backend_headers()
+    if not h or not sol.get('id'):
+        return
+    ahora=datetime.now(pytz.UTC).isoformat()
+    r=requests.patch(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
+        headers={**h,'Prefer':'return=minimal'},
+        params={
+            'id':f"eq.{sol.get('id')}",
+            'cotizaciones_cerradas_at':'is.null',
+        },
+        json={
+            'cotizaciones_cerradas_at':ahora,
+            'cotizaciones_cierre_motivo':motivo,
+            'updated_at':ahora,
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if not r.ok:
+        print('LAORTIGA COTIZACIONES CIERRE PATCH ERROR:',r.status_code,r.text[:1000])
+
+
+def _cot_url_cliente(sol):
+    tok=_conv_cotizaciones_token_crear(
+        sol.get('empresa_id'),
+        sol.get('id'),
+        sol.get('telefono') or '',
+    )
+    return f"{COTIZACIONES_PUBLIC_URL}?token={quote(tok)}"
+
+
+def _cot_enviar_whatsapp_cliente(sol, mensaje):
+    telefono=str(sol.get('telefono') or '').strip()
+    if not telefono:
+        return False
+    try:
+        activar_por_empresa(
+            LAORTIGA_EMPRESA_ID,
+            canal='whatsapp',
+            provider='twilio',
+            canal_config={},
+        )
+        enviar_twilio_texto(telefono,mensaje)
+        return True
+    except Exception as e:
+        print('LAORTIGA COTIZACIONES WHATSAPP WARN:',repr(e))
+        return False
+
+
+def _cot_notificar_solicitud_creada(sol):
+    url=_cot_url_cliente(sol)
+    mensaje=(
+        "♻️ *Tu solicitud de reciclaje fue publicada correctamente.*\n\n"
+        "Buscaremos recicladores compatibles con tu ubicación y tipo de material.\n\n"
+        f"Podrás recibir *hasta {COTIZACIONES_MAX_PROPUESTAS} cotizaciones* durante un plazo máximo de "
+        f"*{COTIZACIONES_PLAZO_HORAS} horas*.\n"
+        f"Si se alcanzan las {COTIZACIONES_MAX_PROPUESTAS} propuestas antes, la recepción se cerrará automáticamente.\n\n"
+        "Te avisaremos cada vez que llegue una nueva propuesta.\n\n"
+        "Puedes revisar tus cotizaciones aquí:\n"
+        f"{url}"
+    )
+    return _cot_enviar_whatsapp_cliente(sol,mensaje)
+
+
+def _cot_notificar_cierre_plazo(sol, estado=None):
+    estado=estado or _cot_estado_recepcion(sol)
+    url=_cot_url_cliente(sol)
+    n=int(estado.get('recibidas') or 0)
+    if n:
+        mensaje=(
+            "⏰ *Finalizó el plazo para recibir cotizaciones.*\n\n"
+            f"Recibiste {n} {'cotización' if n==1 else 'cotizaciones'}.\n"
+            "Ya no ingresarán nuevas propuestas, pero puedes revisar las disponibles y seleccionar la que prefieras:\n"
+            f"{url}"
+        )
+    else:
+        mensaje=(
+            "⏰ *Finalizó el plazo para recibir cotizaciones.*\n\n"
+            "En esta oportunidad no recibiste propuestas dentro de las 24 horas."
+        )
+    return _cot_enviar_whatsapp_cliente(sol,mensaje)
+
+
+def _cot_cerrar_vencidas_once():
+    """Cierra solicitudes abiertas que cumplieron 24h y avisa una sola vez al cliente."""
+    h=backend_headers()
+    if not h:
+        return
+    cutoff=(datetime.now(pytz.UTC)-timedelta(hours=COTIZACIONES_PLAZO_HORAS)).isoformat()
+    r=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
+        headers=h,
+        params={
+            'select':'*',
+            'empresa_id':f'eq.{LAORTIGA_EMPRESA_ID}',
+            'estado':'eq.disponible',
+            'cotizaciones_cerradas_at':'is.null',
+            'created_at':f'lte.{cutoff}',
+            'limit':'100',
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if not r.ok:
+        print('LAORTIGA COTIZACIONES SCAN ERROR:',r.status_code,r.text[:1000])
+        return
+
+    for sol in (r.json() if r.content else []):
+        try:
+            est=_cot_estado_recepcion(sol)
+            if est.get('cerrada') and est.get('motivo')=='plazo':
+                ahora=datetime.now(pytz.UTC).isoformat()
+                upd=requests.patch(
+                    f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
+                    headers={**h,'Prefer':'return=representation'},
+                    params={
+                        'id':f"eq.{sol.get('id')}",
+                        'cotizaciones_cerradas_at':'is.null',
+                    },
+                    json={
+                        'cotizaciones_cerradas_at':ahora,
+                        'cotizaciones_cierre_motivo':'plazo',
+                        'updated_at':ahora,
+                    },
+                    timeout=SUPABASE_TIMEOUT,
+                )
+                if upd.ok and (upd.json() if upd.content else []):
+                    _cot_notificar_cierre_plazo(sol,est)
+                    requests.patch(
+                        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
+                        headers={**h,'Prefer':'return=minimal'},
+                        params={'id':f"eq.{sol.get('id')}"},
+                        json={'cotizaciones_cierre_notificado_at':datetime.now(pytz.UTC).isoformat()},
+                        timeout=SUPABASE_TIMEOUT,
+                    )
+                    print('LAORTIGA COTIZACIONES CERRADA POR PLAZO:',sol.get('id'))
+        except Exception as e:
+            print('LAORTIGA COTIZACIONES CIERRE ITEM WARN:',repr(e))
+
+
+def _cot_cierre_worker():
+    while True:
+        try:
+            _cot_cerrar_vencidas_once()
+        except Exception as e:
+            print('LAORTIGA COTIZACIONES WORKER WARN:',repr(e))
+        time.sleep(max(60,COTIZACIONES_SCAN_MINUTOS*60))
+
+
 def _cot_float(value, default=None, minimum=None):
     if value in (None, ''):
         return default
@@ -14808,30 +15110,32 @@ def _cotizacion_por_match(match_id):
     return rows[0] if rows else None
 
 
-def _cotizacion_notificar_cliente(sol, cot):
-    telefono=str(sol.get('telefono') or '').strip()
-    if not telefono:
-        return False
-    tok=_conv_cotizaciones_token_crear(
-        sol.get('empresa_id'),
-        sol.get('id'),
-        telefono,
-    )
-    url=f"{COTIZACIONES_PUBLIC_URL}?token={quote(tok)}"
-    mensaje=(
-        "♻️ *Nueva cotización para tu reciclaje*\n\n"
-        f"{_cot_monto_texto(cot)}\n"
-        "Puedes revisar las propuestas y elegir la que prefieras aquí:\n"
-        f"{url}"
-    )
-    try:
-        activar_por_empresa(str(sol.get('empresa_id') or LAORTIGA_EMPRESA_ID), canal='whatsapp', provider='twilio')
-        enviar_twilio_texto(telefono,mensaje)
-        print('NEXI COTIZACION CLIENTE NOTIFICADO:',sol.get('id'))
-        return True
-    except Exception as e:
-        print('NEXI COTIZACION NOTIFICACION WARN:',repr(e))
-        return False
+def _cotizacion_notificar_cliente(sol, cot, estado=None):
+    estado=estado or _cot_estado_recepcion(sol)
+    n=int(estado.get('recibidas') or 0)
+    url=_cot_url_cliente(sol)
+
+    if n >= COTIZACIONES_MAX_PROPUESTAS:
+        mensaje=(
+            f"✅ *Ya tienes {COTIZACIONES_MAX_PROPUESTAS} cotizaciones disponibles.*\n\n"
+            "La recepción de nuevas propuestas se cerró automáticamente.\n"
+            "Puedes compararlas y elegir la que prefieras aquí:\n"
+            f"{url}"
+        )
+    else:
+        mensaje=(
+            f"♻️ *Nueva cotización recibida ({n}/{COTIZACIONES_MAX_PROPUESTAS})*\n\n"
+            f"{_cot_monto_texto(cot)}\n\n"
+            f"Puedes esperar hasta {COTIZACIONES_MAX_PROPUESTAS} propuestas o hasta que se cumplan "
+            f"{COTIZACIONES_PLAZO_HORAS} horas desde la publicación.\n\n"
+            "Revisar cotizaciones:\n"
+            f"{url}"
+        )
+
+    ok=_cot_enviar_whatsapp_cliente(sol,mensaje)
+    if ok:
+        print('NEXI COTIZACION CLIENTE NOTIFICADO:',sol.get('id'),'contador=',n)
+    return ok
 
 
 @app.route('/public/recicladores/match/<match_id>/cotizacion',methods=['GET','POST','OPTIONS'])
@@ -14839,17 +15143,8 @@ def public_reciclador_cotizacion(match_id):
     if request.method=='OPTIONS':
         return portal_json({'ok':True},204)
 
-    if request.method=='GET':
-        token=request.args.get('token')
-        p=_conv_reciclador_token_leer(token)
-        if not p:
-            return portal_json({'ok':False,'error':'Acceso inválido o vencido'},401)
-        if not _conv_reciclador_match_permitido(p,match_id):
-            return portal_json({'ok':False,'error':'Solicitud no autorizada'},403)
-        return portal_json({'ok':True,'cotizacion':_cotizacion_por_match(match_id)})
-
-    d=request.get_json(silent=True) or {}
-    p=_conv_reciclador_token_leer(d.get('token'))
+    token=request.args.get('token') if request.method=='GET' else (request.get_json(silent=True) or {}).get('token')
+    p=_conv_reciclador_token_leer(token)
     if not p:
         return portal_json({'ok':False,'error':'Acceso inválido o vencido'},401)
     if not _conv_reciclador_match_permitido(p,match_id):
@@ -14858,12 +15153,39 @@ def public_reciclador_cotizacion(match_id):
     row=_conv_match_row(match_id)
     if not row:
         return portal_json({'ok':False,'error':'Solicitud no encontrada'},404)
-    if str(row.get('estado') or '').lower() in {'tomada','cerrada'}:
-        return portal_json({'ok':False,'error':'Esta solicitud ya fue adjudicada.'},409)
 
     sol=dict(row.get('nexi_convocatorias_solicitudes') or {})
-    if str(sol.get('estado') or '').lower() in {'reclamada','en_gestion','completada','no_concretada','cancelada'}:
-        return portal_json({'ok':False,'error':'La solicitud ya no acepta cotizaciones.'},409)
+    cot_actual=_cotizacion_por_match(match_id)
+    estado=_cot_estado_recepcion(sol)
+
+    # Persistir cierre detectado por máximo/plazo al primer acceso.
+    if estado.get('cerrada') and not sol.get('cotizaciones_cerradas_at') and estado.get('motivo') in {'maximo','plazo'}:
+        _cot_marcar_cierre(sol,estado.get('motivo'))
+
+    if request.method=='GET':
+        return portal_json({
+            'ok':True,
+            'cotizacion':cot_actual,
+            'recepcion':estado,
+        })
+
+    d=request.get_json(silent=True) or {}
+
+    if str(row.get('estado') or '').lower() in {'tomada','cerrada'}:
+        return portal_json({'ok':False,'error':'La persona ya seleccionó una propuesta. Esta solicitud está cerrada.'},409)
+
+    # Si ya tenía una propuesta puede verla, pero no modificarla tras el cierre.
+    if estado.get('cerrada'):
+        motivos={
+            'maximo':f'Esta solicitud ya alcanzó el máximo de {COTIZACIONES_MAX_PROPUESTAS} cotizaciones.',
+            'plazo':f'El plazo de {COTIZACIONES_PLAZO_HORAS} horas para cotizar ya finalizó.',
+            'seleccionada':'La persona ya seleccionó una propuesta.',
+        }
+        return portal_json({
+            'ok':False,
+            'error':motivos.get(estado.get('motivo'),'Esta solicitud ya no recibe nuevas cotizaciones.'),
+            'recepcion':estado,
+        },409)
 
     modalidad=str(d.get('modalidad') or 'paga_cliente').strip().lower()
     tipo_tarifa=str(d.get('tipo_tarifa') or 'fijo').strip().lower()
@@ -14884,8 +15206,7 @@ def public_reciclador_cotizacion(match_id):
         monto_total=round(valor_unitario*cantidad,2)
 
     if modalidad=='retiro_gratis':
-        monto_total=0
-        costo_retiro=0
+        monto_total=0;costo_retiro=0
     elif modalidad=='a_convenir':
         monto_total=None
     elif monto_total is None:
@@ -14894,9 +15215,7 @@ def public_reciclador_cotizacion(match_id):
     if modalidad=='paga_cliente':
         monto_neto_cliente=(float(monto_total or 0)-float(costo_retiro or 0))
     elif modalidad=='cobra_retiro':
-        # Un valor negativo significa que el cliente paga por el retiro.
-        monto_neto_cliente=-float(monto_total or 0)
-        costo_retiro=float(monto_total or 0)
+        monto_neto_cliente=-float(monto_total or 0);costo_retiro=float(monto_total or 0)
     elif modalidad=='retiro_gratis':
         monto_neto_cliente=0
     else:
@@ -14906,39 +15225,41 @@ def public_reciclador_cotizacion(match_id):
         'empresa_id':str(p.get('empresa_id')),
         'solicitud_id':str(sol.get('id') or row.get('solicitud_id')),
         'interesado_id':str(p.get('interesado_id')),
-        'match_id':str(match_id),
-        'modalidad':modalidad,
-        'tipo_tarifa':tipo_tarifa,
-        'valor_unitario':valor_unitario,
-        'cantidad':cantidad,
+        'match_id':str(match_id),'modalidad':modalidad,'tipo_tarifa':tipo_tarifa,
+        'valor_unitario':valor_unitario,'cantidad':cantidad,
         'unidad':str(d.get('unidad') or '').strip()[:40] or None,
-        'monto_total':monto_total,
-        'costo_retiro':costo_retiro,
+        'monto_total':monto_total,'costo_retiro':costo_retiro,
         'monto_neto_cliente':monto_neto_cliente,
         'comentario':str(d.get('comentario') or '').strip()[:1200] or None,
-        'estado':'pendiente',
-        'updated_at':datetime.now(pytz.UTC).isoformat(),
+        'estado':'pendiente','updated_at':datetime.now(pytz.UTC).isoformat(),
     }
 
+    era_nueva=cot_actual is None
     h={**backend_headers(),'Prefer':'resolution=merge-duplicates,return=representation'}
     r=requests.post(
         f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_cotizaciones',
-        headers=h,
-        params={'on_conflict':'match_id'},
-        json=payload,
-        timeout=SUPABASE_TIMEOUT,
+        headers=h,params={'on_conflict':'match_id'},json=payload,timeout=SUPABASE_TIMEOUT,
     )
     r.raise_for_status()
     rows=r.json() if r.content else []
     cot=rows[0] if rows else payload
 
-    # Cada nueva/actualizada cotización vuelve a avisar al cliente.
-    _cotizacion_notificar_cliente(sol,cot)
+    nuevo_estado=_cot_estado_recepcion(sol)
+
+    if era_nueva:
+        _cotizacion_notificar_cliente(sol,cot,nuevo_estado)
+        if nuevo_estado.get('recibidas') >= COTIZACIONES_MAX_PROPUESTAS:
+            _cot_marcar_cierre(sol,'maximo')
 
     return portal_json({
         'ok':True,
         'cotizacion':cot,
-        'mensaje':'Cotización enviada. La persona podrá compararla con otras propuestas.',
+        'recepcion':nuevo_estado,
+        'mensaje':(
+            'Cotización enviada. La persona podrá compararla con otras propuestas.'
+            if era_nueva else
+            'Cotización actualizada.'
+        ),
     },201)
 
 
@@ -14952,18 +15273,12 @@ def public_cotizaciones_cliente():
         return portal_json({'ok':False,'error':'Enlace inválido o vencido'},401)
 
     h=backend_headers()
-    sid=str(p.get('solicitud_id'))
-    eid=str(p.get('empresa_id'))
+    sid=str(p.get('solicitud_id'));eid=str(p.get('empresa_id'))
 
     rs=requests.get(
         f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
         headers=h,
-        params={
-            'select':'id,empresa_id,estado,comuna,fecha_retiro,horario_retiro,cantidad_bultos,tipos_producto,peso_aprox,created_at',
-            'id':f'eq.{sid}',
-            'empresa_id':f'eq.{eid}',
-            'limit':'1',
-        },
+        params={'select':'*','id':f'eq.{sid}','empresa_id':f'eq.{eid}','limit':'1'},
         timeout=SUPABASE_TIMEOUT,
     )
     rs.raise_for_status()
@@ -14972,21 +15287,20 @@ def public_cotizaciones_cliente():
         return portal_json({'ok':False,'error':'Solicitud no encontrada'},404)
     sol=sols[0]
 
+    estado=_cot_estado_recepcion(sol)
+    if estado.get('cerrada') and not sol.get('cotizaciones_cerradas_at') and estado.get('motivo') in {'maximo','plazo'}:
+        _cot_marcar_cierre(sol,estado.get('motivo'))
+
     rc=requests.get(
         f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_cotizaciones',
         headers=h,
         params={
-            'select':'*',
-            'solicitud_id':f'eq.{sid}',
-            'empresa_id':f'eq.{eid}',
-            'estado':'in.(pendiente,aceptada)',
-            'order':'created_at.asc',
-            'limit':'100',
+            'select':'*','solicitud_id':f'eq.{sid}','empresa_id':f'eq.{eid}',
+            'estado':'in.(pendiente,aceptada)','order':'created_at.asc','limit':'100',
         },
         timeout=SUPABASE_TIMEOUT,
     )
-    rc.raise_for_status()
-    cots=rc.json() if rc.content else []
+    rc.raise_for_status();cots=rc.json() if rc.content else []
 
     ids=list({str(x.get('interesado_id') or '') for x in cots if x.get('interesado_id')})
     nombres={}
@@ -14994,11 +15308,7 @@ def public_cotizaciones_cliente():
         ri=requests.get(
             f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',
             headers=h,
-            params={
-                'select':'id,nombre,apellido',
-                'id':f"in.({','.join(ids)})",
-                'limit':'100',
-            },
+            params={'select':'id,nombre,apellido','id':f"in.({','.join(ids)})",'limit':'100'},
             timeout=SUPABASE_TIMEOUT,
         )
         ri.raise_for_status()
@@ -15011,14 +15321,12 @@ def public_cotizaciones_cliente():
         x=dict(c)
         x['reciclador_nombre']=nombres.get(str(c.get('interesado_id')),'Reciclador')
         x['resumen']=_cot_monto_texto(x)
-        # No exponer datos de contacto antes de seleccionar.
         salida.append(x)
 
     return portal_json({
-        'ok':True,
-        'solicitud':sol,
-        'cotizaciones':salida,
+        'ok':True,'solicitud':sol,'cotizaciones':salida,
         'seleccionada':next((x for x in salida if str(x.get('estado'))=='aceptada'),None),
+        'recepcion':estado,
     })
 
 
@@ -15135,5 +15443,8 @@ def public_cotizacion_aceptar(cotizacion_id):
 
 if __name__ == "__main__":
     print("APP_VERSION:", APP_VERSION)
+    print("LAORTIGA_SIN_IA:", LAORTIGA_SIN_IA)
+    print("COTIZACIONES_REGLA:", COTIZACIONES_MAX_PROPUESTAS, "propuestas /", COTIZACIONES_PLAZO_HORAS, "horas")
+    Thread(target=_cot_cierre_worker,daemon=True).start()
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port)
