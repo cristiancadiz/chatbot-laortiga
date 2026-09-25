@@ -30,7 +30,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.1-FIX"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.3-MATCHING-SIMPLE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8648,61 +8648,84 @@ def _laortiga_link_portal_reciclador(telefono):
 
 
 def _laortiga_responder_opcion(twiml, telefono, opcion, texto_original):
+    """
+    Procesa una opción del menú La Ortiga.
+
+    V3.2: las respuestas se envían por REST de Twilio en vez de depender de
+    la respuesta TwiML del webhook. Esto deja SID/log explícito y evita que
+    una selección de list-picker termine en HTTP 200 sin mensaje visible.
+    """
     _laortiga_guardar_entrada(telefono, texto_original)
 
-    if opcion == "laortiga:retiro":
-        twiml.message(
-            "🚚 Perfecto. Completa este formulario para solicitar el retiro de tu reciclaje:\n\n"
-            + _laortiga_link_retiro(telefono)
+    def enviar(texto):
+        activar_por_empresa(LAORTIGA_EMPRESA_ID, canal="whatsapp", provider="twilio")
+        msg = enviar_twilio_texto(telefono, texto)
+        print(
+            "LAORTIGA OPCION RESPUESTA OK:",
+            opcion,
+            getattr(msg, "sid", ""),
         )
         return True
 
-    if opcion == "laortiga:donde":
-        twiml.message(
-            "📍 Puedes buscar puntos de reciclaje en Chile aquí:\n\n"
-            + LAORTIGA_DONDE_RECICLAR_URL
-        )
-        return True
-
-    if opcion == "laortiga:registro":
-        twiml.message(
-            "🙋 ¡Genial! Completa este formulario para registrarte como reciclador:\n\n"
-            + _laortiga_link_registro_reciclador()
-        )
-        return True
-
-    if opcion == "laortiga:portal":
-        url = _laortiga_link_portal_reciclador(telefono)
-        if url:
-            twiml.message(
-                "♻️ Este es tu Portal del Reciclador:\n\n" + url
+    try:
+        if opcion == "laortiga:retiro":
+            url = _laortiga_link_retiro(telefono)
+            print("LAORTIGA RETIRO URL GENERADA:", url[:180])
+            return enviar(
+                "🚚 Perfecto. Completa este formulario para solicitar el retiro de tu reciclaje:\n\n"
+                + url
             )
-        else:
-            twiml.message(
+
+        if opcion == "laortiga:donde":
+            return enviar(
+                "📍 Puedes buscar puntos de reciclaje en Chile aquí:\n\n"
+                + LAORTIGA_DONDE_RECICLAR_URL
+            )
+
+        if opcion == "laortiga:registro":
+            url = _laortiga_link_registro_reciclador()
+            print("LAORTIGA REGISTRO URL GENERADA:", url[:180])
+            return enviar(
+                "🙋 ¡Genial! Completa este formulario para registrarte como reciclador:\n\n"
+                + url
+            )
+
+        if opcion == "laortiga:portal":
+            url = _laortiga_link_portal_reciclador(telefono)
+            if url:
+                print("LAORTIGA PORTAL RECICLADOR URL:", url[:180])
+                return enviar(
+                    "♻️ Este es tu Portal del Reciclador:\n\n" + url
+                )
+            return enviar(
                 "Todavía no encuentro un registro de reciclador asociado a este WhatsApp. "
                 "Primero selecciona *Quiero ser reciclador* para registrarte."
             )
-        return True
 
-    if opcion == "laortiga:ejecutivo":
-        try:
+        if opcion == "laortiga:ejecutivo":
             derivar_a_ejecutivo(
                 telefono,
                 "whatsapp",
                 estado={"nombre": "Cliente La Ortiga"},
                 motivo="Solicita hablar con un ejecutivo desde el menú La Ortiga Recicla",
             )
-            twiml.message(
+            return enviar(
                 "👤 Listo. Avisé al equipo de La Ortiga para que continúe la conversación contigo por aquí."
             )
-        except Exception as e:
-            print("LAORTIGA DERIVACION ERROR:", repr(e))
-            twiml.message(
-                "No pude avisar al ejecutivo en este momento. Intenta nuevamente en unos minutos."
-            )
-        return True
 
-    return False
+        print("LAORTIGA OPCION NO RECONOCIDA:", repr(opcion))
+        return False
+
+    except Exception as e:
+        print("LAORTIGA OPCION ERROR:", opcion, repr(e))
+        try:
+            enviar_twilio_texto(
+                telefono,
+                "Tuvimos un problema procesando esta opción. Por favor escribe *MENU* e intenta nuevamente."
+            )
+        except Exception as ee:
+            print("LAORTIGA OPCION ERROR RESPUESTA:", repr(ee))
+        return False
 
 
 
@@ -8822,6 +8845,7 @@ def whatsapp_webhook():
             opcion_laortiga = _laortiga_normalizar_opcion(request.form, texto)
 
             if opcion_laortiga:
+                print("LAORTIGA OPCION DETECTADA:", repr(opcion_laortiga))
                 _laortiga_responder_opcion(
                     twiml,
                     telefono,
@@ -13689,7 +13713,17 @@ def _conv_distancia_km(a,b):
     x=math.sin((lat2-lat1)/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin((lon2-lon1)/2)**2
     return 6371.0088*2*math.asin(min(1,math.sqrt(x)))
 
-def _conv_interesados_match(empresa_id,comuna,tipos,monto,ubicacion=None):
+def _conv_interesados_match(empresa_id, comuna, tipos, monto=None, ubicacion=None):
+    """
+    Matching para el modelo de cotizaciones.
+
+    Ya NO filtra por aporte_minimo ni acepta_retiro_sin_aporte.
+    Un reciclador recibe la oportunidad cuando:
+    - pertenece a la empresa,
+    - está activo,
+    - cubre la ubicación/comuna,
+    - y trabaja al menos uno de los materiales solicitados.
+    """
     h=backend_headers()
     if not h:
         return []
@@ -13712,52 +13746,37 @@ def _conv_interesados_match(empresa_id,comuna,tipos,monto,ubicacion=None):
     tk={_conv_norm(x) for x in _conv_lista(tipos)}
     out=[]
 
-    try:
-        m=float(monto) if monto not in (None,'') else None
-    except Exception:
-        m=None
-
     for row in rows:
         comunas_row={_conv_norm(x) for x in _conv_lista(row.get('comunas'))}
         tipos_row={_conv_norm(x) for x in _conv_lista(row.get('tipos_producto'))}
 
-        # Si cliente entregó ubicación, se exige ubicación del recolector y
-        # se aplica su radio declarado. No se confunde cercanía con misma comuna.
+        # Cobertura geográfica:
+        # si ambos lados tienen coordenadas válidas, usar radio;
+        # de lo contrario, usar comuna como fallback.
+        coincide_ubicacion=False
         if ubicacion is not None:
             try:
                 pos=_conv_coordenadas(row)
-                if pos is None or _conv_distancia_km(ubicacion,pos)>_conv_radio_km(row.get('radio_km')):
-                    continue
             except ValueError:
-                continue
-        elif ck not in comunas_row:
-            # Compatibilidad: solicitudes antiguas sin coordenadas usan comuna.
+                pos=None
+
+            if pos is not None:
+                try:
+                    coincide_ubicacion=(
+                        _conv_distancia_km(ubicacion,pos)
+                        <= _conv_radio_km(row.get('radio_km'))
+                    )
+                except Exception:
+                    coincide_ubicacion=False
+
+        if not coincide_ubicacion:
+            coincide_ubicacion=bool(ck and ck in comunas_row)
+
+        if not coincide_ubicacion:
             continue
 
+        # Material: al menos una coincidencia.
         if tk and not (tk & tipos_row):
-            continue
-
-        try:
-            mn=(
-                float(row.get('aporte_minimo'))
-                if row.get('aporte_minimo') not in (None,'')
-                else None
-            )
-        except Exception:
-            mn=None
-
-        acepta_sin_aporte=bool(row.get('acepta_retiro_sin_aporte',True))
-
-        # Si la solicitud NO ofrece aporte:
-        # - entra si el recolector acepta retiros sin aporte.
-        # - el aporte_minimo NO debe bloquearlo.
-        if m is None:
-            if not acepta_sin_aporte:
-                continue
-
-        # Si la solicitud SÍ ofrece aporte:
-        # aplicar el mínimo declarado por el recolector.
-        elif mn is not None and m < mn:
             continue
 
         out.append(row)
@@ -13767,21 +13786,49 @@ def _conv_interesados_match(empresa_id,comuna,tipos,monto,ubicacion=None):
         'empresa=',empresa_id,
         'comuna=',ck,
         'tipos=',sorted(tk),
-        'monto=',m,
         'candidatos=',len(rows),
         'coincidencias=',len(out),
+        'filtro_economico=DESACTIVADO',
     )
     return out
 
-def _conv_notificar(match_id,sol,it):
+def _conv_notificar(match_id, sol, it):
     correo=str(it.get('correo') or '').strip()
-    if not correo:return False
-    try:mtxt='Sin aporte ofrecido' if sol.get('monto_ofrecido') in (None,'') else '$'+f"{int(float(sol.get('monto_ofrecido'))):,}".replace(',','.')+' CLP'
-    except:mtxt=str(sol.get('monto_ofrecido') or 'Sin aporte')
-    tipos=', '.join(_conv_lista(sol.get('tipos_producto'))) or 'No especificado';url=f'{CONVOCATORIAS_PUBLIC_URL}?match={quote(str(match_id))}';ptok=_conv_reciclador_token_crear(sol.get('empresa_id'),it.get('id'));portal_rec=f'{RECICLADOR_PORTAL_URL}?token={quote(ptok)}'
-    asunto=f"Nueva solicitud disponible · {sol.get('comuna') or ''}"
-    txt=f"Hola {it.get('nombre') or ''},\n\nHay una nueva solicitud que coincide con tu cobertura.\nComuna: {sol.get('comuna') or '—'}\nProductos/materiales: {tipos}\nBultos: {sol.get('cantidad_bultos') or 1}\nDía: {sol.get('fecha_retiro') or 'A coordinar'}\nHorario: {sol.get('horario_retiro') or 'A coordinar'}\nAporte ofrecido: {mtxt}\nMonto neto estimado para quien realiza el retiro: {('$'+f"{int(float(sol.get('monto_neto_interesado'))):,}".replace(',','.')+' CLP') if sol.get('monto_neto_interesado') not in (None,'') else '—'}\n\nTomar solicitud: {url}\nPortal del reciclador: {portal_rec}\n\nLa dirección exacta se muestra solo a quien logre tomarla."
-    return enviar_correo_resend(correo,asunto,texto=txt)
+    if not correo:
+        print(
+            'NEXI CONVOCATORIA EMAIL SKIP:',
+            'interesado=',it.get('id'),
+            'motivo=sin_correo',
+        )
+        return False
+
+    tipos=', '.join(_conv_lista(sol.get('tipos_producto'))) or 'No especificado'
+    ptok=_conv_reciclador_token_crear(sol.get('empresa_id'),it.get('id'))
+    portal_rec=f'{RECICLADOR_PORTAL_URL}?token={quote(ptok)}'
+
+    asunto=f"Nueva solicitud para cotizar · {sol.get('comuna') or ''}"
+    txt=(
+        f"Hola {it.get('nombre') or ''},\n\n"
+        "Hay una nueva solicitud de reciclaje que coincide con tu cobertura.\n\n"
+        f"Comuna: {sol.get('comuna') or '—'}\n"
+        f"Productos/materiales: {tipos}\n"
+        f"Bultos: {sol.get('cantidad_bultos') or 1}\n"
+        f"Cantidad/peso aproximado: {sol.get('peso_aprox') or 'No indicado'}\n"
+        f"Día: {sol.get('fecha_retiro') or 'A coordinar'}\n"
+        f"Horario: {sol.get('horario_retiro') or 'A coordinar'}\n\n"
+        "Ingresa a tu Portal del Reciclador para revisar la solicitud y enviar tu cotización:\n"
+        f"{portal_rec}\n\n"
+        "La dirección exacta y los datos personales se muestran solo si tu cotización es seleccionada."
+    )
+
+    enviado=enviar_correo_resend(correo,asunto,texto=txt)
+    print(
+        'NEXI CONVOCATORIA EMAIL:',
+        'interesado=',it.get('id'),
+        'correo=',correo,
+        'enviado=',enviado,
+    )
+    return enviado
 
 def _conv_matches(sol):
     h=backend_headers()
