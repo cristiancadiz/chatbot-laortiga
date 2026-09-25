@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.8-3COT-24H"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.9-KILOS-RECICLADOS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -14526,28 +14526,70 @@ def _conv_reciclador_match_permitido(token_payload, match_id):
 
 
 @app.route('/public/recicladores/solicitudes',methods=['GET','OPTIONS'])
+@app.route('/public/recicladores/solicitudes',methods=['GET','OPTIONS'])
 def public_reciclador_solicitudes():
-    if request.method=='OPTIONS':return portal_json({'ok':True},204)
+    if request.method=='OPTIONS':
+        return portal_json({'ok':True},204)
+
     p=_conv_reciclador_token_leer(request.args.get('token'))
-    if not p:return portal_json({'ok':False,'error':'Acceso de reciclador inválido o vencido'},401)
+    if not p:
+        return portal_json({'ok':False,'error':'Acceso de reciclador inválido o vencido'},401)
+
     h=backend_headers()
     r=requests.get(
-        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',headers=h,
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_matches',
+        headers=h,
         params={
             'select':'id,estado,notificado_at,created_at,solicitud_id,nexi_convocatorias_solicitudes(*)',
-            'empresa_id':f"eq.{p.get('empresa_id')}",'interesado_id':f"eq.{p.get('interesado_id')}",
-            'order':'created_at.desc','limit':'200',
-        },timeout=SUPABASE_TIMEOUT,
+            'empresa_id':f"eq.{p.get('empresa_id')}",
+            'interesado_id':f"eq.{p.get('interesado_id')}",
+            'order':'created_at.desc',
+            'limit':'500',
+        },
+        timeout=SUPABASE_TIMEOUT,
     )
-    r.raise_for_status();rows=r.json() if r.content else []
+    r.raise_for_status()
+    rows=r.json() if r.content else []
+
     salida=[]
+    kilos_total=0.0
+    retiros_completados=0
+
     for row in rows:
-        x=dict(row);sol=_conv_fotos_expandir(x.get('nexi_convocatorias_solicitudes') or {})
+        x=dict(row)
+        sol=_conv_fotos_expandir(x.get('nexi_convocatorias_solicitudes') or {})
+
+        # Solo contabilizar kilos reales de retiros ganados por este reciclador
+        # y posteriormente marcados como completados.
+        if (
+            str(x.get('estado') or '').lower()=='tomada'
+            and str(sol.get('estado') or '').lower()=='completada'
+        ):
+            try:
+                kg=float(sol.get('peso_final_kg') or 0)
+            except Exception:
+                kg=0.0
+            if kg > 0:
+                kilos_total += kg
+            retiros_completados += 1
+
         if str(x.get('estado') or '').lower()!='tomada':
             for k in ['direccion_retiro','telefono','nombre','apellido','conversacion_id','latitud','longitud']:
                 sol.pop(k,None)
-        x['solicitud']=sol;x.pop('nexi_convocatorias_solicitudes',None);salida.append(x)
-    return portal_json({'ok':True,'solicitudes':salida,'interesado_id':p.get('interesado_id')})
+
+        x['solicitud']=sol
+        x.pop('nexi_convocatorias_solicitudes',None)
+        salida.append(x)
+
+    return portal_json({
+        'ok':True,
+        'solicitudes':salida,
+        'interesado_id':p.get('interesado_id'),
+        'estadisticas':{
+            'kilos_reciclados':round(kilos_total,2),
+            'retiros_completados':retiros_completados,
+        },
+    })
 
 
 @app.route('/public/recicladores/match/<match_id>',methods=['GET','OPTIONS'])
@@ -14577,6 +14619,88 @@ def public_reciclador_mensaje(match_id):
     if not p:return portal_json({'ok':False,'error':'Acceso inválido o vencido'},401)
     if not _conv_reciclador_match_permitido(p,match_id):return portal_json({'ok':False,'error':'Solicitud no autorizada'},403)
     return public_conv_match_mensaje(match_id)
+
+
+@app.route('/public/recicladores/match/<match_id>/completar',methods=['POST','OPTIONS'])
+def public_reciclador_completar(match_id):
+    if request.method=='OPTIONS':
+        return portal_json({'ok':True},204)
+
+    d=request.get_json(silent=True) or {}
+    p=_conv_reciclador_token_leer(d.get('token'))
+    if not p:
+        return portal_json({'ok':False,'error':'Acceso inválido o vencido'},401)
+    if not _conv_reciclador_match_permitido(p,match_id):
+        return portal_json({'ok':False,'error':'Solicitud no autorizada'},403)
+
+    row=_conv_match_row(match_id)
+    if not row:
+        return portal_json({'ok':False,'error':'Solicitud no encontrada'},404)
+    if str(row.get('estado') or '').lower()!='tomada':
+        return portal_json({
+            'ok':False,
+            'error':'Solo el reciclador cuya cotización fue seleccionada puede finalizar este retiro.',
+        },403)
+
+    sol=dict(row.get('nexi_convocatorias_solicitudes') or {})
+    sid=str(sol.get('id') or row.get('solicitud_id') or '').strip()
+    eid=str(sol.get('empresa_id') or row.get('empresa_id') or '').strip()
+
+    if str(sol.get('estado') or '').lower()=='completada':
+        return portal_json({
+            'ok':True,
+            'mensaje':'Este retiro ya estaba marcado como completado.',
+            'solicitud':sol,
+        })
+
+    try:
+        kilos=float(d.get('peso_final_kg'))
+    except Exception:
+        return portal_json({'ok':False,'error':'Ingresa la cantidad real de kilos reciclados.'},400)
+
+    if kilos <= 0 or kilos > 1000000:
+        return portal_json({'ok':False,'error':'La cantidad de kilos debe ser mayor a 0.'},400)
+
+    ahora=datetime.now(pytz.UTC).isoformat()
+    detalle=str(d.get('resultado_detalle') or '').strip()[:2000]
+
+    h=backend_headers()
+    r=requests.patch(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
+        headers={**h,'Prefer':'return=representation'},
+        params={
+            'id':f'eq.{sid}',
+            'empresa_id':f'eq.{eid}',
+        },
+        json={
+            'estado':'completada',
+            'peso_final_kg':round(kilos,2),
+            'resultado_detalle':detalle,
+            'completada_at':ahora,
+            'updated_at':ahora,
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows=r.json() if r.content else []
+    actualizada=rows[0] if rows else sol
+
+    conv_id=str(actualizada.get('conversacion_id') or '')
+    if conv_id:
+        print(
+            'LAORTIGA RETIRO COMPLETADO:',
+            'solicitud=',sid,
+            'match=',match_id,
+            'reciclador=',p.get('interesado_id'),
+            'kg=',round(kilos,2),
+        )
+
+    return portal_json({
+        'ok':True,
+        'mensaje':f'Retiro completado. Se sumaron {round(kilos,2):g} kg a tu historial.',
+        'solicitud':actualizada,
+        'kilos_sumados':round(kilos,2),
+    },200)
 
 def _conv_portal_empresa():
     """
