@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.23-FIX-DESTINO-WHATSAPP"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.24-VERIFICAR-SENDER-TWILIO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -9621,13 +9621,40 @@ def enviar_twilio_texto(destino, texto):
         to=to_value,
     )
 
+    # Verificación real contra Twilio: no confiar solo en el valor que enviamos.
+    # Recuperamos el mensaje recién creado y comprobamos el remitente que Twilio
+    # registró efectivamente para ese MessageSid.
+    real_msg = msg
+    try:
+        real_msg = cliente.messages(getattr(msg, "sid", "")).fetch()
+    except Exception as fetch_error:
+        print("TWILIO PORTAL VERIFY WARN:", repr(fetch_error))
+
+    real_from = str(getattr(real_msg, "from_", "") or "").strip()
+    real_to = str(getattr(real_msg, "to", "") or "").strip()
+    real_status = str(getattr(real_msg, "status", "") or "").strip()
+    real_service = str(getattr(real_msg, "messaging_service_sid", "") or "").strip()
+
     print(
         "TWILIO PORTAL SEND OK:",
         empresa_id,
-        "from=", from_value,
-        "to=", to_value,
+        "requested_from=", from_value,
+        "twilio_from=", real_from,
+        "twilio_to=", real_to,
+        "status=", real_status,
+        "messaging_service_sid=", real_service or "(ninguno)",
         "sid=", getattr(msg, "sid", ""),
     )
+
+    # Para La Ortiga, abortar si Twilio informa un remitente distinto al oficial.
+    if empresa_id == LAORTIGA_EMPRESA_ID:
+        oficial = str(LAORTIGA_TWILIO_WHATSAPP_FROM or "").strip()
+        if real_from and real_from != oficial:
+            raise RuntimeError(
+                f"Twilio registró un remitente distinto al oficial de La Ortiga: "
+                f"{real_from} (esperado {oficial})"
+            )
+
     return msg
 
 # ============================================================
