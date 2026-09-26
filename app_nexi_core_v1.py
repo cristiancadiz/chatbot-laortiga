@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.21-EDITAR-RECICLADORES"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.22-SENDER-PORTAL-LAORTIGA"
 load_dotenv()
 
 app = Flask(__name__)
@@ -226,6 +226,12 @@ LAORTIGA_EJECUTIVO_EMAIL = os.getenv(
 LAORTIGA_RECICLADOR_PORTAL_URL = os.getenv(
     "LAORTIGA_RECICLADOR_PORTAL_URL",
     f"{PORTAL_ORIGIN}/reciclador.html",
+).strip()
+
+# WhatsApp dedicado de La Ortiga para respuestas manuales desde el portal.
+LAORTIGA_TWILIO_WHATSAPP_FROM = os.getenv(
+    "LAORTIGA_TWILIO_WHATSAPP_FROM",
+    "whatsapp:+56971906724",
 ).strip()
 
 
@@ -9581,11 +9587,48 @@ def whatsapp_webhook():
 # ============================================================
 
 def enviar_twilio_texto(destino, texto):
-    cc=cfg("canal_config",{}) or {};sid=secret_from_env(cc.get("account_sid_env"),TWILIO_ACCOUNT_SID);token=secret_from_env(cc.get("auth_token_env"),TWILIO_AUTH_TOKEN);sender=str(cc.get("sender") or TWILIO_WHATSAPP_FROM or "").strip()
-    if not sid or not token or not sender:raise RuntimeError("Falta configuración Twilio de la empresa")
-    cliente=TwilioClient(sid,token);destino=re.sub(r"\D","",str(destino or ""));to_value=f"whatsapp:+{destino}";from_value=sender if sender.startswith("whatsapp:") else f"whatsapp:{sender}"
-    msg=cliente.messages.create(body=texto,from_=from_value,to=to_value);print("TWILIO PORTAL SEND OK:",empresa_actual_id(),to_value,getattr(msg,"sid",""));return msg
+    cc = cfg("canal_config", {}) or {}
+    sid = secret_from_env(cc.get("account_sid_env"), TWILIO_ACCOUNT_SID)
+    token = secret_from_env(cc.get("auth_token_env"), TWILIO_AUTH_TOKEN)
 
+    empresa_id = str(empresa_actual_id() or "").strip()
+
+    # La Ortiga siempre responde desde su número dedicado.
+    # No heredar sender antiguo/global de Nexia para esta empresa.
+    if empresa_id == LAORTIGA_EMPRESA_ID:
+        sender = str(LAORTIGA_TWILIO_WHATSAPP_FROM or "").strip()
+    else:
+        sender = str(cc.get("sender") or TWILIO_WHATSAPP_FROM or "").strip()
+
+    if not sid or not token or not sender:
+        raise RuntimeError("Falta configuración Twilio de la empresa")
+
+    destino = re.sub(r"\\D", "", str(destino or ""))
+    to_value = f"whatsapp:+{destino}"
+    from_value = sender if sender.startswith("whatsapp:") else f"whatsapp:{sender}"
+
+    print(
+        "TWILIO PORTAL ROUTING:",
+        "empresa=", empresa_id,
+        "from=", from_value,
+        "to=", to_value,
+    )
+
+    cliente = TwilioClient(sid, token)
+    msg = cliente.messages.create(
+        body=texto,
+        from_=from_value,
+        to=to_value,
+    )
+
+    print(
+        "TWILIO PORTAL SEND OK:",
+        empresa_id,
+        "from=", from_value,
+        "to=", to_value,
+        "sid=", getattr(msg, "sid", ""),
+    )
+    return msg
 
 # ============================================================
 # GUPSHUP WHATSAPP - ENVÍO + WEBHOOK EN PARALELO
