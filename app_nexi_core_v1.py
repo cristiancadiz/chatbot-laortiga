@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-COTIZACIONES-V3.17-LINKS-BOTON-OCULTOS"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.18-PORTAL-RECICLADOR-EJECUTIVO-EMAIL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -215,6 +215,18 @@ RESEND_FROM_EMAIL = os.getenv(
 # Correo general de respaldo.
 # Cada empresa puede definir su propio correo_ejecutivo en configuracion_bot.
 EJECUTIVO_EMAIL = os.getenv("EJECUTIVO_EMAIL", "afernandez@laortiga.cl").strip()
+
+# Configuración específica de La Ortiga Recicla.
+# Evita que el menú de recicladores herede por error el Portal Nexia genérico.
+LAORTIGA_EJECUTIVO_EMAIL = os.getenv(
+    "LAORTIGA_EJECUTIVO_EMAIL",
+    "afernandez@laortiga.cl",
+).strip()
+
+LAORTIGA_RECICLADOR_PORTAL_URL = os.getenv(
+    "LAORTIGA_RECICLADOR_PORTAL_URL",
+    f"{PORTAL_ORIGIN}/reciclador.html",
+).strip()
 
 
 # 0=lunes ... 5=sábado. Domingo cerrado.
@@ -8575,7 +8587,7 @@ LAORTIGA_CTA_DEFS = {
         "title": "Abrir mi portal",
         "body": "♻️ Abre tu Portal del Reciclador para revisar oportunidades, cotizaciones y retiros.",
         "route": "reciclador",
-        "env_sid": "LAORTIGA_CTA_PORTAL_SID",
+        "env_sid": "LAORTIGA_CTA_RECICLADOR_SID",
     },
     "cot_solicitud": {
         "title": "Ver cotizaciones",
@@ -8728,7 +8740,11 @@ def laortiga_link_registro_redirect(token):
 
 @app.route("/l/reciclador/<path:token>", methods=["GET"])
 def laortiga_link_reciclador_redirect(token):
-    return redirect(f"{RECICLADOR_PORTAL_URL}?token={quote(token, safe='')}", code=302)
+    # Siempre al Portal del Reciclador de La Ortiga, nunca al Portal Nexia genérico.
+    return redirect(
+        f"{LAORTIGA_RECICLADOR_PORTAL_URL}?token={quote(token, safe='')}",
+        code=302,
+    )
 
 
 @app.route("/l/cotizaciones/<path:token>", methods=["GET"])
@@ -8918,7 +8934,90 @@ def _laortiga_link_portal_reciclador(telefono):
     if not inter:
         return None
     tok = _conv_reciclador_token_crear(LAORTIGA_EMPRESA_ID, inter.get("id"))
-    return f"{RECICLADOR_PORTAL_URL}?token={quote(tok)}"
+    return f"{LAORTIGA_RECICLADOR_PORTAL_URL}?token={quote(tok)}"
+
+
+
+def _laortiga_notificar_ejecutivo_explicito(telefono):
+    """
+    Notificación específica para la opción 5 de La Ortiga.
+
+    Se envía SIEMPRE que la persona pulsa "Hablar con ejecutivo",
+    incluso si la conversación ya estaba en modo ejecutivo.
+    Esto evita que la lógica genérica bot->ejecutivo suprima el correo.
+    """
+    activar_por_empresa(
+        LAORTIGA_EMPRESA_ID,
+        canal="whatsapp",
+        provider="twilio",
+    )
+
+    conversacion = obtener_conversacion_por_identificador(telefono, "whatsapp") or {}
+    conversacion_id = str(conversacion.get("id") or "").strip()
+
+    if conversacion_id:
+        try:
+            establecer_modo_atencion(conversacion_id, "ejecutivo")
+        except Exception as e:
+            print("LAORTIGA EJECUTIVO MODO WARN:", repr(e))
+
+    destinatario = str(LAORTIGA_EJECUTIVO_EMAIL or EJECUTIVO_EMAIL or "").strip()
+    if not destinatario:
+        print("LAORTIGA EJECUTIVO EMAIL ERROR: destinatario no configurado")
+        return False
+
+    portal_url = f"{PORTAL_ORIGIN}/portal.html"
+    if conversacion_id:
+        portal_url += (
+            "?conversacion="
+            + quote(conversacion_id, safe="")
+            + "&accion=tomar"
+        )
+
+    telefono_limpio = re.sub(r"\D", "", str(telefono or ""))
+    asunto = "🔔 Cliente solicita hablar con un ejecutivo — La Ortiga Recicla"
+
+    texto = (
+        "Un cliente solicitó atención de un ejecutivo desde WhatsApp.\n\n"
+        f"Empresa: La Ortiga Recicla\n"
+        f"WhatsApp cliente: +{telefono_limpio}\n"
+        f"Conversación: {conversacion_id or 'No disponible'}\n\n"
+        f"Abrir conversación:\n{portal_url}"
+    )
+
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:620px;margin:auto;color:#17231d">
+      <h2>🔔 Cliente solicita atención</h2>
+      <p>Una persona seleccionó <strong>Hablar con un ejecutivo</strong> en La Ortiga Recicla.</p>
+      <div style="background:#f3f7f4;border:1px solid #d7e2da;border-radius:12px;padding:16px">
+        <p><strong>WhatsApp:</strong> +{html.escape(telefono_limpio)}</p>
+        <p><strong>Conversación:</strong> {html.escape(conversacion_id or "No disponible")}</p>
+      </div>
+      <p style="margin-top:20px">
+        <a href="{html.escape(portal_url)}"
+           style="display:inline-block;background:#173d22;color:white;text-decoration:none;padding:12px 18px;border-radius:9px">
+          Abrir conversación
+        </a>
+      </p>
+    </div>
+    """
+
+    print(
+        "LAORTIGA EJECUTIVO EMAIL:",
+        "destinatario=", destinatario,
+        "conversacion=", conversacion_id or "(sin id)",
+    )
+
+    ok = enviar_correo_resend(
+        destinatario,
+        asunto,
+        texto=texto,
+        html_body=html_body,
+    )
+
+    print("LAORTIGA EJECUTIVO EMAIL RESULTADO:", ok)
+    return bool(ok)
+
 
 
 def _laortiga_responder_opcion(twiml, telefono, opcion, texto_original):
@@ -8977,14 +9076,13 @@ def _laortiga_responder_opcion(twiml, telefono, opcion, texto_original):
             )
 
         if opcion == "laortiga:ejecutivo":
-            derivar_a_ejecutivo(
-                telefono,
-                "whatsapp",
-                estado={"nombre": "Cliente La Ortiga"},
-                motivo="Solicita hablar con un ejecutivo desde el menú La Ortiga Recicla",
-            )
+            email_ok = _laortiga_notificar_ejecutivo_explicito(telefono)
+            if email_ok:
+                return enviar(
+                    "👤 Listo. Avisé al equipo de La Ortiga para que continúe la conversación contigo por aquí."
+                )
             return enviar(
-                "👤 Listo. Avisé al equipo de La Ortiga para que continúe la conversación contigo por aquí."
+                "👤 Dejé tu conversación en atención humana. El equipo de La Ortiga podrá continuar contigo por aquí."
             )
 
         print("LAORTIGA OPCION NO RECONOCIDA:", repr(opcion))
