@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.25-EMAIL-PORTAL-BACKEND-CORRECTO"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.26-RESTAURA-CONV-PORTAL-EMPRESA"
 load_dotenv()
 
 app = Flask(__name__)
@@ -15241,6 +15241,47 @@ def public_reciclador_completar(match_id):
         'mensaje':'Retiro completado correctamente.',
         'solicitud':_conv_fotos_expandir(actualizada),
     })
+
+
+
+def _conv_portal_empresa():
+    """
+    Empresa efectiva para el módulo Convocatorias.
+
+    - Usuario normal: siempre su propia empresa.
+    - Superadmin: puede enviar X-Nexia-Empresa-ID para trabajar sobre una
+      empresa concreta. Si no lo envía, usa la empresa de su perfil.
+    """
+    p=portal_usuario_autorizado()
+    if not p:
+        return (None,None)
+
+    eid=str((p or {}).get('empresa_id') or '').strip()
+
+    if es_superadmin(p):
+        solicitado=str(request.headers.get('X-Nexia-Empresa-ID') or '').strip()
+        if solicitado:
+            try:
+                r=requests.get(
+                    f'{SUPABASE_URL}/rest/v1/empresas',
+                    headers=backend_headers(),
+                    params={
+                        'select':'id',
+                        'id':f'eq.{solicitado}',
+                        'limit':'1',
+                    },
+                    timeout=SUPABASE_TIMEOUT,
+                )
+                r.raise_for_status()
+                rows=r.json() if r.content else []
+                if rows:
+                    eid=solicitado
+                else:
+                    print('NEXI CONVOCATORIAS SCOPE WARN: empresa inexistente', solicitado)
+            except Exception as e:
+                print('NEXI CONVOCATORIAS SCOPE ERROR:',repr(e))
+
+    return (p,eid)
 
 
 @app.route('/portal/convocatorias/config',methods=['GET','POST','OPTIONS'])
