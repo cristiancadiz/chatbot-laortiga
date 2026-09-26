@@ -1,5 +1,4 @@
-httpx==0.24.0
-openai==1.0.0
+openai==3.19.2
 Flask==2.3.2
 requests
 numpy
