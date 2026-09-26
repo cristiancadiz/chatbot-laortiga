@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-COTIZACIONES-V3.15-FECHA-PREFERENCIA"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-COTIZACIONES-V3.16-COTIZACION-POST-SIMPLE"
 load_dotenv()
 
 app = Flask(__name__)
@@ -15303,7 +15303,12 @@ def public_reciclador_cotizacion(match_id):
     if request.method=='OPTIONS':
         return portal_json({'ok':True},204)
 
-    token=request.args.get('token') if request.method=='GET' else (request.get_json(silent=True) or {}).get('token')
+    if request.method=='GET':
+        token=request.args.get('token')
+    else:
+        entrada=request.get_json(silent=True) if request.is_json else request.form.to_dict(flat=True)
+        entrada=entrada or {}
+        token=entrada.get('token')
     p=_conv_reciclador_token_leer(token)
     if not p:
         return portal_json({'ok':False,'error':'Acceso inválido o vencido'},401)
@@ -15329,7 +15334,7 @@ def public_reciclador_cotizacion(match_id):
             'recepcion':estado,
         })
 
-    d=request.get_json(silent=True) or {}
+    d=entrada if request.method=='POST' else {}
 
     if str(row.get('estado') or '').lower() in {'tomada','cerrada'}:
         return portal_json({'ok':False,'error':'La persona ya seleccionó una propuesta. Esta solicitud está cerrada.'},409)
@@ -15400,9 +15405,17 @@ def public_reciclador_cotizacion(match_id):
         f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_cotizaciones',
         headers=h,params={'on_conflict':'match_id'},json=payload,timeout=SUPABASE_TIMEOUT,
     )
-    r.raise_for_status()
+    if not r.ok:
+        detalle=(r.text or '')[:1800]
+        print('LAORTIGA COTIZACION SUPABASE ERROR:',r.status_code,detalle)
+        return portal_json({
+            'ok':False,
+            'error':'No se pudo guardar la cotización.',
+            'detalle':detalle,
+        },502)
     rows=r.json() if r.content else []
     cot=rows[0] if rows else payload
+    print('LAORTIGA COTIZACION GUARDADA:', 'match=',match_id, 'cotizacion=',cot.get('id'), 'modalidad=',modalidad, 'monto=',monto_total)
 
     nuevo_estado=_cot_estado_recepcion(sol)
 
