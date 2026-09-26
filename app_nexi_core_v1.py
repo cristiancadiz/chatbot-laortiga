@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.13-FIX-DEPLOY"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.14-FORM-ERROR-FIX"
 load_dotenv()
 
 app = Flask(__name__)
@@ -10322,6 +10322,15 @@ def portal_json(payload, status=200):
     return portal_cors_response(response), status
 
 
+@app.after_request
+def _nexia_global_cors(response):
+    """Aplica CORS también a errores Flask no convertidos a portal_json."""
+    try:
+        return portal_cors_response(response)
+    except Exception:
+        return response
+
+
 def portal_usuario_autorizado():
     """
     Valida acceso al Portal. Soporta:
@@ -14130,7 +14139,20 @@ def public_conv_solicitudes():
         f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
         headers={**h,'Prefer':'return=representation'},json=payload,timeout=SUPABASE_TIMEOUT
     )
-    r.raise_for_status();rows=r.json() if r.content else []
+    if not r.ok:
+        detalle=(r.text or '')[:1800]
+        print('LAORTIGA SOLICITUD SUPABASE ERROR:',r.status_code,detalle)
+        if 'cantidad_aprox' in detalle or 'requiere_certificado_reciclaje' in detalle:
+            return portal_json({
+                'ok':False,
+                'error':'Falta aplicar la migración de Supabase para cantidad aproximada/certificado de reciclaje.'
+            },500)
+        return portal_json({
+            'ok':False,
+            'error':'No fue posible guardar la solicitud. Revisa el log de Render.',
+            'detalle':detalle,
+        },502)
+    rows=r.json() if r.content else []
     if not rows:return portal_json({'ok':False,'error':'No se creó la solicitud'},500)
     sol=rows[0]
 
