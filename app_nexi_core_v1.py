@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.27-HUMANO-12H-SIN-BOT"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.28-HUMANO-ANTES-MENU"
 load_dotenv()
 
 app = Flask(__name__)
@@ -9230,10 +9230,34 @@ def whatsapp_webhook():
 
         # ------------------------------------------------------------
         # LA ORTIGA RECICLA: flujo 100% guiado, SIN IA.
-        # Toda entrada que no pertenezca a un retiro humano adjudicado
-        # se resuelve aquí y retorna antes de cualquier motor Core/IA.
+        #
+        # IMPORTANTE V3.28:
+        # La atención humana se comprueba ANTES de interpretar opciones
+        # o volver a enviar el menú. Si la conversación está en modo
+        # ejecutivo, el mensaje entrante solo se registra en el portal
+        # y NO se envía ninguna respuesta automática.
         # ------------------------------------------------------------
         if LAORTIGA_SIN_IA or LAORTIGA_MENU_ACTIVO:
+            activar_por_empresa(
+                LAORTIGA_EMPRESA_ID,
+                canal="whatsapp",
+                provider="twilio",
+            )
+
+            modo_laortiga = obtener_modo_atencion(telefono, "whatsapp")
+            if modo_laortiga == "ejecutivo":
+                _laortiga_guardar_entrada(
+                    telefono,
+                    texto or request.form.get("ButtonText") or texto_procesado or "",
+                )
+                print(
+                    "LAORTIGA MODO HUMANO: mensaje registrado, BOT_BLOQUEADO",
+                    telefono,
+                )
+                return str(twiml), 200, {
+                    "Content-Type": "application/xml; charset=utf-8"
+                }
+
             opcion_laortiga = _laortiga_normalizar_opcion(request.form, texto)
 
             if opcion_laortiga:
