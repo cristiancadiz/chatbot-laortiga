@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.20-RESPALDO-DESCARGA-ADMIN"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.21-EDITAR-RECICLADORES"
 load_dotenv()
 
 app = Flask(__name__)
@@ -15305,20 +15305,20 @@ def portal_conv_interesados():
     pay={'empresa_id':eid,'nombre':str(d.get('nombre') or '')[:120],'apellido':str(d.get('apellido') or '')[:120],'telefono':re.sub(r'\D','',str(d.get('telefono') or '')),'correo':str(d.get('correo') or '')[:320],'tipos_producto':_conv_lista(d.get('tipos_producto')),'comunas':_conv_lista(d.get('comunas')),'dias_disponibles':_conv_lista(d.get('dias_disponibles')),'horarios':_conv_lista(d.get('horarios')),'medio_transporte':str(d.get('medio_transporte') or '')[:120],'capacidad':str(d.get('capacidad') or '')[:120],'aporte_minimo':d.get('aporte_minimo') if d.get('aporte_minimo') not in ('',None) else None,'acepta_retiro_sin_aporte':bool(d.get('acepta_retiro_sin_aporte',True)),'activo':True,'latitud':ubicacion[0] if ubicacion else None,'longitud':ubicacion[1] if ubicacion else None,'radio_km':radio,'updated_at':datetime.now(pytz.UTC).isoformat()};r=requests.post(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',headers={**h,'Prefer':'return=representation'},json=pay,timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];inter=rows[0] if rows else pay;ptok=_conv_reciclador_token_crear(eid,inter.get('id'));return portal_json({'ok':True,'interesado':inter,'portal_reciclador_url':f'{RECICLADOR_PORTAL_URL}?token={quote(ptok)}'},201)
 
 @app.route('/portal/convocatorias/interesados/<iid>',methods=['PATCH','OPTIONS'])
-def portal_conv_interesado_radio_update(iid):
+def portal_conv_interesado_update(iid):
     if request.method=='OPTIONS':
         return portal_json({'ok':True},204)
+
     p,eid=_conv_portal_empresa()
     if not p or not eid:
         return portal_json({'ok':False,'error':'Sesión no autorizada'},401)
+
     d=request.get_json(silent=True) or {}
-    campos=set(d.keys())
-    if campos == {'radio_km'}:
-        try:
-            cambios={'radio_km':_conv_radio_km(d.get('radio_km'))}
-        except ValueError as e:
-            return portal_json({'ok':False,'error':str(e)},400)
-    elif campos == {'latitud','longitud','consentimiento_ubicacion'}:
+    if not isinstance(d,dict) or not d:
+        return portal_json({'ok':False,'error':'No hay cambios para guardar'},400)
+
+    # GPS: mantener la protección existente.
+    if set(d.keys()) == {'latitud','longitud','consentimiento_ubicacion'}:
         if d.get('consentimiento_ubicacion') is not True:
             return portal_json({'ok':False,'error':'Falta autorización de ubicación'},400)
         try:
@@ -15329,8 +15329,74 @@ def portal_conv_interesado_radio_update(iid):
             return portal_json({'ok':False,'error':'Se requieren ambas coordenadas'},400)
         cambios={'latitud':pos[0],'longitud':pos[1]}
     else:
-        return portal_json({'ok':False,'error':'Solo se permite cambiar el radio o la ubicación autorizada'},400)
-    # Nunca actualizar un registro de otra empresa: filtrar por ID y empresa.
+        permitidos={
+            'nombre','apellido','telefono','correo',
+            'tipos_producto','comunas',
+            'dias_disponibles','horarios',
+            'medio_transporte','capacidad',
+            'entrega_certificado_reciclaje',
+            'activo','radio_km'
+        }
+        desconocidos=set(d.keys())-permitidos
+        if desconocidos:
+            return portal_json({
+                'ok':False,
+                'error':'Campos no permitidos: '+', '.join(sorted(desconocidos))
+            },400)
+
+        cambios={}
+
+        if 'nombre' in d:
+            nombre=str(d.get('nombre') or '').strip()
+            if not nombre:
+                return portal_json({'ok':False,'error':'El nombre es obligatorio'},400)
+            cambios['nombre']=nombre[:120]
+
+        if 'apellido' in d:
+            cambios['apellido']=str(d.get('apellido') or '').strip()[:120]
+
+        if 'telefono' in d:
+            telefono=re.sub(r'\D','',str(d.get('telefono') or ''))
+            if not telefono:
+                return portal_json({'ok':False,'error':'El teléfono es obligatorio'},400)
+            cambios['telefono']=telefono
+
+        if 'correo' in d:
+            correo=str(d.get('correo') or '').strip()
+            if not correo:
+                return portal_json({'ok':False,'error':'El correo es obligatorio'},400)
+            cambios['correo']=correo[:320]
+
+        if 'tipos_producto' in d:
+            cambios['tipos_producto']=_conv_lista(d.get('tipos_producto'))
+
+        if 'comunas' in d:
+            cambios['comunas']=_conv_lista(d.get('comunas'))
+
+        if 'dias_disponibles' in d:
+            cambios['dias_disponibles']=_conv_lista(d.get('dias_disponibles'))
+
+        if 'horarios' in d:
+            cambios['horarios']=_conv_lista(d.get('horarios'))
+
+        if 'medio_transporte' in d:
+            cambios['medio_transporte']=str(d.get('medio_transporte') or '').strip()[:120]
+
+        if 'capacidad' in d:
+            cambios['capacidad']=str(d.get('capacidad') or '').strip()[:120]
+
+        if 'entrega_certificado_reciclaje' in d:
+            cambios['entrega_certificado_reciclaje']=bool(d.get('entrega_certificado_reciclaje'))
+
+        if 'activo' in d:
+            cambios['activo']=bool(d.get('activo'))
+
+        if 'radio_km' in d:
+            try:
+                cambios['radio_km']=_conv_radio_km(d.get('radio_km'))
+            except ValueError as e:
+                return portal_json({'ok':False,'error':str(e)},400)
+
     r=requests.patch(
         f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_interesados',
         headers={**backend_headers(),'Prefer':'return=representation'},
@@ -15338,10 +15404,21 @@ def portal_conv_interesado_radio_update(iid):
         json={**cambios,'updated_at':datetime.now(pytz.UTC).isoformat()},
         timeout=SUPABASE_TIMEOUT,
     )
-    r.raise_for_status()
+
+    if not r.ok:
+        print('LAORTIGA INTERESADO UPDATE ERROR:',r.status_code,r.text[:1200])
+        return portal_json({'ok':False,'error':'No fue posible actualizar el reciclador'},502)
+
     rows=r.json() if r.content else []
     if not rows:
         return portal_json({'ok':False,'error':'Reciclador no encontrado'},404)
+
+    print(
+        'LAORTIGA INTERESADO ACTUALIZADO:',
+        iid,
+        'campos=',','.join(sorted(cambios.keys()))
+    )
+
     return portal_json({'ok':True,'interesado':rows[0]})
 
 
