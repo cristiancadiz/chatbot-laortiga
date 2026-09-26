@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.19-RESPALDO-FINAL"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.20-RESPALDO-DESCARGA-ADMIN"
 load_dotenv()
 
 app = Flask(__name__)
@@ -15358,6 +15358,44 @@ def portal_conv_solicitudes():
     p,eid=_conv_portal_empresa()
     if not p or not eid:return portal_json({'ok':False,'error':'Sesión no autorizada'},401)
     r=requests.get(f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',headers=backend_headers(),params={'select':'*,nexi_convocatorias_interesados(id,nombre,apellido,telefono,correo)','empresa_id':f'eq.{eid}','order':'created_at.desc','limit':'500'},timeout=SUPABASE_TIMEOUT);r.raise_for_status();rows=r.json() if r.content else [];return portal_json({'ok':True,'solicitudes':[_conv_fotos_expandir(x) for x in rows]})
+
+
+@app.route('/portal/convocatorias/solicitudes/<sid>/respaldo', methods=['GET','OPTIONS'])
+def portal_conv_solicitud_respaldo(sid):
+    if request.method=='OPTIONS':
+        return portal_json({'ok':True},204)
+
+    p,eid=_conv_portal_empresa()
+    if not p or not eid:
+        return portal_json({'ok':False,'error':'Sesión no autorizada'},401)
+
+    r=requests.get(
+        f'{SUPABASE_URL}/rest/v1/nexi_convocatorias_solicitudes',
+        headers=backend_headers(),
+        params={
+            'select':'id,respaldo_final_path,respaldo_final_nombre',
+            'id':f'eq.{sid}',
+            'empresa_id':f'eq.{eid}',
+            'limit':'1',
+        },
+        timeout=SUPABASE_TIMEOUT,
+    )
+    r.raise_for_status()
+    rows=r.json() if r.content else []
+    if not rows:
+        return portal_json({'ok':False,'error':'Solicitud no encontrada'},404)
+
+    sol=rows[0]
+    path=str(sol.get('respaldo_final_path') or '').strip()
+    if not path:
+        return portal_json({'ok':False,'error':'Esta solicitud no tiene respaldo adjunto'},404)
+
+    signed=_conv_foto_signed_url(path, expires=300)
+    if not signed:
+        return portal_json({'ok':False,'error':'No fue posible generar el enlace de descarga'},502)
+
+    return redirect(signed, code=302)
+
 
 @app.route('/portal/convocatorias/solicitudes/<sid>',methods=['PATCH','OPTIONS'])
 def portal_conv_solicitud_patch(sid):
