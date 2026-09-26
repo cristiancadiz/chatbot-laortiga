@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.24-VERIFICAR-SENDER-TWILIO"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.25-EMAIL-PORTAL-BACKEND-CORRECTO"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8972,10 +8972,18 @@ def _laortiga_notificar_ejecutivo_explicito(telefono):
         print("LAORTIGA EJECUTIVO EMAIL ERROR: destinatario no configurado")
         return False
 
-    portal_url = f"{PORTAL_ORIGIN}/portal.html"
+    # El enlace enviado por correo fuerza explícitamente el backend
+    # dedicado de La Ortiga Recicla. Así, aunque exista una versión vieja
+    # del portal en caché o un portal general con otro backend por defecto,
+    # el ejecutivo siempre abrirá esta conversación contra el servicio correcto.
+    laortiga_api = "https://reciclaje-la-ortiga.onrender.com"
+    portal_url = (
+        f"{PORTAL_ORIGIN}/portal.html"
+        "?api=" + quote(laortiga_api, safe="")
+    )
     if conversacion_id:
         portal_url += (
-            "?conversacion="
+            "&conversacion="
             + quote(conversacion_id, safe="")
             + "&accion=tomar"
         )
