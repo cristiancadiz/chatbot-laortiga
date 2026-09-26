@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.18-PORTAL-RECICLADOR-EJECUTIVO-EMAIL"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.19-RESPALDO-FINAL"
 load_dotenv()
 
 app = Flask(__name__)
@@ -13737,6 +13737,7 @@ COTIZACIONES_TOKEN_HORAS = int(os.getenv('COTIZACIONES_TOKEN_HORAS','72'))
 CONVOCATORIAS_FOTOS_BUCKET = os.getenv('CONVOCATORIAS_FOTOS_BUCKET','convocatorias').strip() or 'convocatorias'
 CONVOCATORIAS_FOTO_MAX_MB = int(os.getenv('CONVOCATORIAS_FOTO_MAX_MB','6'))
 CONVOCATORIAS_FOTO_MAX_CANTIDAD = int(os.getenv('CONVOCATORIAS_FOTO_MAX_CANTIDAD','4'))
+CONVOCATORIAS_RESPALDO_MAX_MB = int(os.getenv('CONVOCATORIAS_RESPALDO_MAX_MB','10'))
 
 def _conv_norm(v): return normalizar_texto(str(v or '')).strip()
 def _conv_lista(v):
@@ -13979,6 +13980,19 @@ def _conv_fotos_expandir(sol):
     paths=out.get('fotos') or []
     if not isinstance(paths,list):paths=[]
     out['fotos']=[{'path':str(x),'url':_conv_foto_signed_url(x)} for x in paths if str(x or '').strip()]
+
+    respaldo_path=str(out.get('respaldo_final_path') or '').strip()
+    if respaldo_path:
+        out['respaldo_final']={
+            'path':respaldo_path,
+            'url':_conv_foto_signed_url(respaldo_path, expires=3600),
+            'nombre':str(out.get('respaldo_final_nombre') or 'Documento de respaldo'),
+            'mime':str(out.get('respaldo_final_mime') or ''),
+            'tamano_bytes':out.get('respaldo_final_tamano_bytes'),
+            'subido_at':out.get('respaldo_final_subido_at'),
+        }
+    else:
+        out['respaldo_final']=None
     return out
 
 def _conv_trigger_coincide(config,texto):
@@ -14976,12 +14990,76 @@ def public_reciclador_mensaje(match_id):
     return public_conv_match_mensaje(match_id)
 
 
+
+def _conv_respaldo_final_guardar(eid, sid, archivo):
+    """
+    Guarda un único respaldo final en el bucket privado de convocatorias.
+    Permitidos: PDF, JPG/JPEG, PNG, WEBP. Máximo configurable (10 MB por defecto).
+    """
+    if not archivo or not getattr(archivo, 'filename', ''):
+        return None
+
+    mime=str(getattr(archivo,'mimetype','') or '').lower().strip()
+    permitidos={
+        'application/pdf':'pdf',
+        'image/jpeg':'jpg',
+        'image/png':'png',
+        'image/webp':'webp',
+    }
+    ext=permitidos.get(mime)
+    if not ext:
+        raise ValueError('Formato de respaldo no permitido. Usa PDF, JPG, PNG o WEBP.')
+
+    max_bytes=CONVOCATORIAS_RESPALDO_MAX_MB*1024*1024
+    data=archivo.read(max_bytes+1)
+    if not data:
+        raise ValueError('El archivo de respaldo está vacío.')
+    if len(data)>max_bytes:
+        raise ValueError(f'El archivo de respaldo debe pesar máximo {CONVOCATORIAS_RESPALDO_MAX_MB} MB.')
+
+    import uuid
+    now=datetime.now(pytz.UTC)
+    path=(
+        f'{eid}/respaldos-finales/{now.strftime("%Y/%m")}/'
+        f'{sid}-{uuid.uuid4().hex}.{ext}'
+    )
+
+    rr=requests.post(
+        f'{SUPABASE_URL}/storage/v1/object/{CONVOCATORIAS_FOTOS_BUCKET}/{path}',
+        headers={
+            'apikey':SUPABASE_SERVICE_ROLE_KEY,
+            'Authorization':f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
+            'Content-Type':mime,
+            'x-upsert':'false',
+        },
+        data=data,
+        timeout=SUPABASE_TIMEOUT,
+    )
+    if not rr.ok:
+        print('LAORTIGA RESPALDO UPLOAD ERROR:',rr.status_code,rr.text[:1200])
+        raise RuntimeError('No fue posible guardar el documento de respaldo.')
+
+    nombre_original=str(getattr(archivo,'filename','') or 'respaldo').strip()[:250]
+    return {
+        'path':path,
+        'nombre':nombre_original,
+        'mime':mime,
+        'tamano_bytes':len(data),
+        'subido_at':now.isoformat(),
+    }
+
+
 @app.route('/public/recicladores/match/<match_id>/completar',methods=['POST','OPTIONS'])
 def public_reciclador_completar(match_id):
     if request.method=='OPTIONS':
         return portal_json({'ok':True},204)
 
-    d=request.get_json(silent=True) or {}
+    # Compatible con JSON antiguo y multipart/form-data nuevo.
+    if request.files or request.form:
+        d=request.form.to_dict(flat=True)
+    else:
+        d=request.get_json(silent=True) or {}
+
     p=_conv_reciclador_token_leer(d.get('token'))
     if not p:
         return portal_json({'ok':False,'error':'Acceso inválido o vencido'},401)
@@ -15005,7 +15083,7 @@ def public_reciclador_completar(match_id):
         return portal_json({
             'ok':True,
             'mensaje':'Este retiro ya estaba marcado como completado.',
-            'solicitud':sol,
+            'solicitud':_conv_fotos_expandir(sol),
         })
 
     try:
@@ -15016,8 +15094,43 @@ def public_reciclador_completar(match_id):
     if kilos <= 0 or kilos > 1000000:
         return portal_json({'ok':False,'error':'La cantidad de kilos debe ser mayor a 0.'},400)
 
-    ahora=datetime.now(pytz.UTC).isoformat()
     detalle=str(d.get('resultado_detalle') or '').strip()[:2000]
+    archivo=request.files.get('respaldo_final') if request.files else None
+    requiere_cert=bool(sol.get('requiere_certificado_reciclaje'))
+    ya_tiene_respaldo=bool(str(sol.get('respaldo_final_path') or '').strip())
+
+    if requiere_cert and not archivo and not ya_tiene_respaldo:
+        return portal_json({
+            'ok':False,
+            'error':'Esta solicitud requiere certificado de reciclaje. Adjunta el documento o una imagen de respaldo antes de finalizar.',
+        },400)
+
+    respaldo=None
+    if archivo:
+        try:
+            respaldo=_conv_respaldo_final_guardar(eid,sid,archivo)
+        except ValueError as e:
+            return portal_json({'ok':False,'error':str(e)},400)
+        except Exception as e:
+            print('LAORTIGA RESPALDO FINAL ERROR:',repr(e))
+            return portal_json({'ok':False,'error':'No fue posible subir el documento de respaldo.'},502)
+
+    ahora=datetime.now(pytz.UTC).isoformat()
+    payload={
+        'estado':'completada',
+        'peso_final_kg':round(kilos,2),
+        'resultado_detalle':detalle,
+        'completada_at':ahora,
+        'updated_at':ahora,
+    }
+    if respaldo:
+        payload.update({
+            'respaldo_final_path':respaldo['path'],
+            'respaldo_final_nombre':respaldo['nombre'],
+            'respaldo_final_mime':respaldo['mime'],
+            'respaldo_final_tamano_bytes':respaldo['tamano_bytes'],
+            'respaldo_final_subido_at':respaldo['subido_at'],
+        })
 
     h=backend_headers()
     r=requests.patch(
@@ -15027,74 +15140,30 @@ def public_reciclador_completar(match_id):
             'id':f'eq.{sid}',
             'empresa_id':f'eq.{eid}',
         },
-        json={
-            'estado':'completada',
-            'peso_final_kg':round(kilos,2),
-            'resultado_detalle':detalle,
-            'completada_at':ahora,
-            'updated_at':ahora,
-        },
+        json=payload,
         timeout=SUPABASE_TIMEOUT,
     )
-    r.raise_for_status()
-    rows=r.json() if r.content else []
-    actualizada=rows[0] if rows else sol
+    if not r.ok:
+        print('LAORTIGA COMPLETAR RETIRO DB ERROR:',r.status_code,r.text[:1200])
+        return portal_json({'ok':False,'error':'No fue posible completar el retiro en la base de datos.'},502)
 
-    conv_id=str(actualizada.get('conversacion_id') or '')
-    if conv_id:
-        print(
-            'LAORTIGA RETIRO COMPLETADO:',
-            'solicitud=',sid,
-            'match=',match_id,
-            'reciclador=',p.get('interesado_id'),
-            'kg=',round(kilos,2),
-        )
+    rows=r.json() if r.content else []
+    actualizada=rows[0] if rows else {**sol,**payload}
+
+    print(
+        'LAORTIGA RETIRO COMPLETADO:',
+        sid,
+        'kg=',round(kilos,2),
+        'respaldo=',bool(respaldo),
+        'archivo=',(respaldo or {}).get('nombre') if respaldo else '',
+    )
 
     return portal_json({
         'ok':True,
-        'mensaje':f'Retiro completado. Se sumaron {round(kilos,2):g} kg a tu historial.',
-        'solicitud':actualizada,
-        'kilos_sumados':round(kilos,2),
-    },200)
+        'mensaje':'Retiro completado correctamente.',
+        'solicitud':_conv_fotos_expandir(actualizada),
+    })
 
-def _conv_portal_empresa():
-    """
-    Empresa efectiva para el módulo Convocatorias.
-
-    - Usuario normal: siempre su propia empresa.
-    - Superadmin: puede enviar X-Nexia-Empresa-ID para trabajar sobre una
-      empresa concreta. Si no lo envía, usa la empresa de su perfil.
-    """
-    p=portal_usuario_autorizado()
-    if not p:
-        return (None,None)
-
-    eid=str((p or {}).get('empresa_id') or '').strip()
-
-    if es_superadmin(p):
-        solicitado=str(request.headers.get('X-Nexia-Empresa-ID') or '').strip()
-        if solicitado:
-            try:
-                r=requests.get(
-                    f'{SUPABASE_URL}/rest/v1/empresas',
-                    headers=backend_headers(),
-                    params={
-                        'select':'id',
-                        'id':f'eq.{solicitado}',
-                        'limit':'1',
-                    },
-                    timeout=SUPABASE_TIMEOUT,
-                )
-                r.raise_for_status()
-                rows=r.json() if r.content else []
-                if rows:
-                    eid=solicitado
-                else:
-                    print('NEXI CONVOCATORIAS SCOPE WARN: empresa inexistente', solicitado)
-            except Exception as e:
-                print('NEXI CONVOCATORIAS SCOPE ERROR:',repr(e))
-
-    return (p,eid)
 
 @app.route('/portal/convocatorias/config',methods=['GET','POST','OPTIONS'])
 def portal_conv_config():
