@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.29-HUMANO-24H"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.31-FOTOS-CELULAR-HEIC"
 load_dotenv()
 
 app = Flask(__name__)
@@ -14963,13 +14963,21 @@ def public_conv_fotos_upload():
     if not archivos:return portal_json({'ok':False,'error':'Selecciona al menos una foto'},400)
     if len(archivos)>CONVOCATORIAS_FOTO_MAX_CANTIDAD:return portal_json({'ok':False,'error':f'Máximo {CONVOCATORIAS_FOTO_MAX_CANTIDAD} fotos'},400)
     max_bytes=CONVOCATORIAS_FOTO_MAX_MB*1024*1024
-    permitidos={'image/jpeg':'jpg','image/png':'png','image/webp':'webp'}
+    permitidos={
+        'image/jpeg':'jpg',
+        'image/png':'png',
+        'image/webp':'webp',
+        'image/heic':'heic',
+        'image/heif':'heif',
+        'image/heic-sequence':'heic',
+        'image/heif-sequence':'heif',
+    }
     out=[]
     import uuid
     for f in archivos:
         mime=str(f.mimetype or '').lower()
         ext=permitidos.get(mime)
-        if not ext:return portal_json({'ok':False,'error':'Formato no permitido. Usa JPG, PNG o WEBP.'},400)
+        if not ext:return portal_json({'ok':False,'error':'Formato no permitido. Usa JPG, PNG, WEBP, HEIC o HEIF.'},400)
         data=f.read(max_bytes+1)
         if not data or len(data)>max_bytes:return portal_json({'ok':False,'error':f'Cada foto debe pesar máximo {CONVOCATORIAS_FOTO_MAX_MB} MB'},400)
         path=f'{eid}/{datetime.now(pytz.UTC).strftime("%Y/%m")}/{uuid.uuid4().hex}.{ext}'
@@ -15100,7 +15108,7 @@ def public_reciclador_mensaje(match_id):
 def _conv_respaldo_final_guardar(eid, sid, archivo):
     """
     Guarda un único respaldo final en el bucket privado de convocatorias.
-    Permitidos: PDF, JPG/JPEG, PNG, WEBP. Máximo configurable (10 MB por defecto).
+    Permitidos: PDF, JPG/JPEG, PNG, WEBP, HEIC y HEIF. Máximo configurable (10 MB por defecto).
     """
     if not archivo or not getattr(archivo, 'filename', ''):
         return None
@@ -15111,10 +15119,14 @@ def _conv_respaldo_final_guardar(eid, sid, archivo):
         'image/jpeg':'jpg',
         'image/png':'png',
         'image/webp':'webp',
+        'image/heic':'heic',
+        'image/heif':'heif',
+        'image/heic-sequence':'heic',
+        'image/heif-sequence':'heif',
     }
     ext=permitidos.get(mime)
     if not ext:
-        raise ValueError('Formato de respaldo no permitido. Usa PDF, JPG, PNG o WEBP.')
+        raise ValueError('Formato de respaldo no permitido. Usa PDF, JPG, PNG, WEBP, HEIC o HEIF.')
 
     max_bytes=CONVOCATORIAS_RESPALDO_MAX_MB*1024*1024
     data=archivo.read(max_bytes+1)
@@ -15186,6 +15198,18 @@ def public_reciclador_completar(match_id):
     eid=str(sol.get('empresa_id') or row.get('empresa_id') or '').strip()
 
     if str(sol.get('estado') or '').lower()=='completada':
+        conv_id=str(sol.get('conversacion_id') or '').strip()
+        if conv_id:
+            try:
+                activar_por_empresa(
+                    eid,
+                    canal=str(sol.get('canal') or 'whatsapp'),
+                    provider='twilio',
+                )
+                establecer_modo_atencion(conv_id,'bot')
+                print('LAORTIGA RETIRO YA COMPLETADO -> MODO BOT:',sid,conv_id)
+            except Exception as e:
+                print('LAORTIGA RETIRO YA COMPLETADO MODO BOT ERROR:',sid,conv_id,repr(e))
         return portal_json({
             'ok':True,
             'mensaje':'Este retiro ya estaba marcado como completado.',
@@ -15263,6 +15287,31 @@ def public_reciclador_completar(match_id):
         'respaldo=',bool(respaldo),
         'archivo=',(respaldo or {}).get('nombre') if respaldo else '',
     )
+
+    # V3.30: al finalizar correctamente el retiro desde el portal del reciclador,
+    # devolver inmediatamente la conversación al bot. Esto ocurre después de
+    # guardar el respaldo (si corresponde) y marcar la solicitud como completada.
+    conv_id=str(actualizada.get('conversacion_id') or sol.get('conversacion_id') or '').strip()
+    if conv_id:
+        try:
+            activar_por_empresa(
+                eid,
+                canal=str(actualizada.get('canal') or sol.get('canal') or 'whatsapp'),
+                provider='twilio',
+            )
+            establecer_modo_atencion(conv_id,'bot')
+            print(
+                'LAORTIGA RETIRO COMPLETADO -> MODO BOT:',
+                sid,
+                conv_id,
+            )
+        except Exception as e:
+            print(
+                'LAORTIGA RETIRO COMPLETADO MODO BOT ERROR:',
+                sid,
+                conv_id,
+                repr(e),
+            )
 
     return portal_json({
         'ok':True,
