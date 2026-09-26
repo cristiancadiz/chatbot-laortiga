@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.12-CERTIFICADO-RECICLADOR"
+APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.13-FIX-DEPLOY"
 load_dotenv()
 
 app = Flask(__name__)
@@ -153,6 +153,9 @@ LAORTIGA_DONDE_RECICLAR_URL = os.getenv(
 LAORTIGA_MENU_ACTIVO = os.getenv(
     "LAORTIGA_MENU_ACTIVO", "true"
 ).strip().lower() in {"1", "true", "yes", "si", "sí"}
+
+# Servicio dedicado La Ortiga: WhatsApp funciona sin IA.
+LAORTIGA_SIN_IA = True
 
 # ============================================================
 # NEXIA V2.0 - PLANES + MERCADO PAGO
@@ -8654,7 +8657,11 @@ def _laortiga_link_retiro(telefono):
 
 def _laortiga_link_registro_reciclador():
     tok = _conv_interesado_token_crear(LAORTIGA_EMPRESA_ID)
-    return f"{INTERESADOS_PUBLIC_URL}?token={quote(tok)}"
+    base = os.getenv(
+        "LAORTIGA_REGISTRO_RECICLADOR_URL",
+        f"{PORTAL_ORIGIN}/registro_reciclador.html",
+    ).strip()
+    return f"{base}?token={quote(tok)}"
 
 
 def _laortiga_buscar_reciclador_por_telefono(telefono):
@@ -15573,6 +15580,10 @@ def public_cotizacion_aceptar(cotizacion_id):
 if __name__ == "__main__":
     print("APP_VERSION:", APP_VERSION)
     print("LAORTIGA_SIN_IA:", LAORTIGA_SIN_IA)
+    print("LAORTIGA_REGISTRO_RECICLADOR_URL:", os.getenv(
+        "LAORTIGA_REGISTRO_RECICLADOR_URL",
+        f"{PORTAL_ORIGIN}/registro_reciclador.html",
+    ).strip())
     print("COTIZACIONES_REGLA:", COTIZACIONES_MAX_PROPUESTAS, "propuestas /", COTIZACIONES_PLAZO_HORAS, "horas")
     Thread(target=_cot_cierre_worker,daemon=True).start()
     port = int(os.getenv("PORT", "5000"))
