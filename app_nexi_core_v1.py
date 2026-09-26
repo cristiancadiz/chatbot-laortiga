@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.28-HUMANO-ANTES-MENU"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.29-HUMANO-24H"
 load_dotenv()
 
 app = Flask(__name__)
@@ -68,7 +68,7 @@ TIMEZONE = os.getenv("TIMEZONE", "America/Santiago")
 # Se pueden cambiar desde Render Environment sin tocar el código.
 CONVERSACION_ONLINE_MINUTOS = int(os.getenv("CONVERSACION_ONLINE_MINUTOS", "15"))
 CONVERSACION_ESPERA_HORAS = int(os.getenv("CONVERSACION_ESPERA_HORAS", "24"))
-MODO_EJECUTIVO_TIMEOUT_MINUTOS = int(os.getenv("MODO_EJECUTIVO_TIMEOUT_MINUTOS", "720"))
+MODO_EJECUTIVO_TIMEOUT_MINUTOS = int(os.getenv("MODO_EJECUTIVO_TIMEOUT_MINUTOS", "1440"))
 CORE_HANDOFF_TIMEOUT_MINUTOS = int(os.getenv("CORE_HANDOFF_TIMEOUT_MINUTOS", "10"))
 # Empresa CLIENTE Nexia: protección pública de datos de contacto.
 NEXIA_CLIENTE_EMPRESA_ID = os.getenv(
@@ -3442,7 +3442,7 @@ def obtener_modo_atencion(identificador, canal="whatsapp"):
     Regla V3.27:
     - Mientras esté en 'ejecutivo', el bot/IA no responde.
     - El modo humano expira tras MODO_EJECUTIVO_TIMEOUT_MINUTOS
-      (720 min = 12 h por defecto) desde la última actividad registrada.
+      (1440 min = 24 h por defecto) desde la última actividad registrada.
     - Al expirar, vuelve automáticamente a 'bot'.
     """
     headers = supabase_headers()
@@ -3480,7 +3480,7 @@ def obtener_modo_atencion(identificador, canal="whatsapp"):
         fila = filas[0]
         modo = str(fila.get("modo_atencion") or "bot").lower()
 
-        # V3.27: toda atención humana tiene un máximo de 12h por defecto.
+        # V3.27: toda atención humana tiene un máximo de 24h por defecto.
         # Se evalúa antes de cualquier lógica especial de retiros para que
         # ninguna conversación quede indefinidamente en modo ejecutivo.
         if modo == "ejecutivo" and MODO_EJECUTIVO_TIMEOUT_MINUTOS > 0:
@@ -3495,7 +3495,7 @@ def obtener_modo_atencion(identificador, canal="whatsapp"):
                     if minutos >= MODO_EJECUTIVO_TIMEOUT_MINUTOS:
                         establecer_modo_atencion(fila.get("id"), "bot")
                         print(
-                            "MODO EJECUTIVO 12H EXPIRADO:",
+                            "MODO EJECUTIVO 24H EXPIRADO:",
                             fila.get("id"),
                             f"{minutos:.1f} min -> bot",
                         )
@@ -3503,7 +3503,7 @@ def obtener_modo_atencion(identificador, canal="whatsapp"):
                 except Exception as e:
                     print("MODO EJECUTIVO TIMEOUT PARSE ERROR:", repr(e))
 
-        # Si hay un retiro adjudicado activo y todavía no vencen las 12h,
+        # Si hay un retiro adjudicado activo y todavía no vencen las 24h,
         # continúa humano; no ejecutar bot/IA.
         if modo == "ejecutivo" and _conv_retiro_activo_en_conversacion(
             fila.get("id"), empresa_actual_id()
