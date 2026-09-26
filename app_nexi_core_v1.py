@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-COTIZACIONES-V3.16-COTIZACION-POST-SIMPLE"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-COTIZACIONES-V3.17-LINKS-BOTON-OCULTOS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -8520,6 +8520,230 @@ LAORTIGA_MENU_CONTENT_SID = None
 LAORTIGA_MENU_CONTENT_LOCK = Lock()
 
 
+# ============================================================
+# LA ORTIGA - BOTONES URL SIN MOSTRAR TOKEN EN EL CHAT
+# ============================================================
+#
+# WhatsApp no permite un "hipervínculo HTML" dentro de texto normal.
+# Para no mostrar ?token=... al usuario usamos twilio/call-to-action.
+#
+# Durante una ventana de atención de 24h el Content puede enviarse sin
+# aprobación. Para mensajes fuera de sesión, se puede configurar un
+# ContentSid aprobado por Meta mediante:
+#
+#   LAORTIGA_CTA_RETIRO_SID
+#   LAORTIGA_CTA_DONDE_SID
+#   LAORTIGA_CTA_REGISTRO_SID
+#   LAORTIGA_CTA_PORTAL_SID
+#   LAORTIGA_CTA_COT_SOLICITUD_SID
+#   LAORTIGA_CTA_COT_NUEVA_SID
+#   LAORTIGA_CTA_COT_MAX_SID
+#   LAORTIGA_CTA_COT_CIERRE_SID
+#
+# Todos los templates dinámicos usan {{1}} como sufijo URL.
+# Ejemplo:
+# https://reciclaje-la-ortiga.onrender.com/l/retiro/{{1}}
+#
+LAORTIGA_LINK_BASE = os.getenv(
+    "LAORTIGA_LINK_BASE",
+    "https://reciclaje-la-ortiga.onrender.com/l",
+).rstrip("/")
+
+LAORTIGA_CTA_CONTENT_CACHE = {}
+LAORTIGA_CTA_CONTENT_LOCK = Lock()
+
+LAORTIGA_CTA_DEFS = {
+    "retiro": {
+        "title": "Solicitar retiro",
+        "body": "🚚 Perfecto. Completa el formulario para solicitar el retiro de tu reciclaje.",
+        "route": "retiro",
+        "env_sid": "LAORTIGA_CTA_RETIRO_SID",
+    },
+    "donde": {
+        "title": "Ver puntos",
+        "body": "📍 Busca puntos de reciclaje disponibles en Chile.",
+        "route": "donde",
+        "env_sid": "LAORTIGA_CTA_DONDE_SID",
+    },
+    "registro": {
+        "title": "Registrarme",
+        "body": "🙋 Regístrate como reciclador para recibir solicitudes compatibles y enviar cotizaciones.",
+        "route": "registro",
+        "env_sid": "LAORTIGA_CTA_REGISTRO_SID",
+    },
+    "portal": {
+        "title": "Abrir mi portal",
+        "body": "♻️ Abre tu Portal del Reciclador para revisar oportunidades, cotizaciones y retiros.",
+        "route": "reciclador",
+        "env_sid": "LAORTIGA_CTA_PORTAL_SID",
+    },
+    "cot_solicitud": {
+        "title": "Ver cotizaciones",
+        "body": "♻️ Tu solicitud fue publicada. Te avisaremos cuando lleguen nuevas cotizaciones.",
+        "route": "cotizaciones",
+        "env_sid": "LAORTIGA_CTA_COT_SOLICITUD_SID",
+    },
+    "cot_nueva": {
+        "title": "Ver cotizaciones",
+        "body": "♻️ Recibiste una nueva cotización para tu solicitud de reciclaje. Puedes revisarla desde el botón.",
+        "route": "cotizaciones",
+        "env_sid": "LAORTIGA_CTA_COT_NUEVA_SID",
+    },
+    "cot_max": {
+        "title": "Ver cotizaciones",
+        "body": "✅ Ya recibiste el máximo de cotizaciones. Compáralas y selecciona la propuesta que prefieras.",
+        "route": "cotizaciones",
+        "env_sid": "LAORTIGA_CTA_COT_MAX_SID",
+    },
+    "cot_cierre": {
+        "title": "Ver cotizaciones",
+        "body": "⏰ Finalizó el plazo de recepción. Revisa las cotizaciones disponibles y selecciona la que prefieras.",
+        "route": "cotizaciones",
+        "env_sid": "LAORTIGA_CTA_COT_CIERRE_SID",
+    },
+}
+
+
+def _laortiga_extraer_token_url(url):
+    """Extrae ?token= de una URL generada por Nexia."""
+    try:
+        parsed = urlparse(str(url or ""))
+        from urllib.parse import parse_qs
+        return str((parse_qs(parsed.query).get("token") or [""])[0]).strip()
+    except Exception:
+        return ""
+
+
+def _laortiga_cta_content_sid(kind):
+    """
+    Devuelve un ContentSid para un botón URL.
+    Si existe un SID aprobado en Render, tiene prioridad.
+    Si no, crea/reutiliza un Content dinámico para mensajes en sesión.
+    """
+    kind = str(kind or "").strip().lower()
+    cfg_cta = LAORTIGA_CTA_DEFS.get(kind)
+    if not cfg_cta:
+        raise ValueError(f"CTA La Ortiga desconocido: {kind}")
+
+    sid_env = str(os.getenv(cfg_cta["env_sid"], "") or "").strip()
+    if sid_env:
+        return sid_env
+
+    with LAORTIGA_CTA_CONTENT_LOCK:
+        if LAORTIGA_CTA_CONTENT_CACHE.get(kind):
+            return LAORTIGA_CTA_CONTENT_CACHE[kind]
+
+        account_sid, auth_token, _ = _router_twilio_credenciales()
+
+        payload = {
+            "friendly_name": f"laortiga_{kind}_cta_v1",
+            "language": "es",
+            "variables": {
+                "1": "demo"
+            },
+            "types": {
+                "twilio/call-to-action": {
+                    "body": cfg_cta["body"],
+                    "actions": [
+                        {
+                            "type": "URL",
+                            "title": cfg_cta["title"][:20],
+                            "url": f"{LAORTIGA_LINK_BASE}/{cfg_cta['route']}/{{{{1}}}}",
+                        }
+                    ],
+                }
+            },
+        }
+
+        r = requests.post(
+            "https://content.twilio.com/v1/Content",
+            auth=(account_sid, auth_token),
+            json=payload,
+            timeout=20,
+        )
+        if not r.ok:
+            raise RuntimeError(
+                f"Twilio Content CTA {kind} HTTP {r.status_code}: {r.text[:800]}"
+            )
+
+        data = r.json() if r.content else {}
+        sid = str(data.get("sid") or "").strip()
+        if not sid:
+            raise RuntimeError(f"Twilio no devolvió ContentSid CTA para {kind}")
+
+        LAORTIGA_CTA_CONTENT_CACHE[kind] = sid
+        print("LAORTIGA CTA CONTENT SID OK:", kind, sid)
+        return sid
+
+
+def enviar_twilio_boton_url(destino, kind, token_o_valor):
+    """
+    Envía un mensaje con botón URL.
+    El token NO se incluye en el Body visible de WhatsApp.
+    """
+    kind = str(kind or "").strip().lower()
+    valor = str(token_o_valor or "").strip()
+    if not valor:
+        raise ValueError("Falta token/valor para botón URL")
+
+    account_sid, auth_token, from_value = _router_twilio_credenciales()
+    digits = _router_identificador(destino)
+    if not digits:
+        raise ValueError("Destino WhatsApp vacío")
+
+    r = requests.post(
+        f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+        auth=(account_sid, auth_token),
+        data={
+            "To": f"whatsapp:+{digits}",
+            "From": from_value,
+            "ContentSid": _laortiga_cta_content_sid(kind),
+            "ContentVariables": json.dumps({"1": valor}, ensure_ascii=False),
+        },
+        timeout=20,
+    )
+    if not r.ok:
+        raise RuntimeError(
+            f"Twilio CTA {kind} HTTP {r.status_code}: {r.text[:1000]}"
+        )
+
+    data = r.json() if r.content else {}
+    print("LAORTIGA CTA SEND OK:", kind, digits, data.get("sid"))
+    return data
+
+
+@app.route("/l/retiro/<path:token>", methods=["GET"])
+def laortiga_link_retiro_redirect(token):
+    return redirect(f"{CONVOCATORIAS_PUBLIC_URL}?token={quote(token, safe='')}", code=302)
+
+
+@app.route("/l/registro/<path:token>", methods=["GET"])
+def laortiga_link_registro_redirect(token):
+    base = os.getenv(
+        "LAORTIGA_REGISTRO_RECICLADOR_URL",
+        f"{PORTAL_ORIGIN}/registro_reciclador.html",
+    ).strip()
+    return redirect(f"{base}?token={quote(token, safe='')}", code=302)
+
+
+@app.route("/l/reciclador/<path:token>", methods=["GET"])
+def laortiga_link_reciclador_redirect(token):
+    return redirect(f"{RECICLADOR_PORTAL_URL}?token={quote(token, safe='')}", code=302)
+
+
+@app.route("/l/cotizaciones/<path:token>", methods=["GET"])
+def laortiga_link_cotizaciones_redirect(token):
+    return redirect(f"{COTIZACIONES_PUBLIC_URL}?token={quote(token, safe='')}", code=302)
+
+
+@app.route("/l/donde/<path:valor>", methods=["GET"])
+def laortiga_link_donde_redirect(valor):
+    # El valor solo existe para reutilizar el mismo patrón de ContentVariables.
+    return redirect(LAORTIGA_DONDE_RECICLAR_URL, code=302)
+
+
+
+
 def _laortiga_menu_texto():
     return (
         "Hola 👋 Bienvenido a *La Ortiga Recicla* ♻️\n\n"
@@ -8720,35 +8944,33 @@ def _laortiga_responder_opcion(twiml, telefono, opcion, texto_original):
     try:
         if opcion == "laortiga:retiro":
             url = _laortiga_link_retiro(telefono)
-            print("LAORTIGA RETIRO URL GENERADA:", url[:180])
-            return enviar(
-                "🚚 Perfecto. Completa este formulario para solicitar el retiro de tu reciclaje:\n\n"
-                + url
-            )
+            token_link = _laortiga_extraer_token_url(url)
+            print("LAORTIGA RETIRO URL GENERADA: token oculto en botón")
+            activar_por_empresa(LAORTIGA_EMPRESA_ID, canal="whatsapp", provider="twilio")
+            enviar_twilio_boton_url(telefono, "retiro", token_link)
+            return True
 
         if opcion == "laortiga:donde":
-            return enviar(
-                "📍 Puedes buscar puntos de reciclaje en Chile aquí:\n\n"
-                + LAORTIGA_DONDE_RECICLAR_URL
-            )
+            activar_por_empresa(LAORTIGA_EMPRESA_ID, canal="whatsapp", provider="twilio")
+            enviar_twilio_boton_url(telefono, "donde", "puntos")
+            return True
 
         if opcion == "laortiga:registro":
             url = _laortiga_link_registro_reciclador()
-            print("LAORTIGA REGISTRO URL GENERADA:", url[:180])
-            return enviar(
-                "🙋 *Registro de reciclador*\n\n"
-                "Completa este formulario con tus datos, materiales que recibes y zona de cobertura. "
-                "Cuando termines, podrás recibir solicitudes compatibles y enviar cotizaciones.\n\n"
-                + url
-            )
+            token_link = _laortiga_extraer_token_url(url)
+            print("LAORTIGA REGISTRO URL GENERADA: token oculto en botón")
+            activar_por_empresa(LAORTIGA_EMPRESA_ID, canal="whatsapp", provider="twilio")
+            enviar_twilio_boton_url(telefono, "registro", token_link)
+            return True
 
         if opcion == "laortiga:portal":
             url = _laortiga_link_portal_reciclador(telefono)
             if url:
-                print("LAORTIGA PORTAL RECICLADOR URL:", url[:180])
-                return enviar(
-                    "♻️ Este es tu Portal del Reciclador:\n\n" + url
-                )
+                token_link = _laortiga_extraer_token_url(url)
+                print("LAORTIGA PORTAL RECICLADOR URL: token oculto en botón")
+                activar_por_empresa(LAORTIGA_EMPRESA_ID, canal="whatsapp", provider="twilio")
+                enviar_twilio_boton_url(telefono, "portal", token_link)
+                return True
             return enviar(
                 "Todavía no encuentro un registro de reciclador asociado a este WhatsApp. "
                 "Primero selecciona *Quiero ser reciclador* para registrarte."
@@ -15121,36 +15343,39 @@ def _cot_enviar_whatsapp_cliente(sol, mensaje):
 
 def _cot_notificar_solicitud_creada(sol):
     url=_cot_url_cliente(sol)
-    mensaje=(
-        "♻️ *Tu solicitud de reciclaje fue publicada correctamente.*\n\n"
-        "Buscaremos recicladores compatibles con tu ubicación y tipo de material.\n\n"
-        f"Podrás recibir *hasta {COTIZACIONES_MAX_PROPUESTAS} cotizaciones* durante un plazo máximo de "
-        f"*{COTIZACIONES_PLAZO_HORAS} horas*.\n"
-        f"Si se alcanzan las {COTIZACIONES_MAX_PROPUESTAS} propuestas antes, la recepción se cerrará automáticamente.\n\n"
-        "Te avisaremos cada vez que llegue una nueva propuesta.\n\n"
-        "Puedes revisar tus cotizaciones aquí:\n"
-        f"{url}"
-    )
-    return _cot_enviar_whatsapp_cliente(sol,mensaje)
+    token_link=_laortiga_extraer_token_url(url)
+    telefono=str(sol.get('telefono') or '').strip()
+    if not telefono or not token_link:
+        return False
+    try:
+        activar_por_empresa(LAORTIGA_EMPRESA_ID,canal='whatsapp',provider='twilio',canal_config={})
+        enviar_twilio_boton_url(telefono,'cot_solicitud',token_link)
+        return True
+    except Exception as e:
+        print('LAORTIGA COTIZACIONES CTA SOLICITUD WARN:',repr(e))
+        return False
 
 
 def _cot_notificar_cierre_plazo(sol, estado=None):
     estado=estado or _cot_estado_recepcion(sol)
-    url=_cot_url_cliente(sol)
     n=int(estado.get('recibidas') or 0)
-    if n:
-        mensaje=(
-            "⏰ *Finalizó el plazo para recibir cotizaciones.*\n\n"
-            f"Recibiste {n} {'cotización' if n==1 else 'cotizaciones'}.\n"
-            "Ya no ingresarán nuevas propuestas, pero puedes revisar las disponibles y seleccionar la que prefieras:\n"
-            f"{url}"
+    telefono=str(sol.get('telefono') or '').strip()
+    if not telefono:
+        return False
+    if not n:
+        return _cot_enviar_whatsapp_cliente(
+            sol,
+            "⏰ Finalizó el plazo para recibir cotizaciones. En esta oportunidad no recibiste propuestas dentro de las 24 horas."
         )
-    else:
-        mensaje=(
-            "⏰ *Finalizó el plazo para recibir cotizaciones.*\n\n"
-            "En esta oportunidad no recibiste propuestas dentro de las 24 horas."
-        )
-    return _cot_enviar_whatsapp_cliente(sol,mensaje)
+    url=_cot_url_cliente(sol)
+    token_link=_laortiga_extraer_token_url(url)
+    try:
+        activar_por_empresa(LAORTIGA_EMPRESA_ID,canal='whatsapp',provider='twilio',canal_config={})
+        enviar_twilio_boton_url(telefono,'cot_cierre',token_link)
+        return True
+    except Exception as e:
+        print('LAORTIGA COTIZACIONES CTA CIERRE WARN:',repr(e))
+        return False
 
 
 def _cot_cerrar_vencidas_once():
@@ -15273,29 +15498,28 @@ def _cotizacion_por_match(match_id):
 def _cotizacion_notificar_cliente(sol, cot, estado=None):
     estado=estado or _cot_estado_recepcion(sol)
     n=int(estado.get('recibidas') or 0)
+    telefono=str(sol.get('telefono') or '').strip()
     url=_cot_url_cliente(sol)
+    token_link=_laortiga_extraer_token_url(url)
 
-    if n >= COTIZACIONES_MAX_PROPUESTAS:
-        mensaje=(
-            f"✅ *Ya tienes {COTIZACIONES_MAX_PROPUESTAS} cotizaciones disponibles.*\n\n"
-            "La recepción de nuevas propuestas se cerró automáticamente.\n"
-            "Puedes compararlas y elegir la que prefieras aquí:\n"
-            f"{url}"
-        )
-    else:
-        mensaje=(
-            f"♻️ *Nueva cotización recibida ({n}/{COTIZACIONES_MAX_PROPUESTAS})*\n\n"
-            f"{_cot_monto_texto(cot)}\n\n"
-            f"Puedes esperar hasta {COTIZACIONES_MAX_PROPUESTAS} propuestas o hasta que se cumplan "
-            f"{COTIZACIONES_PLAZO_HORAS} horas desde la publicación.\n\n"
-            "Revisar cotizaciones:\n"
-            f"{url}"
-        )
+    if not telefono or not token_link:
+        return False
 
-    ok=_cot_enviar_whatsapp_cliente(sol,mensaje)
-    if ok:
-        print('NEXI COTIZACION CLIENTE NOTIFICADO:',sol.get('id'),'contador=',n)
-    return ok
+    kind='cot_max' if n >= COTIZACIONES_MAX_PROPUESTAS else 'cot_nueva'
+
+    try:
+        activar_por_empresa(
+            LAORTIGA_EMPRESA_ID,
+            canal='whatsapp',
+            provider='twilio',
+            canal_config={},
+        )
+        enviar_twilio_boton_url(telefono,kind,token_link)
+        print('NEXI COTIZACION CLIENTE NOTIFICADO CTA:',sol.get('id'),'contador=',n,'kind=',kind)
+        return True
+    except Exception as e:
+        print('LAORTIGA COTIZACIONES CTA NUEVA WARN:',repr(e))
+        return False
 
 
 @app.route('/public/recicladores/match/<match_id>/cotizacion',methods=['GET','POST','OPTIONS'])
