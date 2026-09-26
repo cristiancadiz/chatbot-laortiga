@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.22-SENDER-PORTAL-LAORTIGA"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.23-FIX-DESTINO-WHATSAPP"
 load_dotenv()
 
 app = Flask(__name__)
@@ -9603,7 +9603,7 @@ def enviar_twilio_texto(destino, texto):
     if not sid or not token or not sender:
         raise RuntimeError("Falta configuración Twilio de la empresa")
 
-    destino = re.sub(r"\\D", "", str(destino or ""))
+    destino = re.sub(r"\D", "", str(destino or ""))
     to_value = f"whatsapp:+{destino}"
     from_value = sender if sender.startswith("whatsapp:") else f"whatsapp:{sender}"
 
