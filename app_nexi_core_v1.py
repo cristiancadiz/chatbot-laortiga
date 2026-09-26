@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-25-LAORTIGA-RECICLA-COTIZACIONES-V3.14-FORM-ERROR-FIX"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-COTIZACIONES-V3.15-FECHA-PREFERENCIA"
 load_dotenv()
 
 app = Flask(__name__)
@@ -13873,7 +13873,7 @@ def _conv_notificar(match_id, sol, it):
         f"Productos/materiales: {tipos}\n"
         f"Bultos: {sol.get('cantidad_bultos') or 1}\n"
         f"Cantidad/peso aproximado: {sol.get('peso_aprox') or 'No indicado'}\n"
-        f"Día: {sol.get('fecha_retiro') or 'A coordinar'}\n"
+        f"Día: {sol.get('fecha_retiro') or sol.get('fecha_preferencia') or 'A coordinar'}\n"
         f"Horario: {sol.get('horario_retiro') or 'A coordinar'}\n\n"
         "Puedes indicar las condiciones de tu propuesta: si pagarás por el material, "
         "si el retiro tiene costo, si es gratuito o si prefieres acordar el valor directamente.\n\n"
@@ -14113,6 +14113,7 @@ def public_conv_solicitudes():
         'telefono':str(p.get('telefono') or ''),'nombre':str(d.get('nombre') or '')[:120],
         'apellido':str(d.get('apellido') or '')[:120],'direccion_retiro':str(d.get('direccion_retiro') or '')[:500],
         'comuna':str(d.get('comuna') or '')[:120],'fecha_retiro':str(d.get('fecha_retiro') or '') or None,
+        'fecha_preferencia':str(d.get('fecha_preferencia') or '')[:120],
         'horario_retiro':str(d.get('horario_retiro') or '')[:120],'cantidad_bultos':bultos,
         'cantidad_aprox':str(d.get('cantidad_aprox') or '')[:120],
         'tipos_producto':tipos,'peso_aprox':str(d.get('peso_aprox') or '')[:120],
@@ -14142,10 +14143,11 @@ def public_conv_solicitudes():
     if not r.ok:
         detalle=(r.text or '')[:1800]
         print('LAORTIGA SOLICITUD SUPABASE ERROR:',r.status_code,detalle)
-        if 'cantidad_aprox' in detalle or 'requiere_certificado_reciclaje' in detalle:
+        if ('cantidad_aprox' in detalle or 'requiere_certificado_reciclaje' in detalle
+                or 'fecha_preferencia' in detalle):
             return portal_json({
                 'ok':False,
-                'error':'Falta aplicar la migración de Supabase para cantidad aproximada/certificado de reciclaje.'
+                'error':'Falta aplicar una migración de Supabase para los campos nuevos del formulario.'
             },500)
         return portal_json({
             'ok':False,
