@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.26-RESTAURA-CONV-PORTAL-EMPRESA"
+APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V3.27-HUMANO-12H-SIN-BOT"
 load_dotenv()
 
 app = Flask(__name__)
@@ -68,7 +68,7 @@ TIMEZONE = os.getenv("TIMEZONE", "America/Santiago")
 # Se pueden cambiar desde Render Environment sin tocar el código.
 CONVERSACION_ONLINE_MINUTOS = int(os.getenv("CONVERSACION_ONLINE_MINUTOS", "15"))
 CONVERSACION_ESPERA_HORAS = int(os.getenv("CONVERSACION_ESPERA_HORAS", "24"))
-MODO_EJECUTIVO_TIMEOUT_MINUTOS = int(os.getenv("MODO_EJECUTIVO_TIMEOUT_MINUTOS", "30"))
+MODO_EJECUTIVO_TIMEOUT_MINUTOS = int(os.getenv("MODO_EJECUTIVO_TIMEOUT_MINUTOS", "720"))
 CORE_HANDOFF_TIMEOUT_MINUTOS = int(os.getenv("CORE_HANDOFF_TIMEOUT_MINUTOS", "10"))
 # Empresa CLIENTE Nexia: protección pública de datos de contacto.
 NEXIA_CLIENTE_EMPRESA_ID = os.getenv(
@@ -3438,7 +3438,12 @@ def _conv_interceptar_whatsapp_humano(telefono, texto):
 def obtener_modo_atencion(identificador, canal="whatsapp"):
     """
     Devuelve 'bot' o 'ejecutivo' para una conversación.
-    Si la conversación aún no existe o Supabase falla, usa 'bot'.
+
+    Regla V3.27:
+    - Mientras esté en 'ejecutivo', el bot/IA no responde.
+    - El modo humano expira tras MODO_EJECUTIVO_TIMEOUT_MINUTOS
+      (720 min = 12 h por defecto) desde la última actividad registrada.
+    - Al expirar, vuelve automáticamente a 'bot'.
     """
     headers = supabase_headers()
     if not headers or not empresa_actual_id():
@@ -3475,19 +3480,9 @@ def obtener_modo_atencion(identificador, canal="whatsapp"):
         fila = filas[0]
         modo = str(fila.get("modo_atencion") or "bot").lower()
 
-        # Retiro adjudicado: ignorar timeout general de 30 min, pero no la ventana
-        # real de WhatsApp ni la finalización de la solicitud.
-        if modo == 'ejecutivo' and _conv_retiro_activo_en_conversacion(
-            fila.get('id'), empresa_actual_id()
-        ):
-            ventana=estado_ventana_whatsapp_24h(fila.get('id')) if canal=='whatsapp' else {'abierta':True}
-            if not ventana.get('abierta'):
-                establecer_modo_atencion(fila.get('id'),'bot')
-                print('NEXI RETIRO VENTANA 24H VENCIDA:',fila.get('id'))
-                return 'bot'
-            return 'ejecutivo'
-
-        # Otros handoffs conservan su timeout normal.
+        # V3.27: toda atención humana tiene un máximo de 12h por defecto.
+        # Se evalúa antes de cualquier lógica especial de retiros para que
+        # ninguna conversación quede indefinidamente en modo ejecutivo.
         if modo == "ejecutivo" and MODO_EJECUTIVO_TIMEOUT_MINUTOS > 0:
             ultima = str(fila.get("ultima_fecha") or "").strip()
             if ultima:
@@ -3500,13 +3495,20 @@ def obtener_modo_atencion(identificador, canal="whatsapp"):
                     if minutos >= MODO_EJECUTIVO_TIMEOUT_MINUTOS:
                         establecer_modo_atencion(fila.get("id"), "bot")
                         print(
-                            "MODO EJECUTIVO EXPIRADO:",
+                            "MODO EJECUTIVO 12H EXPIRADO:",
                             fila.get("id"),
                             f"{minutos:.1f} min -> bot",
                         )
                         return "bot"
                 except Exception as e:
                     print("MODO EJECUTIVO TIMEOUT PARSE ERROR:", repr(e))
+
+        # Si hay un retiro adjudicado activo y todavía no vencen las 12h,
+        # continúa humano; no ejecutar bot/IA.
+        if modo == "ejecutivo" and _conv_retiro_activo_en_conversacion(
+            fila.get("id"), empresa_actual_id()
+        ):
+            return "ejecutivo"
 
         return modo
     except Exception as e:
@@ -9093,10 +9095,12 @@ def _laortiga_responder_opcion(twiml, telefono, opcion, texto_original):
             email_ok = _laortiga_notificar_ejecutivo_explicito(telefono)
             if email_ok:
                 return enviar(
-                    "👤 Listo. Avisé al equipo de La Ortiga para que continúe la conversación contigo por aquí."
+                    "👤 Te estamos poniendo en contacto con un ejecutivo de La Ortiga. "
+                    "Desde este momento el asistente automático queda pausado y un ejecutivo continuará contigo por este mismo chat."
                 )
             return enviar(
-                "👤 Dejé tu conversación en atención humana. El equipo de La Ortiga podrá continuar contigo por aquí."
+                "👤 Te estamos poniendo en contacto con un ejecutivo de La Ortiga. "
+                "Desde este momento el asistente automático queda pausado y un ejecutivo continuará contigo por este mismo chat."
             )
 
         print("LAORTIGA OPCION NO RECONOCIDA:", repr(opcion))
