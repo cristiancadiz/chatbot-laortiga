@@ -1,4 +1,4 @@
-"""API y archivos públicos de la PWA La Ortiga Recicla & Fletes.
+"""API y archivos públicos de la PWA Llama a Jaime Servicios.
 
 El módulo no conoce credenciales ni importa el núcleo histórico. Recibe las
 dependencias necesarias al registrarse desde app.py.
@@ -22,6 +22,24 @@ from flask import request, send_from_directory
 
 _RATE_LOCK = Lock()
 _RATE_EVENTS: dict[str, deque[float]] = defaultdict(deque)
+
+SERVICE_TYPES = {
+    "hogar",
+    "limpieza",
+    "flete",
+    "jardineria",
+    "reciclaje",
+    "otro",
+}
+
+SERVICE_LABELS = {
+    "hogar": "Servicios para el hogar",
+    "limpieza": "Limpieza",
+    "flete": "Fletes y traslados",
+    "jardineria": "Jardinería",
+    "reciclaje": "Reciclaje",
+    "otro": "Otros servicios",
+}
 
 
 def _json(app, payload, status=200):
@@ -145,8 +163,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         subscriptions = response.json() if response.content else []
         sent = 0
         payload = json.dumps({
-            "title": "Nueva oportunidad · La Ortiga",
-            "body": f"{str(request_row.get('tipo') or '').title()} disponible en {request_row.get('comuna') or 'tu zona'}.",
+            "title": "Nueva oportunidad · Llama a Jaime",
+            "body": f"{SERVICE_LABELS.get(request_row.get('tipo'), 'Servicio')} disponible en {request_row.get('comuna') or 'tu zona'}.",
             "url": "/app/?view=provider",
             "tag": f"solicitud-{request_row.get('id')}",
         }, ensure_ascii=False)
@@ -302,9 +320,12 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
     def mobile_config():
         return _json(app, {
             "ok": True,
-            "name": "La Ortiga Recicla & Fletes",
+            "name": "Llama a Jaime Servicios",
             "version": settings["app_version"],
-            "services": ["reciclaje", "flete"],
+            "services": [
+                {"id": key, "name": SERVICE_LABELS[key]}
+                for key in ("hogar", "limpieza", "flete", "jardineria", "reciclaje", "otro")
+            ],
             "ai": bool(settings["ai_enabled"]),
             "dispatch": True,
             "push": bool(settings.get("vapid_public_key") and settings.get("vapid_private_key")),
@@ -322,7 +343,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         service = _clean(body.get("service"), 30).lower()
         if not message:
             return _json(app, {"ok": False, "error": "Escribe una pregunta."}, 400)
-        if service not in {"", "reciclaje", "flete"}:
+        if service not in ({""} | SERVICE_TYPES):
             service = ""
 
         history_lines = []
@@ -336,10 +357,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 history_lines.append(f"{role}: {content}")
 
         instructions = (
-            "Eres Ortiguín, asistente de La Ortiga Recicla & Fletes en Chile. "
-            "Responde en español claro, cercano y breve. Puedes atender preguntas generales, "
-            "pero cuando la consulta trate de reciclaje o fletes debes ayudar a convertirla en "
-            "una solicitud concreta. No inventes precios, disponibilidad, certificaciones, "
+            "Eres Jaime, asistente de Llama a Jaime Servicios en Chile. "
+            "Responde en español claro, cercano y breve. Ayudas a las personas a definir y publicar "
+            "solicitudes de servicios para el hogar, limpieza, fletes, jardinería, reciclaje u otras "
+            "necesidades cotidianas. No inventes precios, disponibilidad, certificaciones, "
             "destinos ni estados. Explica que el valor final lo propone y confirma un prestador. "
             "Nunca pidas claves, datos bancarios ni documentos sensibles. Si existe una urgencia "
             "o riesgo físico, recomienda contactar servicios de emergencia. Cuando ya estén los "
@@ -376,8 +397,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         schedule = _clean(body.get("fecha_preferida"), 120)
         materials = _list_clean(body.get("materiales"), item_limit=120, max_items=30)
 
-        if service_type not in {"reciclaje", "flete"}:
-            return _json(app, {"ok": False, "error": "Selecciona reciclaje o flete."}, 400)
+        if service_type not in SERVICE_TYPES:
+            return _json(app, {"ok": False, "error": "Selecciona una categoría de servicio."}, 400)
         if not name or not commune or not origin or not details:
             return _json(app, {"ok": False, "error": "Completa nombre, comuna, dirección y detalle."}, 400)
         if not _valid_phone(phone):
@@ -480,8 +501,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         name = _clean(body.get("nombre"), 120)
         phone = _clean(body.get("telefono"), 40)
         email = _clean(body.get("email"), 180).lower()
-        roles = [_norm(x) for x in _list_clean(body.get("roles"), 30, 2)]
-        roles = list(dict.fromkeys(x for x in roles if x in {"reciclaje", "flete"}))
+        roles = [_norm(x) for x in _list_clean(body.get("roles"), 30, 8)]
+        roles = list(dict.fromkeys(x for x in roles if x in SERVICE_TYPES))
         communes = _list_clean(body.get("comunas"), 120, 80)
         materials = _list_clean(body.get("materiales"), 120, 50)
         vehicle = _clean(body.get("vehiculo"), 120)
@@ -527,7 +548,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             )
             if not response.ok:
                 app.logger.error("PROVIDER DB ERROR %s: %s", response.status_code, response.text[:800])
-                return _json(app, {"ok": False, "error": "No pude completar el registro. Revisa la migración V4.2."}, 502)
+                return _json(app, {"ok": False, "error": "No pude completar el registro. Revisa la migración de Llama a Jaime Servicios."}, 502)
             rows = response.json() if response.content else []
             created_provider = rows[0] if rows else None
             if created_provider:
