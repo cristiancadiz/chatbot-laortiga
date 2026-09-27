@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-APP-V4.2-DISPATCH"
+APP_VERSION = "2026-09-27-LLAMA-A-JAIME-SERVICIOS-V5.1-CHAT-PRECIOS"
 load_dotenv()
 
 app = Flask(__name__)
@@ -16376,11 +16376,11 @@ def _mobile_dispatch_existing_collectors(app_request):
             f"Comuna: {app_request.get('comuna') or '—'}\n"
             f"Materiales: {', '.join(materiales)}\n"
             f"Preferencia: {app_request.get('fecha_preferida') or 'A coordinar'}\n\n"
-            "Ingresa al modo Prestador de La Ortiga App para registrar tu perfil, "
+            "Ingresa al modo Prestador de Llama a Jaime para registrar tu perfil, "
             "ver oportunidades y tomar la solicitud si sigue disponible:\n"
             f"{app_url}\n\n"
             "La dirección exacta y el teléfono se muestran solo al prestador que toma el servicio.\n\n"
-            "La Ortiga Recicla ♻️"
+            "Llama a Jaime ♻️🚚"
         )
         if enviar_correo_resend(correo, asunto, texto=texto):
             enviados += 1
