@@ -2453,6 +2453,24 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
 
             provider = rows[0]
             # Nunca exponer RUT, teléfono, correo, documentos, tokens ni datos administrativos.
+            reputation = {"promedio": 0, "evaluaciones": 0, "cinco_estrellas": 0}
+            reputation_response = requests.post(
+                f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_resumen_reputacion",
+                headers=_db_headers(),
+                json={"p_prestador_id": provider.get("id")},
+                timeout=settings["supabase_timeout"],
+            )
+            reputation_response.raise_for_status()
+            reputation_data = reputation_response.json() if reputation_response.content else {}
+            if isinstance(reputation_data, list):
+                reputation_data = reputation_data[0] if reputation_data else {}
+            if isinstance(reputation_data, dict):
+                reputation = {
+                    "promedio": float(reputation_data.get("promedio") or 0),
+                    "evaluaciones": int(reputation_data.get("evaluaciones") or 0),
+                    "cinco_estrellas": int(reputation_data.get("cinco_estrellas") or 0),
+                }
+
             profile = {
                 "id": provider.get("id"),
                 "nombre": provider.get("nombre"),
@@ -2463,6 +2481,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 "verificado": provider.get("estado_verificacion") == "verificado",
                 "verificado_at": provider.get("verificado_at"),
                 "miembro_desde": provider.get("created_at"),
+                "reputacion": reputation,
             }
             return _json(app, {"ok": True, "prestador": profile})
         except requests.RequestException as exc:
