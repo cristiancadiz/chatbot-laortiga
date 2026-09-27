@@ -1,8 +1,9 @@
-const CACHE = "la-ortiga-app-v2";
+const CACHE = "llama-a-jaime-servicios-v5";
 const SHELL = [
   "/app/",
   "/app/manifest.webmanifest",
-  "/app/assets/icon.svg"
+  "/app/assets/icon-192.png",
+  "/app/assets/icon-512.png"
 ];
 
 self.addEventListener("install", event => {
@@ -34,12 +35,12 @@ self.addEventListener("fetch", event => {
 self.addEventListener("push", event => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = {}; }
-  const title = data.title || "La Ortiga";
+  const title = data.title || "Llama a Jaime";
   const options = {
     body: data.body || "Tienes una nueva oportunidad disponible.",
-    icon: "/app/assets/icon.svg",
-    badge: "/app/assets/icon.svg",
-    tag: data.tag || "la-ortiga-oportunidad",
+    icon: "/app/assets/icon-192.png",
+    badge: "/app/assets/icon-192.png",
+    tag: data.tag || "llama-a-jaime-oportunidad",
     renotify: true,
     data: { url: data.url || "/app/?view=provider" }
   };
