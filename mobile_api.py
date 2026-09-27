@@ -57,6 +57,9 @@ BEAUTY_TYPES = {
 
 PHOTO_BUCKET = "llama-jaime-solicitudes"
 DOCUMENT_BUCKET = "documentos-prestadores"
+PROFILE_BUCKET = "prestadores-perfil"
+PROFILE_MAX_BYTES = 5 * 1024 * 1024
+PROFILE_MIME_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 DOCUMENT_MAX_BYTES = 10 * 1024 * 1024
 DOCUMENT_TYPES = {
     "cedula_frontal", "cedula_reverso", "antecedentes", "cv",
@@ -1348,6 +1351,150 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             timeout=settings["supabase_timeout"],
         ).raise_for_status()
         return status
+
+    @app.get(f"{api_base}/prestadores/foto-perfil")
+    def mobile_provider_profile_photo():
+        try:
+            provider = _provider_auth(request.args.get("codigo"), request.args.get("token"))
+            if not provider:
+                return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
+            path = provider.get("foto_perfil_path")
+            signed_url = None
+            if path:
+                sign = requests.post(
+                    f"{settings['supabase_url']}/storage/v1/object/sign/{PROFILE_BUCKET}/{path}",
+                    headers=_db_headers(),
+                    json={"expiresIn": 900},
+                    timeout=settings["supabase_timeout"],
+                )
+                sign.raise_for_status()
+                payload = sign.json() if sign.content else {}
+                signed = payload.get("signedURL") or payload.get("signedUrl")
+                if signed:
+                    signed_url = signed if signed.startswith("http") else f"{settings['supabase_url']}/storage/v1{signed}"
+            return _json(app, {"ok": True, "foto": {
+                "url": signed_url,
+                "nombre": provider.get("foto_perfil_nombre"),
+                "mime": provider.get("foto_perfil_mime"),
+                "bytes": provider.get("foto_perfil_bytes"),
+                "actualizada_at": provider.get("foto_perfil_actualizada_at"),
+            } if path else None})
+        except requests.RequestException as exc:
+            app.logger.exception("PROVIDER PROFILE PHOTO ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude consultar la foto de perfil."}, 502)
+
+    @app.post(f"{api_base}/prestadores/foto-perfil")
+    def mobile_provider_upload_profile_photo():
+        if not _allow("provider-profile-photo", limit=20):
+            return _json(app, {"ok": False, "error": "Alcanzaste el límite temporal de cargas."}, 429)
+        if request.content_length and request.content_length > PROFILE_MAX_BYTES + 512 * 1024:
+            return _json(app, {"ok": False, "error": "La foto supera el máximo permitido de 5 MB."}, 413)
+        try:
+            provider = _provider_auth(request.form.get("codigo"), request.form.get("token"))
+            if not provider:
+                return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
+            incoming = request.files.get("archivo")
+            if not incoming:
+                return _json(app, {"ok": False, "error": "Selecciona una foto."}, 400)
+            mime_type = _clean(incoming.mimetype, 80).lower()
+            extension = PROFILE_MIME_TYPES.get(mime_type)
+            if not extension:
+                return _json(app, {"ok": False, "error": "Usa una imagen JPG, PNG o WebP."}, 400)
+            content = incoming.read(PROFILE_MAX_BYTES + 1)
+            if not content or len(content) > PROFILE_MAX_BYTES:
+                return _json(app, {"ok": False, "error": "La foto debe pesar como máximo 5 MB."}, 400)
+            if not _valid_document_signature(content, mime_type):
+                return _json(app, {"ok": False, "error": "El contenido de la imagen no coincide con su formato."}, 400)
+
+            original_name = _clean(incoming.filename, 240) or f"perfil.{extension}"
+            object_path = f"{settings['empresa_id']}/{provider['id']}/perfil/{uuid.uuid4().hex}.{extension}"
+            upload = requests.post(
+                f"{settings['supabase_url']}/storage/v1/object/{PROFILE_BUCKET}/{object_path}",
+                headers={**_db_headers(), "Content-Type": mime_type, "x-upsert": "false"},
+                data=content,
+                timeout=max(30, settings["supabase_timeout"]),
+            )
+            upload.raise_for_status()
+
+            old_path = provider.get("foto_perfil_path")
+            now = datetime.now(timezone.utc).isoformat()
+            try:
+                patch = requests.patch(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                    headers=_db_headers("return=representation"),
+                    params={"id": f"eq.{provider['id']}", "empresa_id": f"eq.{settings['empresa_id']}"},
+                    json={
+                        "foto_perfil_path": object_path,
+                        "foto_perfil_nombre": original_name,
+                        "foto_perfil_mime": mime_type,
+                        "foto_perfil_bytes": len(content),
+                        "foto_perfil_actualizada_at": now,
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                patch.raise_for_status()
+            except Exception:
+                requests.delete(
+                    f"{settings['supabase_url']}/storage/v1/object/{PROFILE_BUCKET}/{object_path}",
+                    headers=_db_headers(),
+                    timeout=settings["supabase_timeout"],
+                )
+                raise
+
+            if old_path and old_path != object_path:
+                try:
+                    requests.delete(
+                        f"{settings['supabase_url']}/storage/v1/object/{PROFILE_BUCKET}/{old_path}",
+                        headers=_db_headers(),
+                        timeout=settings["supabase_timeout"],
+                    ).raise_for_status()
+                except requests.RequestException:
+                    app.logger.warning("No pude eliminar la foto de perfil anterior: %s", old_path)
+
+            return _json(app, {"ok": True, "foto": {
+                "nombre": original_name, "mime": mime_type, "bytes": len(content), "actualizada_at": now
+            }}, 201)
+        except requests.RequestException as exc:
+            app.logger.exception("UPLOAD PROFILE PHOTO ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude guardar la foto de perfil."}, 502)
+
+    @app.delete(f"{api_base}/prestadores/foto-perfil")
+    def mobile_provider_delete_profile_photo():
+        body = request.get_json(silent=True) or {}
+        try:
+            provider = _provider_auth(body.get("codigo"), body.get("token"))
+            if not provider:
+                return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
+            old_path = provider.get("foto_perfil_path")
+            if not old_path:
+                return _json(app, {"ok": True})
+
+            patch = requests.patch(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers("return=minimal"),
+                params={"id": f"eq.{provider['id']}", "empresa_id": f"eq.{settings['empresa_id']}"},
+                json={
+                    "foto_perfil_path": None,
+                    "foto_perfil_nombre": None,
+                    "foto_perfil_mime": None,
+                    "foto_perfil_bytes": None,
+                    "foto_perfil_actualizada_at": None,
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            patch.raise_for_status()
+            try:
+                requests.delete(
+                    f"{settings['supabase_url']}/storage/v1/object/{PROFILE_BUCKET}/{old_path}",
+                    headers=_db_headers(),
+                    timeout=settings["supabase_timeout"],
+                ).raise_for_status()
+            except requests.RequestException:
+                app.logger.warning("No pude eliminar físicamente la foto de perfil: %s", old_path)
+            return _json(app, {"ok": True})
+        except requests.RequestException as exc:
+            app.logger.exception("DELETE PROFILE PHOTO ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude eliminar la foto de perfil."}, 502)
 
     @app.get(f"{api_base}/prestadores/documentos")
     def mobile_provider_documents():
