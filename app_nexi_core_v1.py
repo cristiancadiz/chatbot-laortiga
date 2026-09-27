@@ -24,13 +24,14 @@ from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 from cryptography.fernet import Fernet, InvalidToken
+from mobile_api import register_mobile_app
 
 ECOMMERCE_MEDIA_URL = ContextVar("ECOMMERCE_MEDIA_URL", default="")
 ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=None)
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V4.0-IA-FULL"
+APP_VERSION = "2026-09-26-LLAMA-A-JAIME-SERVICIOS-V5.0"
 load_dotenv()
 
 app = Flask(__name__)
@@ -157,6 +158,9 @@ LAORTIGA_MENU_ACTIVO = os.getenv(
 # pero ya no bloquea las preguntas escritas libremente.
 IA_FULL_ACTIVA = os.getenv(
     "IA_FULL_ACTIVA", "true"
+).strip().lower() in {"1", "true", "yes", "si", "sí"}
+WORKERS_AUTOMATICOS_ACTIVOS = os.getenv(
+    "WORKERS_AUTOMATICOS_ACTIVOS", "true"
 ).strip().lower() in {"1", "true", "yes", "si", "sí"}
 
 # ============================================================
@@ -16333,6 +16337,81 @@ def public_cotizacion_aceptar(cotizacion_id):
         'mensaje':'Cotización aceptada. El reciclador fue adjudicado.',
     })
 
+
+# ============================================================
+# APP MÓVIL / PWA - RECICLAJE Y FLETES
+# ============================================================
+# Se registra como módulo aislado para no mezclar la experiencia web con los
+# webhooks históricos de WhatsApp, Instagram o Gupshup.
+def _mobile_dispatch_existing_collectors(app_request):
+    """Avisa por correo a recolectores históricos sin reactivar WhatsApp."""
+    if not isinstance(app_request, dict) or app_request.get("tipo") != "reciclaje":
+        return 0
+
+    materiales = [
+        str(item).strip()[:120]
+        for item in (app_request.get("materiales") or [])
+        if str(item or "").strip()
+    ]
+    if not materiales:
+        materiales = ["Otros"]
+    interesados = _conv_interesados_match(
+        LAORTIGA_EMPRESA_ID,
+        app_request.get("comuna"),
+        materiales,
+        None,
+        ubicacion=None,
+    )
+    enviados = 0
+    app_url = f"{PUBLIC_BACKEND_URL}/app/?view=provider"
+    for interesado in interesados:
+        correo = str(interesado.get("correo") or "").strip()
+        if not correo:
+            continue
+        nombre = str(interesado.get("nombre") or "").strip()
+        asunto = f"Nueva oportunidad de reciclaje en {app_request.get('comuna') or 'tu zona'}"
+        texto = (
+            f"Hola {nombre},\n\n"
+            "Hay una nueva solicitud de reciclaje compatible con tu cobertura.\n\n"
+            f"Comuna: {app_request.get('comuna') or '—'}\n"
+            f"Materiales: {', '.join(materiales)}\n"
+            f"Preferencia: {app_request.get('fecha_preferida') or 'A coordinar'}\n\n"
+            "Ingresa al modo Prestador de Llama a Jaime para registrar tu perfil, "
+            "ver oportunidades y tomar la solicitud si sigue disponible:\n"
+            f"{app_url}\n\n"
+            "La dirección exacta y el teléfono se muestran solo al prestador que toma el servicio.\n\n"
+            "Llama a Jaime ♻️🚚"
+        )
+        if enviar_correo_resend(correo, asunto, texto=texto):
+            enviados += 1
+    print(
+        "MOBILE RECOLECTORES HISTORICOS:",
+        "solicitud=", app_request.get("public_id"),
+        "coincidencias=", len(interesados),
+        "correos=", enviados,
+    )
+    return enviados
+
+
+register_mobile_app(
+    app,
+    settings={
+        "app_dir": os.path.join(os.path.dirname(os.path.abspath(__file__)), "mobile_app"),
+        "app_version": APP_VERSION,
+        "empresa_id": LAORTIGA_EMPRESA_ID,
+        "supabase_url": SUPABASE_URL,
+        "supabase_timeout": SUPABASE_TIMEOUT,
+        "ai_model": OPENAI_CORE_MODEL or OPENAI_MODEL,
+        "ai_enabled": bool(openai_client and IA_FULL_ACTIVA),
+        "vapid_public_key": os.getenv("WEB_PUSH_VAPID_PUBLIC_KEY", "").strip(),
+        "vapid_private_key": os.getenv("WEB_PUSH_VAPID_PRIVATE_KEY", "").strip(),
+        "vapid_contact": os.getenv("WEB_PUSH_CONTACT", "mailto:contacto@nexia-tech.com").strip(),
+    },
+    supabase_headers=backend_headers,
+    ai_generate=_openai_generar_texto,
+    legacy_dispatch=_mobile_dispatch_existing_collectors,
+)
+
 if __name__ == "__main__":
     print("APP_VERSION:", APP_VERSION)
     print("IA_FULL_ACTIVA:", IA_FULL_ACTIVA)
@@ -16341,6 +16420,9 @@ if __name__ == "__main__":
         f"{PORTAL_ORIGIN}/registro_reciclador.html",
     ).strip())
     print("COTIZACIONES_REGLA:", COTIZACIONES_MAX_PROPUESTAS, "propuestas /", COTIZACIONES_PLAZO_HORAS, "horas")
-    Thread(target=_cot_cierre_worker,daemon=True).start()
+    if WORKERS_AUTOMATICOS_ACTIVOS:
+        Thread(target=_cot_cierre_worker,daemon=True).start()
+    else:
+        print("WORKERS_AUTOMATICOS_ACTIVOS: False (modo de prueba seguro)")
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port)
