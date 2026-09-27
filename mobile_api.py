@@ -28,6 +28,7 @@ SERVICE_TYPES = {
     "limpieza",
     "flete",
     "jardineria",
+    "belleza",
     "reciclaje",
     "otro",
 }
@@ -37,8 +38,20 @@ SERVICE_LABELS = {
     "limpieza": "Limpieza",
     "flete": "Fletes y traslados",
     "jardineria": "Jardinería",
+    "belleza": "Belleza y bienestar",
     "reciclaje": "Reciclaje",
     "otro": "Otros servicios",
+}
+
+BEAUTY_TYPES = {
+    "barberia",
+    "peluqueria",
+    "manicure_pedicure",
+    "maquillaje",
+    "depilacion",
+    "masaje_relajacion",
+    "peinado_eventos",
+    "otro_belleza",
 }
 
 PHOTO_BUCKET = "llama-jaime-solicitudes"
@@ -366,6 +379,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         roles = {_norm(x) for x in (provider.get("roles") or [])}
         communes = {_norm(x) for x in (provider.get("comunas") or [])}
         materials = {_norm(x) for x in (provider.get("materiales") or [])}
+        specialties = {_norm(x).replace(" ", "_") for x in (provider.get("especialidades") or [])}
         request_commune = _norm(request_row.get("comuna"))
         request_materials = {_norm(x) for x in (request_row.get("materiales") or []) if _norm(x)}
         if _norm(request_row.get("tipo")) not in roles:
@@ -373,6 +387,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         if request_commune and request_commune not in communes:
             return False
         if request_row.get("tipo") == "reciclaje" and request_materials and materials and not (request_materials & materials):
+            return False
+        if request_row.get("tipo") == "belleza" and request_row.get("subtipo") not in specialties:
             return False
         return True
 
@@ -399,7 +415,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
                 headers=_db_headers(),
                 params={
-                    "select": "id,roles,comunas,materiales,vehiculo",
+                    "select": "id,roles,comunas,materiales,especialidades,vehiculo",
                     "empresa_id": f"eq.{settings['empresa_id']}",
                     "activo": "eq.true",
                     "disponible": "eq.true",
@@ -434,7 +450,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
                 headers=_db_headers(),
                 params={
-                    "select": "id,public_id,tipo,comuna,materiales,estado,created_at",
+                    "select": "id,public_id,tipo,subtipo,comuna,materiales,estado,created_at",
                     "empresa_id": f"eq.{settings['empresa_id']}",
                     "estado": "in.(publicada,revisando)",
                     "created_at": f"gte.{cutoff}",
@@ -516,7 +532,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "version": settings["app_version"],
             "services": [
                 {"id": key, "name": SERVICE_LABELS[key]}
-                for key in ("hogar", "limpieza", "flete", "jardineria", "reciclaje", "otro")
+                for key in ("hogar", "limpieza", "flete", "jardineria", "belleza", "reciclaje", "otro")
             ],
             "ai": bool(settings["ai_enabled"]),
             "dispatch": True,
@@ -555,7 +571,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         instructions = (
             "Eres Jaime, asistente de Llama a Jaime Servicios en Chile. "
             "Responde en español claro, cercano y breve. Ayudas a las personas a definir y publicar "
-            "solicitudes de servicios para el hogar, limpieza, fletes, jardinería, reciclaje u otras "
+            "solicitudes de servicios para el hogar, limpieza, fletes, jardinería, belleza y bienestar, "
+            "reciclaje u otras "
             "necesidades cotidianas. No inventes precios, disponibilidad, certificaciones, "
             "destinos ni estados. Explica que el valor final lo propone y confirma un prestador. "
             "Nunca pidas claves, datos bancarios ni documentos sensibles. Si existe una urgencia "
@@ -586,6 +603,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
 
         body = request.get_json(silent=True) or {}
         service_type = _clean(body.get("tipo"), 20).lower()
+        subtype = _clean(body.get("subtipo"), 40).lower()
         name = _clean(body.get("nombre"), 120)
         phone = _clean(body.get("telefono"), 40)
         email = _clean(body.get("email"), 180).lower()
@@ -603,6 +621,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
 
         if service_type not in SERVICE_TYPES:
             return _json(app, {"ok": False, "error": "Selecciona una categoría de servicio."}, 400)
+        if service_type == "belleza" and subtype not in BEAUTY_TYPES:
+            return _json(app, {"ok": False, "error": "Selecciona el servicio de belleza que necesitas."}, 400)
         if not name or not commune or not origin or not details:
             return _json(app, {"ok": False, "error": "Completa nombre, comuna, dirección y detalle."}, 400)
         if not _valid_phone(phone):
@@ -625,6 +645,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "access_token_hash": hashlib.sha256(access_token.encode("utf-8")).hexdigest(),
             "empresa_id": settings["empresa_id"],
             "tipo": service_type,
+            "subtipo": subtype if service_type == "belleza" else None,
             "nombre": name,
             "telefono": phone,
             "email": email or None,
@@ -666,6 +687,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     "codigo": public_id,
                     "token": access_token,
                     "tipo": service_type,
+                    "subtipo": subtype if service_type == "belleza" else None,
                     "estado": "publicada",
                     "despacho": "buscando_prestadores",
                 },
@@ -688,7 +710,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
                 headers=headers,
                 params={
-                    "select": "public_id,tipo,comuna,estado,fecha_preferida,created_at,updated_at",
+                    "select": "public_id,tipo,subtipo,comuna,estado,fecha_preferida,created_at,updated_at",
                     "public_id": f"eq.{public_id}",
                     "access_token_hash": f"eq.{hashlib.sha256(access_token.encode('utf-8')).hexdigest()}",
                     "limit": "1",
@@ -845,6 +867,11 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         roles = list(dict.fromkeys(x for x in roles if x in SERVICE_TYPES))
         communes = _list_clean(body.get("comunas"), 120, 80)
         materials = _list_clean(body.get("materiales"), 120, 50)
+        specialties = [
+            _norm(x).replace(" ", "_")
+            for x in _list_clean(body.get("especialidades"), 60, 20)
+        ]
+        specialties = list(dict.fromkeys(x for x in specialties if x in BEAUTY_TYPES))
         vehicle = _clean(body.get("vehiculo"), 120)
         try:
             radius = float(body.get("radio_km")) if body.get("radio_km") not in (None, "") else None
@@ -859,6 +886,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {"ok": False, "error": "Ingresa un correo válido."}, 400)
         if "reciclaje" in roles and not materials:
             return _json(app, {"ok": False, "error": "Selecciona los materiales que recibes."}, 400)
+        if "belleza" in roles and not specialties:
+            return _json(app, {"ok": False, "error": "Selecciona al menos una especialidad de belleza."}, 400)
         if "flete" in roles and not vehicle:
             return _json(app, {"ok": False, "error": "Indica el vehículo que utilizas para fletes."}, 400)
 
@@ -874,6 +903,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "roles": roles,
             "comunas": communes,
             "materiales": materials,
+            "especialidades": specialties,
             "vehiculo": vehicle or None,
             "radio_km": radius,
             "disponible": True,
@@ -895,7 +925,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 Thread(target=_match_provider, args=(created_provider,), daemon=True).start()
             return _json(app, {
                 "ok": True,
-                "prestador": {"codigo": code, "token": token, "nombre": name, "roles": roles, "disponible": True},
+                "prestador": {"codigo": code, "token": token, "nombre": name, "roles": roles, "especialidades": specialties, "disponible": True},
             }, 201)
         except requests.RequestException as exc:
             app.logger.exception("PROVIDER NETWORK ERROR: %r", exc)
@@ -912,7 +942,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
             if request.method == "GET":
                 safe = {key: provider.get(key) for key in (
-                    "public_id", "nombre", "email", "roles", "comunas", "materiales",
+                    "public_id", "nombre", "email", "roles", "comunas", "materiales", "especialidades",
                     "vehiculo", "radio_km", "disponible", "created_at"
                 )}
                 return _json(app, {"ok": True, "prestador": safe})
@@ -926,6 +956,13 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     update["comunas"] = communes
             if "materiales" in body:
                 update["materiales"] = _list_clean(body.get("materiales"), 120, 50)
+            if "especialidades" in body:
+                update["especialidades"] = [
+                    item for item in (
+                        _norm(x).replace(" ", "_")
+                        for x in _list_clean(body.get("especialidades"), 60, 20)
+                    ) if item in BEAUTY_TYPES
+                ]
             if "vehiculo" in body:
                 update["vehiculo"] = _clean(body.get("vehiculo"), 120) or None
             if not update:
@@ -971,7 +1008,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
                     headers=_db_headers(),
                     params={
-                        "select": "id,public_id,tipo,comuna,direccion_origen,direccion_destino,detalles,materiales,fecha_preferida,estado,telefono,nombre,created_at",
+                        "select": "id,public_id,tipo,subtipo,comuna,direccion_origen,direccion_destino,detalles,materiales,fecha_preferida,estado,telefono,nombre,created_at",
                         "id": f"in.({','.join(request_ids)})",
                     },
                     timeout=settings["supabase_timeout"],
