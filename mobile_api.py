@@ -2355,6 +2355,42 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         if action == "suspender" and not observation:
             return _json(app, {"ok": False, "error": "Debes indicar el motivo de la suspensión."}, 400)
 
+        # Verificación final: exige los tres documentos básicos aprobados.
+        if action == "verificar":
+            try:
+                docs_response = requests.get(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_documentos_prestador",
+                    headers=_db_headers(),
+                    params={
+                        "select": "tipo_documento,estado_revision,created_at",
+                        "empresa_id": f"eq.{admin['empresa_id']}",
+                        "prestador_id": f"eq.{provider_uuid}",
+                        "tipo_documento": "in.(cedula_frontal,cedula_reverso,antecedentes)",
+                        "order": "created_at.desc",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                docs_response.raise_for_status()
+                rows = docs_response.json() if docs_response.content else []
+                latest = {}
+                for row in rows:
+                    doc_type = row.get("tipo_documento")
+                    if doc_type in {"cedula_frontal", "cedula_reverso", "antecedentes"} and doc_type not in latest:
+                        latest[doc_type] = row.get("estado_revision")
+                required = ("cedula_frontal", "cedula_reverso", "antecedentes")
+                missing = [x for x in required if latest.get(x) != "aprobado"]
+                if missing:
+                    labels = {"cedula_frontal":"cédula frontal","cedula_reverso":"cédula reverso","antecedentes":"certificado de antecedentes"}
+                    return _json(app, {
+                        "ok": False,
+                        "error": "No puedes verificar todavía. Deben estar aprobados: " + ", ".join(labels[x] for x in missing) + ".",
+                        "documentacion_completa": False,
+                        "pendientes": missing,
+                    }, 409)
+            except requests.RequestException as exc:
+                app.logger.exception("ADMIN VERIFY DOCUMENT CHECK ERROR: %r", exc)
+                return _json(app, {"ok": False, "error": "No pude validar la documentación antes de verificar."}, 502)
+
         # Moderador puede revisar/verificar/rechazar, pero no suspender/reactivar.
         if admin["rol"] == "moderador" and action in {"suspender", "reactivar"}:
             return _json(app, {"ok": False, "error": "Tu rol no permite suspender o reactivar cuentas."}, 403)
