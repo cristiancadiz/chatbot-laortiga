@@ -31,7 +31,7 @@ ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-APP-V4.1-PWA"
+APP_VERSION = "2026-09-26-LAORTIGA-APP-V4.2-DISPATCH"
 load_dotenv()
 
 app = Flask(__name__)
@@ -16343,6 +16343,56 @@ def public_cotizacion_aceptar(cotizacion_id):
 # ============================================================
 # Se registra como módulo aislado para no mezclar la experiencia web con los
 # webhooks históricos de WhatsApp, Instagram o Gupshup.
+def _mobile_dispatch_existing_collectors(app_request):
+    """Avisa por correo a recolectores históricos sin reactivar WhatsApp."""
+    if not isinstance(app_request, dict) or app_request.get("tipo") != "reciclaje":
+        return 0
+
+    materiales = [
+        str(item).strip()[:120]
+        for item in (app_request.get("materiales") or [])
+        if str(item or "").strip()
+    ]
+    if not materiales:
+        materiales = ["Otros"]
+    interesados = _conv_interesados_match(
+        LAORTIGA_EMPRESA_ID,
+        app_request.get("comuna"),
+        materiales,
+        None,
+        ubicacion=None,
+    )
+    enviados = 0
+    app_url = f"{PUBLIC_BACKEND_URL}/app/?view=provider"
+    for interesado in interesados:
+        correo = str(interesado.get("correo") or "").strip()
+        if not correo:
+            continue
+        nombre = str(interesado.get("nombre") or "").strip()
+        asunto = f"Nueva oportunidad de reciclaje en {app_request.get('comuna') or 'tu zona'}"
+        texto = (
+            f"Hola {nombre},\n\n"
+            "Hay una nueva solicitud de reciclaje compatible con tu cobertura.\n\n"
+            f"Comuna: {app_request.get('comuna') or '—'}\n"
+            f"Materiales: {', '.join(materiales)}\n"
+            f"Preferencia: {app_request.get('fecha_preferida') or 'A coordinar'}\n\n"
+            "Ingresa al modo Prestador de La Ortiga App para registrar tu perfil, "
+            "ver oportunidades y tomar la solicitud si sigue disponible:\n"
+            f"{app_url}\n\n"
+            "La dirección exacta y el teléfono se muestran solo al prestador que toma el servicio.\n\n"
+            "La Ortiga Recicla ♻️"
+        )
+        if enviar_correo_resend(correo, asunto, texto=texto):
+            enviados += 1
+    print(
+        "MOBILE RECOLECTORES HISTORICOS:",
+        "solicitud=", app_request.get("public_id"),
+        "coincidencias=", len(interesados),
+        "correos=", enviados,
+    )
+    return enviados
+
+
 register_mobile_app(
     app,
     settings={
@@ -16353,9 +16403,13 @@ register_mobile_app(
         "supabase_timeout": SUPABASE_TIMEOUT,
         "ai_model": OPENAI_CORE_MODEL or OPENAI_MODEL,
         "ai_enabled": bool(openai_client and IA_FULL_ACTIVA),
+        "vapid_public_key": os.getenv("WEB_PUSH_VAPID_PUBLIC_KEY", "").strip(),
+        "vapid_private_key": os.getenv("WEB_PUSH_VAPID_PRIVATE_KEY", "").strip(),
+        "vapid_contact": os.getenv("WEB_PUSH_CONTACT", "mailto:contacto@nexia-tech.com").strip(),
     },
     supabase_headers=backend_headers,
     ai_generate=_openai_generar_texto,
+    legacy_dispatch=_mobile_dispatch_existing_collectors,
 )
 
 if __name__ == "__main__":
