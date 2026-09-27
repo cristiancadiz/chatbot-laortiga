@@ -1239,7 +1239,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             if request.method == "GET":
                 safe = {key: provider.get(key) for key in (
                     "public_id", "nombre", "email", "roles", "comunas", "materiales", "especialidades",
-                    "vehiculo", "radio_km", "disponible", "estado_cuenta", "estado_verificacion", "created_at"
+                    "vehiculo", "radio_km", "disponible", "estado_cuenta", "estado_verificacion", "verificado_at", "created_at"
                 )}
                 return _json(app, {"ok": True, "prestador": safe})
 
@@ -1283,6 +1283,30 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             provider = _provider_auth(request.args.get("codigo"), request.args.get("token"))
             if not provider:
                 return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
+            if provider.get("estado_cuenta") != "activa":
+                return _json(app, {
+                    "ok": True,
+                    "disponible": False,
+                    "estado_cuenta": provider.get("estado_cuenta"),
+                    "estado_verificacion": provider.get("estado_verificacion"),
+                    "habilitado": False,
+                    "mensaje": "Tu cuenta no está activa.",
+                    "oportunidades": [],
+                })
+            if provider.get("estado_verificacion") != "verificado":
+                mensajes = {
+                    "pendiente": "Tu identidad está pendiente de revisión. Te avisaremos aquí cuando sea verificada.",
+                    "rechazado": "Tu verificación fue rechazada. Contacta a soporte para revisar tus antecedentes.",
+                }
+                return _json(app, {
+                    "ok": True,
+                    "disponible": False,
+                    "estado_cuenta": provider.get("estado_cuenta"),
+                    "estado_verificacion": provider.get("estado_verificacion"),
+                    "habilitado": False,
+                    "mensaje": mensajes.get(provider.get("estado_verificacion"), "Tu cuenta aún no está habilitada."),
+                    "oportunidades": [],
+                })
             response = requests.get(
                 f"{settings['supabase_url']}/rest/v1/nexi_app_matches",
                 headers=_db_headers(),
@@ -1326,7 +1350,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 else:
                     item["fotos"] = _safe_photos(item["id"])
                 output.append({"match_id": match["id"], "match_estado": match["estado"], "solicitud": item})
-            return _json(app, {"ok": True, "disponible": provider.get("disponible"), "oportunidades": output})
+            return _json(app, {"ok": True, "disponible": provider.get("disponible"), "estado_cuenta": provider.get("estado_cuenta"), "estado_verificacion": provider.get("estado_verificacion"), "habilitado": True, "oportunidades": output})
         except requests.RequestException as exc:
             app.logger.exception("OPPORTUNITIES ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude consultar las oportunidades."}, 502)
@@ -1338,6 +1362,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             provider = _provider_auth(body.get("codigo"), body.get("token"))
             if not provider:
                 return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
+            if provider.get("estado_cuenta") != "activa":
+                return _json(app, {"ok": False, "error": "Tu cuenta no está activa."}, 403)
+            if provider.get("estado_verificacion") != "verificado":
+                return _json(app, {"ok": False, "error": "Debes tener tu identidad verificada para tomar solicitudes."}, 403)
             response = requests.post(
                 f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_tomar_match",
                 headers=_db_headers(),
