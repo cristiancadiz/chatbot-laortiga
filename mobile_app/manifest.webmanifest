@@ -1,0 +1,14 @@
+{
+  "name": "La Ortiga Recicla & Fletes",
+  "short_name": "La Ortiga",
+  "description": "Solicita reciclaje y fletes desde tu celular.",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f7f5eb",
+  "theme_color": "#123d2b",
+  "icons": [
+    {"src": "/app/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}
