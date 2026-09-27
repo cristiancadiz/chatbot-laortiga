@@ -1,170 +1,257 @@
--- Llama a Jaime V5.4 · Seguridad MVP
--- Ejecutar una vez DESPUÉS de las migraciones V5.1, V5.2, V5.3 y V5.3.1.
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#073b66">
+  <meta name="description" content="Encuentra servicios confiables desde tu celular con Llama a Jaime.">
+  <link rel="manifest" href="/app/manifest.webmanifest">
+  <link rel="icon" type="image/png" href="/app/assets/icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/app/assets/apple-touch-icon.png">
+  <title>Llama a Jaime · Servicios cuando los necesitas</title>
+  <style>
+    :root{--forest:#073b66;--green:#08a6a6;--leaf:#ff9f1c;--cream:#f7f6f1;--gold:#ffb627;--ink:#102f49;--muted:#667783;--line:#d8e1e7;--white:#fff;--danger:#a6382f;--shadow:0 14px 38px rgba(7,59,102,.12)}
+    *{box-sizing:border-box}html{background:var(--forest)}body{margin:0;background:var(--cream);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh}button,input,textarea,select{font:inherit}button{cursor:pointer}.app{min-height:100vh;max-width:640px;margin:auto;background:var(--cream);padding-bottom:88px}.top{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:12px;padding:14px 18px;background:rgba(247,245,235,.94);backdrop-filter:blur(14px);border-bottom:1px solid rgba(18,61,43,.08)}.brandmark{width:42px;height:42px;border-radius:14px;background:var(--forest);display:grid;place-items:center;box-shadow:0 8px 20px rgba(18,61,43,.2)}.brandmark img{width:32px;height:32px}.brand strong{display:block;font-size:16px;line-height:1.15}.brand span{font-size:12px;color:var(--muted)}.status-dot{margin-left:auto;width:10px;height:10px;border-radius:50%;background:#59a865;box-shadow:0 0 0 4px rgba(89,168,101,.15)}main{padding:0 18px}.view{display:none}.view.active{display:block}.hero{position:relative;overflow:hidden;margin:12px -2px 18px;padding:30px 24px 28px;border-radius:28px;color:white;background:linear-gradient(145deg,#123d2b,#286a3d);box-shadow:var(--shadow)}.hero:after{content:"";position:absolute;width:230px;height:230px;border-radius:50%;right:-90px;top:-95px;border:34px solid rgba(168,207,69,.16)}.eyebrow{font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:#d9ed9e}.hero h1{position:relative;z-index:1;font-size:34px;line-height:1.03;letter-spacing:-.04em;margin:12px 0}.hero p{position:relative;z-index:1;max-width:390px;margin:0;color:#edf5ee;font-size:16px}.quick{display:grid;grid-template-columns:1fr 1fr;gap:12px}.service-card{border:0;text-align:left;border-radius:22px;padding:18px;background:white;color:var(--ink);box-shadow:0 8px 26px rgba(18,61,43,.08)}.service-card .icon{display:grid;place-items:center;width:46px;height:46px;border-radius:15px;font-size:24px;margin-bottom:14px;background:#e7f2cf}.service-card:nth-child(2) .icon{background:#fff0d1}.service-card strong{display:block;font-size:17px;margin-bottom:4px}.service-card span{font-size:12px;color:var(--muted)}.section-title{display:flex;align-items:end;justify-content:space-between;margin:24px 2px 12px}.section-title h2{font-size:20px;margin:0;letter-spacing:-.02em}.section-title span{font-size:12px;color:var(--muted)}.steps{display:grid;gap:10px}.step{display:flex;align-items:center;gap:13px;padding:14px;background:rgba(255,255,255,.68);border:1px solid var(--line);border-radius:17px}.step b{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:var(--forest);color:white}.step div{font-size:13px}.step strong{display:block;font-size:14px}.page-head{padding:22px 2px 12px}.page-head h1{margin:0;font-size:28px;letter-spacing:-.04em}.page-head p{margin:6px 0 0;color:var(--muted)}.chat-box{height:calc(100vh - 260px);min-height:390px;overflow:auto;padding:10px 0 18px}.message{max-width:86%;margin:9px 0;padding:12px 14px;border-radius:18px;background:white;box-shadow:0 4px 16px rgba(18,61,43,.06);white-space:pre-wrap}.message.bot{border-bottom-left-radius:5px}.message.user{margin-left:auto;color:white;background:var(--forest);border-bottom-right-radius:5px}.message small{display:block;opacity:.65;margin-top:5px}.chat-compose{position:sticky;bottom:76px;display:flex;align-items:end;gap:8px;padding:10px;background:white;border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow)}.chat-compose textarea{flex:1;border:0;resize:none;max-height:110px;outline:0;padding:8px;background:transparent}.send{border:0;width:44px;height:44px;border-radius:15px;background:var(--leaf);color:var(--forest);font-size:20px;font-weight:800}.chips{display:flex;gap:7px;overflow:auto;padding:2px 0 8px}.chip{white-space:nowrap;border:1px solid #bdd29a;border-radius:999px;padding:8px 12px;background:#f4f8e9;color:var(--forest);font-size:12px}.form-card{background:white;border:1px solid var(--line);border-radius:24px;padding:18px;box-shadow:0 8px 26px rgba(18,61,43,.06)}.service-toggle{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}.toggle{border:1px solid var(--line);padding:12px;border-radius:14px;background:white;color:var(--ink);font-weight:700}.toggle.active{background:var(--forest);border-color:var(--forest);color:white}.field{margin:12px 0}.field label{display:block;font-size:12px;font-weight:800;margin:0 0 6px}.field input,.field textarea,.field select{width:100%;border:1px solid #ccd7cf;border-radius:13px;padding:12px 13px;outline:none;background:#fbfcf8;color:var(--ink)}.field textarea{min-height:92px;resize:vertical}.field input:focus,.field textarea:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(47,116,68,.1)}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.primary{width:100%;border:0;border-radius:15px;padding:14px 18px;background:var(--leaf);color:var(--forest);font-weight:900}.primary:disabled{opacity:.55;cursor:wait}.notice{display:none;margin:14px 0;padding:13px;border-radius:14px;background:#eaf4dc;color:#23452d}.notice.error{background:#fde8e5;color:var(--danger)}.tracking-card{display:none;text-align:center;padding:25px;background:white;border:1px solid var(--line);border-radius:24px}.tracking-card .check{width:58px;height:58px;margin:auto;display:grid;place-items:center;border-radius:50%;background:#e6f3d2;font-size:28px}.code{font-size:20px;font-weight:900;letter-spacing:.05em;margin:12px}.saved-list{display:grid;gap:10px}.saved{width:100%;text-align:left;border:1px solid var(--line);border-radius:16px;padding:14px;background:white}.saved strong,.saved span{display:block}.saved span{color:var(--muted);font-size:12px}.empty{text-align:center;color:var(--muted);padding:42px 18px}.install{margin-top:18px;padding:18px;border-radius:20px;background:#e8f1d5}.install h3{margin:0 0 5px}.install p{margin:0 0 12px;color:#526052}.install button{border:0;border-radius:12px;padding:10px 14px;background:var(--forest);color:white;font-weight:800}.nav{position:fixed;bottom:0;left:50%;z-index:30;transform:translateX(-50%);display:grid;grid-template-columns:repeat(4,1fr);width:min(640px,100%);padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:rgba(255,255,255,.96);backdrop-filter:blur(16px);border-top:1px solid var(--line)}.nav button{border:0;background:transparent;color:#758079;padding:5px 2px;font-size:10px}.nav button b{display:block;font-size:20px;line-height:1.15}.nav button.active{color:var(--forest);font-weight:800}.spinner{display:inline-block;width:15px;height:15px;border:2px solid rgba(18,61,43,.25);border-top-color:var(--forest);border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:420px){.hero h1{font-size:31px}.grid2{grid-template-columns:1fr}.quick{gap:9px}.service-card{padding:15px}}
+  </style>
+  <style>
+    .nav{grid-template-columns:repeat(5,1fr)}
+    .provider-cta{width:100%;margin-top:12px;border:1px solid #c8d7c8;border-radius:20px;padding:16px 18px;background:#eef4e4;color:var(--forest);display:flex;align-items:center;gap:13px;text-align:left}
+    .provider-cta b{display:block;font-size:15px}.provider-cta span{display:block;font-size:12px;color:var(--muted)}
+    .provider-cta i{margin-left:auto;font-style:normal;font-size:22px}
+    .checks{display:flex;flex-wrap:wrap;gap:8px}.check-pill{position:relative}.check-pill input{position:absolute;opacity:0;pointer-events:none}.check-pill span{display:block;border:1px solid #cad7c8;border-radius:999px;padding:8px 12px;background:#fbfcf8;font-size:12px}.check-pill input:checked+span{background:var(--forest);border-color:var(--forest);color:white}
+    .provider-summary{display:none;background:white;border:1px solid var(--line);border-radius:20px;padding:16px;margin-bottom:12px}.provider-summary .row{display:flex;align-items:center;justify-content:space-between;gap:12px}.provider-summary h3{margin:0}.availability{border:0;border-radius:999px;padding:9px 13px;font-weight:800;background:#dce8d5;color:var(--forest)}.availability.off{background:#eee;color:#727272}
+    .opportunities{display:grid;gap:11px}.opportunity{background:white;border:1px solid var(--line);border-radius:19px;padding:15px}.opportunity h3{margin:0 0 6px;font-size:16px}.opportunity p{margin:5px 0;color:var(--muted);font-size:13px}.opportunity .primary{margin-top:10px;padding:11px}.opportunity.taken{border-color:#9fc477;background:#f5faec}
+    .notify-btn{width:100%;margin:10px 0 16px;border:1px solid var(--forest);border-radius:14px;padding:11px;background:white;color:var(--forest);font-weight:800}
+    .muted-note{font-size:12px;color:var(--muted);margin-top:8px}
+    .brand-logo{display:block;width:126px;max-width:calc(100vw - 76px);height:auto}
+    .hero{background:linear-gradient(145deg,#073b66,#08a6a6)}.hero:after{border-color:rgba(255,159,28,.22)}.eyebrow{color:#ffe0a3}
+    .primary,.send{background:#ff9f1c;color:#073b66}.provider-cta,.install{background:#e5f7f6}.chip{border-color:#9adbd8;background:#effafa;color:#073b66}
+    .conversation-modal{position:fixed;inset:0;z-index:60;margin:auto;width:min(640px,100%);background:var(--cream);display:flex;flex-direction:column}.conversation-modal[hidden]{display:none}.conversation-head{display:flex;align-items:center;gap:12px;padding:14px 18px;background:white;border-bottom:1px solid var(--line)}.conversation-head button{width:38px;height:38px;border:0;border-radius:12px;background:#edf3f6;color:var(--forest);font-size:20px}.conversation-head h2{margin:0;font-size:18px}.conversation-head span{display:block;color:var(--muted);font-size:11px}.conversation-body{display:flex;flex:1;min-height:0;flex-direction:column;padding:12px 18px calc(12px + env(safe-area-inset-bottom))}.conversation-messages{flex:1;overflow:auto;padding:5px 0}.conversation-message{max-width:84%;margin:8px 0;padding:10px 12px;border-radius:16px;background:white;border:1px solid var(--line);white-space:pre-wrap}.conversation-message.mine{margin-left:auto;background:#073b66;color:white;border-color:#073b66}.conversation-message.system{max-width:100%;text-align:center;background:#edf7f7;color:#315463;font-size:12px}.quote-box{padding:12px;margin-bottom:8px;border-radius:16px;background:#fff2dc;border:1px solid #ffd18a}.quote-box h3{margin:0 0 4px}.quote-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.quote-actions button{border:0;border-radius:12px;padding:10px;font-weight:800}.quote-accept{background:#08a6a6;color:white}.quote-reject{background:#f3e5e2;color:#923b34}.quote-form{display:grid;grid-template-columns:120px 1fr;gap:8px;margin:8px 0}.quote-form input{min-width:0;border:1px solid var(--line);border-radius:12px;padding:10px}.quote-form button{grid-column:1/-1;border:0;border-radius:12px;padding:10px;background:#08a6a6;color:white;font-weight:800}.conversation-compose{display:flex;gap:8px}.conversation-compose input{flex:1;min-width:0;border:1px solid var(--line);border-radius:14px;padding:12px}.conversation-compose button{width:auto;padding:0 16px;border:0;border-radius:14px;background:#ff9f1c;color:#073b66;font-weight:900}.client-notify{border:0;background:transparent;color:#073b66;font-weight:800;padding:8px 0;text-align:left}
+    .photo-picker{display:block;border:1px dashed #91a9b7;border-radius:16px;padding:14px;background:#f7fbfc;text-align:center;color:var(--forest);font-weight:800}.photo-picker input{position:absolute;width:1px;height:1px;opacity:0}.photo-picker small{display:block;color:var(--muted);font-weight:500;margin-top:3px}.photo-preview,.photo-gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:9px}.photo-item{position:relative;aspect-ratio:1;border-radius:13px;overflow:hidden;background:#dce6ea}.photo-item img{width:100%;height:100%;object-fit:cover}.photo-item button{position:absolute;right:4px;top:4px;width:27px;height:27px;border:0;border-radius:50%;background:rgba(9,35,52,.8);color:white;font-weight:900}.photo-gallery{margin:0 0 8px}.photo-gallery a{display:block;aspect-ratio:1;border-radius:13px;overflow:hidden;background:#dce6ea}.photo-gallery img{width:100%;height:100%;object-fit:cover}.opportunity .photo-gallery{grid-template-columns:repeat(3,1fr)}
+    .location-btn{width:100%;border:1px solid #9ab6c6;border-radius:14px;padding:11px 13px;background:#edf6fa;color:var(--forest);font-weight:800;text-align:left}.location-btn:disabled{opacity:.6}.location-status{display:block;margin-top:6px;color:var(--muted);font-size:12px}.location-panel{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}.location-card{padding:10px;border:1px solid var(--line);border-radius:14px;background:white;font-size:12px}.location-card strong{display:block;margin-bottom:3px}.location-card a{color:#087f87;font-weight:800;text-decoration:none}.location-card span{display:block;color:var(--muted);margin-top:3px}.share-location{grid-column:1/-1;border:0;border-radius:13px;padding:10px;background:#e1f2f2;color:var(--forest);font-weight:800}
+    .quick{gap:12px}
+    .service-card{position:relative;isolation:isolate;display:flex;align-items:flex-end;min-height:176px;aspect-ratio:4/3;overflow:hidden;border:0;border-radius:22px;padding:16px;background-image:linear-gradient(180deg,rgba(4,24,39,.02) 30%,rgba(4,24,39,.88) 100%),var(--service-image);background-position:center;background-size:cover;color:white;box-shadow:0 10px 28px rgba(7,59,102,.16);transition:transform .18s ease,box-shadow .18s ease}
+    .service-card:after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(180deg,transparent 45%,rgba(3,24,39,.18) 100%)}
+    .service-card:hover{transform:translateY(-2px);box-shadow:0 14px 32px rgba(7,59,102,.22)}
+    .service-card:focus-visible{outline:3px solid var(--leaf);outline-offset:3px}
+    .service-copy{position:relative;z-index:1;display:block;width:100%;text-shadow:0 1px 8px rgba(0,0,0,.45)}
+    .service-card .service-copy strong{display:block;margin:0 0 2px;color:white;font-size:18px;line-height:1.15}
+    .service-card .service-copy span{display:block;color:rgba(255,255,255,.9);font-size:12px;line-height:1.3}
+    .quick .service-card:last-child:nth-child(odd){grid-column:1/-1;min-height:148px;aspect-ratio:2/1;background-position:center 42%}.conditional-field[hidden]{display:none}
+    .chat-request-cta{display:block;width:100%;margin-top:12px;border:0;border-radius:13px;padding:12px 14px;background:var(--leaf);color:var(--forest);font-weight:900;text-align:center;box-shadow:0 6px 16px rgba(7,59,102,.12)}
+    .legal-box{margin:12px 0;border:1px solid var(--line);border-radius:14px;padding:11px 13px;background:#f7fafb;color:var(--muted);font-size:12px}.legal-box summary{cursor:pointer;color:var(--forest);font-weight:900}.legal-box p{margin:8px 0 0}.consent{display:flex;align-items:flex-start;gap:9px;margin:10px 0;font-size:12px;color:#415564}.consent input{width:18px;height:18px;margin-top:1px;flex:0 0 auto}.secondary{width:100%;border:1px solid #9ab6c6;border-radius:14px;padding:11px 13px;background:white;color:var(--forest);font-weight:800}.access-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}.security-status{display:block;margin-top:3px;color:#8a6313;font-size:11px;font-weight:800}.report-toggle{width:100%;margin-top:10px;border:0;background:transparent;color:#a6382f;text-decoration:underline;font-weight:800}.report-form{margin-top:9px;padding:12px;border:1px solid #e5c7c3;border-radius:14px;background:#fff8f7}.report-form[hidden]{display:none}.report-form select,.report-form textarea{width:100%;margin-bottom:8px;border:1px solid var(--line);border-radius:11px;padding:10px}.report-form textarea{min-height:76px;resize:vertical}.report-form button{width:100%;border:0;border-radius:11px;padding:10px;background:#a6382f;color:white;font-weight:900}
+    @media(max-width:380px){.nav button{font-size:9px}.nav button b{font-size:18px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <header class="top"><img class="brand-logo" src="/app/assets/logo-llama-a-jaime-final-v534.png" alt="Llama a Jaime"><span class="status-dot" title="Servicio activo"></span></header>
+  <main>
+    <section class="view active" id="home">
+      <div class="hero"><div class="eyebrow">Soluciones para tu día</div><h1>¿Necesitas ayuda?<br>Llama a Jaime.</h1><p>Cuéntanos qué necesitas y te conectaremos con prestadores disponibles en tu comuna.</p></div>
+      <div class="quick">
+        <button class="service-card" data-start="hogar" style="--service-image:url('/app/assets/categories/hogar.webp')" aria-label="Solicitar un servicio para el hogar"><span class="service-copy"><strong>Hogar</strong><span>Arreglos e instalaciones</span></span></button>
+        <button class="service-card" data-start="limpieza" style="--service-image:url('/app/assets/categories/limpieza.webp')" aria-label="Solicitar un servicio de limpieza"><span class="service-copy"><strong>Limpieza</strong><span>Hogar, oficina y apoyo</span></span></button>
+        <button class="service-card" data-start="flete" style="--service-image:url('/app/assets/categories/fletes.webp')" aria-label="Solicitar un flete o traslado"><span class="service-copy"><strong>Fletes</strong><span>Traslados y entregas</span></span></button>
+        <button class="service-card" data-start="jardineria" style="--service-image:url('/app/assets/categories/jardineria.webp')" aria-label="Solicitar un servicio de jardinería"><span class="service-copy"><strong>Jardinería</strong><span>Mantención y áreas verdes</span></span></button>
+        <button class="service-card" data-start="belleza" style="--service-image:url('/app/assets/categories/belleza.webp')" aria-label="Solicitar un servicio de belleza o bienestar"><span class="service-copy"><strong>Belleza</strong><span>Barbería, peluquería y bienestar</span></span></button>
+        <button class="service-card" data-start="reciclaje" style="--service-image:url('/app/assets/categories/reciclaje.webp')" aria-label="Solicitar retiro de reciclaje"><span class="service-copy"><strong>Reciclaje</strong><span>Retiros y materiales</span></span></button>
+        <button class="service-card" data-start="otro" style="--service-image:url('/app/assets/categories/otros.webp')" aria-label="Solicitar otro tipo de servicio"><span class="service-copy"><strong>Otros servicios</strong><span>Cuéntale a Jaime qué necesitas</span></span></button>
+      </div>
+      <button class="provider-cta" data-go="provider"><span class="icon">🧑‍🔧</span><span><b>Quiero ofrecer servicios</b><span>Regístrate y recibe oportunidades cercanas</span></span><i>›</i></button>
+      <div class="section-title"><h2>¿Cómo funciona?</h2><span>3 pasos</span></div>
+      <div class="steps"><div class="step"><b>1</b><div><strong>Describe tu necesidad</strong>La IA te ayuda a ordenar los datos.</div></div><div class="step"><b>2</b><div><strong>Publicamos la solicitud</strong>Prestadores disponibles pueden revisarla.</div></div><div class="step"><b>3</b><div><strong>Coordina con seguridad</strong>Revisa la propuesta antes de confirmar.</div></div></div>
+      <div class="install" id="installCard"><h3>Instala Llama a Jaime</h3><p>Úsala desde tu pantalla de inicio como cualquier aplicación.</p><button id="installBtn">Instalar aplicación</button></div>
+    </section>
 
-create extension if not exists pgcrypto;
+    <section class="view" id="chat">
+      <div class="page-head"><h1>Habla con Jaime</h1><p>Pregunta libremente o prepara tu solicitud.</p></div>
+      <div class="chips"><button class="chip">Necesito arreglar algo en casa</button><button class="chip">Busco un flete</button><button class="chip">¿Cómo funciona?</button></div>
+      <div class="chat-box" id="chatBox"><div class="message bot">¡Hola! Soy Jaime 👋. Cuéntame qué servicio necesitas y te ayudaré a preparar tu solicitud.</div></div>
+      <form class="chat-compose" id="chatForm"><textarea id="chatInput" rows="1" maxlength="1500" placeholder="Escribe tu pregunta…"></textarea><button class="send" aria-label="Enviar">↑</button></form>
+    </section>
 
--- Consentimiento y teléfono normalizado del cliente.
-alter table public.nexi_app_solicitudes
-  add column if not exists telefono_normalizado text,
-  add column if not exists acepta_terminos boolean not null default false,
-  add column if not exists acepta_privacidad boolean not null default false,
-  add column if not exists consentimiento_at timestamptz,
-  add column if not exists terminos_version text;
+    <section class="view" id="request">
+      <div class="page-head"><h1>Crear solicitud</h1><p>Completa lo esencial. Podrás revisar todo antes de coordinar.</p></div>
+      <div class="form-card" id="requestCard">
+        <form id="requestForm">
+          <div class="field"><label for="serviceSelect">Categoría del servicio</label><select id="serviceSelect" required><option value="hogar">Servicios para el hogar</option><option value="limpieza">Limpieza</option><option value="flete">Fletes y traslados</option><option value="jardineria">Jardinería</option><option value="belleza">Belleza y bienestar</option><option value="reciclaje">Reciclaje</option><option value="otro">Otros servicios</option></select></div>
+          <div class="field conditional-field" id="beautyServiceField" hidden><label for="beautyService">Servicio de belleza o bienestar</label><select id="beautyService"><option value="barberia">Barbería</option><option value="peluqueria">Peluquería</option><option value="manicure_pedicure">Manicure y pedicure</option><option value="maquillaje">Maquillaje</option><option value="depilacion">Depilación</option><option value="masaje_relajacion">Masaje de relajación</option><option value="peinado_eventos">Peinado para eventos</option><option value="otro_belleza">Otro servicio de belleza</option></select></div>
+          <div class="grid2"><div class="field"><label for="name">Nombre</label><input id="name" required autocomplete="name"></div><div class="field"><label for="phone">Teléfono</label><input id="phone" required type="tel" autocomplete="tel" placeholder="+56 9…"></div></div>
+          <div class="grid2"><div class="field"><label for="email">Correo (opcional)</label><input id="email" type="email" autocomplete="email"></div><div class="field"><label for="commune">Comuna</label><input id="commune" required></div></div>
+          <div class="field"><label for="origin">Dirección donde necesitas el servicio</label><input id="origin" required autocomplete="street-address"></div>
+          <div class="field"><button class="location-btn" id="requestLocationBtn" type="button">📍 Compartir mi ubicación actual</button><span class="location-status" id="requestLocationStatus">Opcional. Solo la verá el prestador que tome tu solicitud.</span></div>
+          <div class="field" id="destinationField" hidden><label for="destination">Dirección de destino</label><input id="destination"></div>
+          <div class="field" id="materialsField" hidden><label>Materiales para reciclar</label><div class="checks" id="requestMaterials"><label class="check-pill"><input type="checkbox" value="Cartón"><span>Cartón</span></label><label class="check-pill"><input type="checkbox" value="Papel"><span>Papel</span></label><label class="check-pill"><input type="checkbox" value="Plástico"><span>Plástico</span></label><label class="check-pill"><input type="checkbox" value="Vidrio"><span>Vidrio</span></label><label class="check-pill"><input type="checkbox" value="Metales"><span>Metales</span></label><label class="check-pill"><input type="checkbox" value="Textil"><span>Textil</span></label><label class="check-pill"><input type="checkbox" value="Electrónicos"><span>Electrónicos</span></label><label class="check-pill"><input type="checkbox" value="Aceite"><span>Aceite</span></label><label class="check-pill"><input type="checkbox" value="Otros"><span>Otros</span></label></div></div>
+          <div class="field"><label>Fotografías (opcional)</label><div class="grid2"><label class="photo-picker">📷 Tomar foto<input id="requestCamera" type="file" accept="image/jpeg,image/png,image/webp" capture="environment"><small>Puedes repetir</small></label><label class="photo-picker">🖼️ Elegir fotos<input id="requestPhotos" type="file" accept="image/jpeg,image/png,image/webp" multiple><small>Selección múltiple</small></label></div><div class="muted-note">Hasta 5 imágenes · máximo 8 MB cada una.</div><div class="photo-preview" id="photoPreview"></div></div>
+          <div class="field"><label for="details" id="detailsLabel">Describe lo que necesitas</label><textarea id="details" required placeholder="Ej.: necesito instalar una repisa en el living…"></textarea></div>
+          <div class="field"><label for="schedule">Fecha u horario preferido (opcional)</label><input id="schedule" placeholder="Ej.: sábado por la mañana"></div>
+          <details class="legal-box"><summary>Seguridad, privacidad y responsabilidades</summary><p>Tu teléfono, dirección, fotos y ubicación no se muestran a prestadores antes de que uno tome la solicitud. La ubicación es opcional, puntual y privada entre las partes asignadas; la app no realiza seguimiento en segundo plano.</p><p>El prestador responde por la ejecución, el precio acordado, daños y accidentes del servicio. Llama a Jaime administra la plataforma, la privacidad, los reportes y las suspensiones, pero no presta directamente el servicio. No publiques emergencias ni trabajos riesgosos.</p></details>
+          <label class="consent"><input id="requestTerms" type="checkbox" required><span>Acepto los términos de uso y entiendo las responsabilidades del servicio.</span></label>
+          <label class="consent"><input id="requestPrivacy" type="checkbox" required><span>Autorizo el tratamiento privado de mis datos para gestionar esta solicitud.</span></label>
+          <button class="primary" id="submitRequest">Publicar solicitud</button><div class="notice" id="formNotice"></div>
+        </form>
+      </div>
+      <div class="tracking-card" id="trackingCard"><div class="check">✓</div><h2>Solicitud publicada</h2><p id="trackingMessage">Guarda este código para consultar el estado.</p><div class="code" id="requestCode"></div><button class="primary" data-go="status">Ver mis solicitudes</button></div>
+    </section>
 
--- Cuenta única, acceso recuperable y estado de revisión del prestador.
-alter table public.nexi_app_prestadores
-  add column if not exists rut_normalizado text,
-  add column if not exists telefono_normalizado text,
-  add column if not exists pin_salt text,
-  add column if not exists pin_hash text,
-  add column if not exists acepta_terminos boolean not null default false,
-  add column if not exists acepta_privacidad boolean not null default false,
-  add column if not exists consentimiento_at timestamptz,
-  add column if not exists terminos_version text,
-  add column if not exists estado_cuenta text not null default 'activa',
-  add column if not exists estado_verificacion text not null default 'pendiente',
-  add column if not exists suspendido_at timestamptz,
-  add column if not exists motivo_suspension text,
-  add column if not exists ultimo_login_at timestamptz;
+    <section class="view" id="provider">
+      <div class="page-head"><h1>Modo prestador</h1><p>Ofrece tus servicios y recibe oportunidades según tu cobertura.</p></div>
+      <div class="provider-summary" id="providerSummary"><div class="row"><div><h3 id="providerName">Prestador</h3><span id="providerCode"></span><span class="security-status" id="providerSecurityStatus">Identidad pendiente de revisión</span></div><button class="availability" id="availabilityBtn">Disponible</button></div></div>
+      <button class="notify-btn" id="notifyBtn" hidden>🔔 Activar notificaciones</button>
+      <button class="secondary" id="providerLogout" type="button" hidden>Cerrar sesión de prestador</button>
+      <div class="access-switch" id="providerAccessSwitch"><button class="toggle active" type="button" data-provider-access="register">Crear cuenta</button><button class="toggle" type="button" data-provider-access="login">Ingresar</button></div>
+      <div class="form-card" id="providerRegister">
+        <form id="providerForm">
+          <div class="field"><label for="providerNameInput">Nombre o empresa</label><input id="providerNameInput" required autocomplete="name"></div>
+          <div class="grid2"><div class="field"><label for="providerRut">RUT</label><input id="providerRut" required inputmode="text" autocomplete="off" placeholder="12.345.678-5"></div><div class="field"><label for="providerPin">Clave de acceso</label><input id="providerPin" required type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="new-password" placeholder="6 números"></div></div>
+          <div class="muted-note">El RUT se valida por formato, pero tu identidad quedará pendiente de revisión. No uses la clave de tu banco.</div>
+          <div class="grid2"><div class="field"><label for="providerPhone">Teléfono</label><input id="providerPhone" required type="tel" autocomplete="tel"></div><div class="field"><label for="providerEmail">Correo</label><input id="providerEmail" type="email" autocomplete="email"></div></div>
+          <div class="field"><label>Servicios que realizas</label><div class="checks"><label class="check-pill"><input type="checkbox" name="providerRole" value="hogar"><span>Hogar</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="limpieza"><span>Limpieza</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="flete"><span>Fletes</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="jardineria"><span>Jardinería</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="belleza"><span>Belleza</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="reciclaje"><span>Reciclaje</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="otro"><span>Otros</span></label></div></div>
+          <div class="field"><label>Especialidades de belleza (solo si corresponde)</label><div class="checks" id="providerBeauty"><label class="check-pill"><input type="checkbox" value="barberia"><span>Barbería</span></label><label class="check-pill"><input type="checkbox" value="peluqueria"><span>Peluquería</span></label><label class="check-pill"><input type="checkbox" value="manicure_pedicure"><span>Manicure/pedicure</span></label><label class="check-pill"><input type="checkbox" value="maquillaje"><span>Maquillaje</span></label><label class="check-pill"><input type="checkbox" value="depilacion"><span>Depilación</span></label><label class="check-pill"><input type="checkbox" value="masaje_relajacion"><span>Masaje relajación</span></label><label class="check-pill"><input type="checkbox" value="peinado_eventos"><span>Peinados</span></label><label class="check-pill"><input type="checkbox" value="otro_belleza"><span>Otros</span></label></div><div class="muted-note">Los masajes incluidos son de relajación y bienestar, no tratamientos médicos.</div></div>
+          <div class="field"><label for="providerCommunes">Comunas de cobertura</label><input id="providerCommunes" required placeholder="Ej.: San Bernardo, El Bosque, La Cisterna"><div class="muted-note">Sepáralas con comas.</div></div>
+          <div class="field"><label>Materiales que recibes (solo reciclaje)</label><div class="checks" id="providerMaterials"><label class="check-pill"><input type="checkbox" value="Cartón"><span>Cartón</span></label><label class="check-pill"><input type="checkbox" value="Papel"><span>Papel</span></label><label class="check-pill"><input type="checkbox" value="Plástico"><span>Plástico</span></label><label class="check-pill"><input type="checkbox" value="Vidrio"><span>Vidrio</span></label><label class="check-pill"><input type="checkbox" value="Metales"><span>Metales</span></label><label class="check-pill"><input type="checkbox" value="Textil"><span>Textil</span></label><label class="check-pill"><input type="checkbox" value="Electrónicos"><span>Electrónicos</span></label><label class="check-pill"><input type="checkbox" value="Aceite"><span>Aceite</span></label><label class="check-pill"><input type="checkbox" value="Otros"><span>Otros</span></label></div></div>
+          <div class="grid2"><div class="field"><label for="providerVehicle">Vehículo (solo fletes)</label><input id="providerVehicle" placeholder="Ej.: camioneta 1.000 kg"></div><div class="field"><label for="providerRadius">Radio aproximado (km)</label><input id="providerRadius" type="number" min="1" max="300" placeholder="30"></div></div>
+          <details class="legal-box"><summary>Condiciones para prestadores</summary><p>Respondes por la calidad, seguridad, daños, accidentes y precio del trabajo que aceptes. No puedes tomar solicitudes creadas con tu mismo teléfono. La plataforma puede revisar reclamos y suspender cuentas.</p><p>El estado “pendiente” no significa que tu identidad esté verificada.</p></details>
+          <label class="consent"><input id="providerTerms" type="checkbox" required><span>Acepto los términos para prestadores y las reglas de seguridad.</span></label>
+          <label class="consent"><input id="providerPrivacy" type="checkbox" required><span>Autorizo el tratamiento privado de mis datos para operar mi cuenta.</span></label>
+          <button class="primary" id="providerSubmit">Crear perfil de prestador</button><div class="notice" id="providerNotice"></div>
+        </form>
+      </div>
+      <div class="form-card" id="providerLogin" hidden>
+        <form id="providerLoginForm"><div class="page-head" style="padding-top:0"><h1 style="font-size:22px">Ingresar como prestador</h1><p>Usa el RUT y la clave de 6 números creada al registrarte.</p></div><div class="field"><label for="providerLoginRut">RUT</label><input id="providerLoginRut" required autocomplete="username" placeholder="12.345.678-5"></div><div class="field"><label for="providerLoginPin">Clave de acceso</label><input id="providerLoginPin" required type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="current-password"></div><button class="primary" id="providerLoginSubmit">Ingresar</button><div class="notice" id="providerLoginNotice"></div></form>
+      </div>
+      <div id="providerDashboard" hidden><div class="section-title"><h2>Oportunidades</h2><button class="chip" id="refreshOpportunities">Actualizar</button></div><div class="opportunities" id="opportunities"></div></div>
+    </section>
 
-alter table public.nexi_app_prestadores
-  drop constraint if exists nexi_app_prestadores_estado_cuenta_check;
-alter table public.nexi_app_prestadores
-  add constraint nexi_app_prestadores_estado_cuenta_check
-  check (estado_cuenta in ('activa','suspendida','cerrada'));
+    <section class="view" id="status">
+      <div class="page-head"><h1>Mis solicitudes</h1><p>Consulta el estado de lo que publicaste desde este dispositivo.</p></div>
+      <div class="saved-list" id="savedList"></div>
+    </section>
+  </main>
+  <section class="conversation-modal" id="conversationModal" hidden>
+    <div class="conversation-head"><button id="closeConversation" aria-label="Cerrar">‹</button><div><h2 id="conversationTitle">Conversación</h2><span id="conversationSubtitle">Llama a Jaime</span></div></div>
+    <div class="conversation-body">
+      <button class="client-notify" id="clientNotifyBtn" hidden>🔔 Recibir avisos de mensajes y precios</button>
+      <div class="location-panel" id="conversationLocations"><div class="location-card" id="clientLocationCard"><strong>Ubicación del cliente</strong><span>No compartida</span></div><div class="location-card" id="providerLocationCard"><strong>Ubicación del prestador</strong><span>No compartida</span></div><button class="share-location" id="shareConversationLocation">📍 Compartir o actualizar mi ubicación</button></div>
+      <div class="photo-gallery" id="conversationPhotos" hidden></div>
+      <div class="quote-box" id="quoteBox" hidden></div>
+      <button class="report-toggle" id="reportToggle" type="button">Reportar un problema de seguridad</button>
+      <form class="report-form" id="reportForm" hidden><select id="reportCategory" required><option value="">Selecciona un motivo</option><option value="seguridad">Seguridad</option><option value="estafa">Posible estafa</option><option value="trato">Trato inapropiado</option><option value="cobro">Problema con el cobro</option><option value="servicio">Problema con el servicio</option><option value="contenido">Contenido inapropiado</option><option value="otro">Otro</option></select><textarea id="reportDescription" required minlength="10" maxlength="2000" placeholder="Describe lo ocurrido. No incluyas claves ni datos bancarios."></textarea><button type="submit">Enviar reporte privado</button><div class="notice" id="reportNotice"></div></form>
+      <form class="quote-form" id="quoteForm" hidden><input id="quoteAmount" inputmode="numeric" placeholder="$ Precio CLP" required><input id="quoteDetail" maxlength="500" placeholder="Qué incluye (opcional)"><button>Enviar cotización al cliente</button></form>
+      <div class="conversation-messages" id="conversationMessages"></div>
+      <form class="conversation-compose" id="conversationForm"><input id="conversationInput" maxlength="2000" placeholder="Escribe un mensaje…" autocomplete="off"><button>Enviar</button></form>
+    </div>
+  </section>
+  <nav class="nav"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button data-go="chat"><b>✦</b>IA</button><button data-go="request"><b>＋</b>Solicitar</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="status"><b>◷</b>Estado</button></nav>
+</div>
+<script>
+(() => {
+  const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+  const session = localStorage.appSession || (localStorage.appSession = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
+  const headers = {"Content-Type":"application/json","X-App-Session":session};
+  const SERVICE_META = {
+    hogar:{label:"Servicios para el hogar",prompt:"Ej.: necesito instalar una repisa en el living…"},
+    limpieza:{label:"Limpieza",prompt:"Ej.: limpieza profunda de departamento de dos dormitorios…"},
+    flete:{label:"Fletes y traslados",prompt:"Ej.: refrigerador y dos cajas; segundo piso sin ascensor…"},
+    jardineria:{label:"Jardinería",prompt:"Ej.: corte de pasto y poda de arbustos…"},
+    belleza:{label:"Belleza y bienestar",prompt:"Ej.: corte de cabello a domicilio el sábado por la tarde…"},
+    reciclaje:{label:"Reciclaje",prompt:"Ej.: cartón, botellas y dos bolsas de plástico…"},
+    otro:{label:"Otros servicios",prompt:"Describe con detalle el servicio que necesitas…"}
+  };
+  const BEAUTY_META={barberia:"Barbería",peluqueria:"Peluquería",manicure_pedicure:"Manicure y pedicure",maquillaje:"Maquillaje",depilacion:"Depilación",masaje_relajacion:"Masaje de relajación",peinado_eventos:"Peinado para eventos",otro_belleza:"Otro servicio de belleza"};
+  let service = "hogar", installPrompt = null;
+  let history = JSON.parse(sessionStorage.getItem("llamaAJaimeHistory") || "[]");
+  let conversationContext = null, conversationTimer = null, requestPhotos = [], pendingLocation = null;
 
-alter table public.nexi_app_prestadores
-  drop constraint if exists nexi_app_prestadores_verificacion_check;
-alter table public.nexi_app_prestadores
-  add constraint nexi_app_prestadores_verificacion_check
-  check (estado_verificacion in ('pendiente','verificado','rechazado'));
+  function go(id){ $$(".view").forEach(v=>v.classList.toggle("active",v.id===id)); $$(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.go===id)); window.scrollTo({top:0,behavior:"smooth"}); if(id==="status") loadSaved(); if(id==="provider") loadProvider(); }
+  $$('[data-go]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.go)));
+  $$('[data-start]').forEach(b=>b.addEventListener('click',()=>{ setService(b.dataset.start); go('request'); }));
 
-create unique index if not exists nexi_app_prestadores_empresa_rut_unique
-  on public.nexi_app_prestadores (empresa_id, rut_normalizado)
-  where rut_normalizado is not null;
+  function setService(value){service=SERVICE_META[value]?value:'otro';$('#serviceSelect').value=service;const flete=service==='flete',reciclaje=service==='reciclaje',belleza=service==='belleza';$('#destinationField').hidden=!flete;$('#destination').required=flete;$('#materialsField').hidden=!reciclaje;$('#beautyServiceField').hidden=!belleza;$('#beautyService').required=belleza;$('#detailsLabel').textContent=flete?'¿Qué necesitas trasladar?':reciclaje?'¿Qué materiales necesitas retirar?':belleza?'Cuéntanos los detalles y si prefieres domicilio o local':'Describe lo que necesitas';$('#details').placeholder=SERVICE_META[service].prompt;}
+  $('#serviceSelect').addEventListener('change',e=>setService(e.target.value));
 
-create index if not exists nexi_app_solicitudes_telefono_idx
-  on public.nexi_app_solicitudes (empresa_id, telefono_normalizado, created_at desc);
+  function renderPhotoPreview(){const box=$('#photoPreview');box.innerHTML='';requestPhotos.forEach((file,index)=>{const item=document.createElement('div'),img=document.createElement('img'),remove=document.createElement('button'),url=URL.createObjectURL(file);item.className='photo-item';img.src=url;img.alt=`Foto ${index+1}`;img.onload=()=>URL.revokeObjectURL(url);remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Eliminar foto');remove.addEventListener('click',()=>{requestPhotos.splice(index,1);renderPhotoPreview()});item.append(img,remove);box.append(item)})}
+  function addSelectedPhotos(event){const selected=[...event.target.files],available=5-requestPhotos.length;if(selected.length>available)alert(`Solo puedes agregar ${available} foto${available===1?'':'s'} más.`);for(const file of selected.slice(0,available)){if(!['image/jpeg','image/png','image/webp'].includes(file.type)){alert(`${file.name}: formato no compatible.`);continue}if(file.size>8*1024*1024){alert(`${file.name}: supera el máximo de 8 MB.`);continue}requestPhotos.push(file)}event.target.value='';renderPhotoPreview()}
+  $('#requestCamera').addEventListener('change',addSelectedPhotos);$('#requestPhotos').addEventListener('change',addSelectedPhotos);
 
-create index if not exists nexi_app_prestadores_seguridad_idx
-  on public.nexi_app_prestadores (empresa_id, estado_cuenta, activo, disponible);
+  function currentPosition(){return new Promise((resolve,reject)=>{if(!('geolocation'in navigator)){reject(new Error('Este dispositivo no permite obtener la ubicación.'));return}navigator.geolocation.getCurrentPosition(position=>resolve({latitud:position.coords.latitude,longitud:position.coords.longitude,precision_m:position.coords.accuracy}),error=>reject(new Error(error.code===1?'Debes permitir el acceso a tu ubicación.':'No pude obtener tu ubicación. Intenta nuevamente.')),{enableHighAccuracy:true,timeout:15000,maximumAge:60000})})}
+  $('#requestLocationBtn').addEventListener('click',async()=>{const button=$('#requestLocationBtn'),status=$('#requestLocationStatus');button.disabled=true;status.textContent='Obteniendo ubicación…';try{pendingLocation=await currentPosition();button.textContent='✓ Ubicación agregada';status.textContent=`Precisión aproximada: ${Math.round(pendingLocation.precision_m||0)} metros. Puedes actualizarla pulsando nuevamente.`}catch(error){status.textContent=error.message}finally{button.disabled=false}});
 
--- Reclamos privados para revisión y eventual suspensión manual.
-create table if not exists public.nexi_app_reclamos (
-  id uuid primary key default gen_random_uuid(),
-  empresa_id uuid not null,
-  solicitud_id uuid not null references public.nexi_app_solicitudes(id) on delete cascade,
-  prestador_id uuid references public.nexi_app_prestadores(id) on delete set null,
-  reportante_tipo text not null check (reportante_tipo in ('cliente','prestador')),
-  categoria text not null check (categoria in ('seguridad','estafa','trato','cobro','servicio','contenido','otro')),
-  descripcion text not null check (char_length(descripcion) between 10 and 2000),
-  estado text not null default 'abierto' check (estado in ('abierto','en_revision','resuelto','descartado')),
-  resolucion text,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
+  function plainAssistantText(content){return String(content||'').replace(/\*\*(.*?)\*\*/gs,'$1').replace(/__(.*?)__/gs,'$1').replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,'$1$2').replace(/`([^`\n]+)`/g,'$1').replace(/^\s{0,3}#{1,6}\s*/gm,'').replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'$1 ($2)').trim()}
+  function addMessage(content, role){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'&&/crear solicitud/i.test(display)){const button=document.createElement('button');button.type='button';button.className='chat-request-cta';button.textContent='Crear solicitud';button.addEventListener('click',()=>go('request'));el.append(button)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; }
+  history.forEach(m=>addMessage(m.content,m.role));
+  async function ask(message){ addMessage(message,'user'); const prior=history.slice(-8); history.push({role:'user',content:message}); $('#chatInput').disabled=true; const waiting=document.createElement('div'); waiting.className='message bot'; waiting.innerHTML='<span class="spinner"></span> Pensando…'; $('#chatBox').append(waiting); $('#chatBox').scrollTop=$('#chatBox').scrollHeight;
+    try{ const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message,service,history:prior})}); const d=await r.json(); waiting.remove(); if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant'); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
+    catch(e){waiting.remove();addMessage(e.message||'No pude conectar. Intenta nuevamente.','assistant')} finally{$('#chatInput').disabled=false;$('#chatInput').focus()}
+  }
+  $('#chatForm').addEventListener('submit',e=>{e.preventDefault();const m=$('#chatInput').value.trim();if(!m)return;$('#chatInput').value='';ask(m)});
+  $$('.chips .chip').forEach(b=>b.addEventListener('click',()=>ask(b.textContent)));
 
-create index if not exists nexi_app_reclamos_revision_idx
-  on public.nexi_app_reclamos (empresa_id, estado, created_at desc);
-create index if not exists nexi_app_reclamos_prestador_idx
-  on public.nexi_app_reclamos (prestador_id, estado, created_at desc);
+  $('#requestForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submitRequest'),note=$('#formNotice');btn.disabled=true;btn.innerHTML='<span class="spinner"></span> Publicando';note.style.display='none';const materials=$$('#requestMaterials input:checked').map(x=>x.value);const payload={tipo:service,subtipo:service==='belleza'?$('#beautyService').value:'',nombre:$('#name').value,telefono:$('#phone').value,email:$('#email').value,comuna:$('#commune').value,direccion_origen:$('#origin').value,direccion_destino:$('#destination').value,detalles:$('#details').value,materiales:materials,fecha_preferida:$('#schedule').value,acepta_terminos:$('#requestTerms').checked,acepta_privacidad:$('#requestPrivacy').checked,...(pendingLocation||{})};
+    try{const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));let photoWarning='',uploadedCount=requestPhotos.length;if(requestPhotos.length){btn.innerHTML='<span class="spinner"></span> Subiendo fotos';const form=new FormData();form.append('token',d.solicitud.token);requestPhotos.forEach(file=>form.append('fotos',file,file.name));try{const photoResponse=await fetch(`/app/api/solicitudes/${encodeURIComponent(d.solicitud.codigo)}/fotos`,{method:'POST',headers:{'X-App-Session':session},body:form});const photoData=await photoResponse.json();if(!photoResponse.ok)throw new Error(photoData.error||'No pude subir las fotos')}catch(photoError){photoWarning='La solicitud quedó publicada, pero algunas fotos no se pudieron guardar. Puedes continuar igualmente.'}}$('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent=photoWarning||(uploadedCount?`${uploadedCount} foto${uploadedCount===1?'':'s'} guardada${uploadedCount===1?'':'s'} de forma privada.`:'Guarda este código para consultar el estado.');requestPhotos=[];pendingLocation=null;renderPhotoPreview();$('#requestLocationBtn').textContent='📍 Compartir mi ubicación actual';$('#requestLocationStatus').textContent='Opcional. Solo la verá el prestador que tome tu solicitud.';$('#requestCard').style.display='none';$('#trackingCard').style.display='block';}
+    catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{btn.disabled=false;btn.textContent='Publicar solicitud'}
+  });
 
-alter table public.nexi_app_reclamos enable row level security;
+  async function loadSaved(){const box=$('#savedList'),items=JSON.parse(localStorage.requests||'[]');if(!items.length){box.innerHTML='<div class="empty">Aún no has creado solicitudes desde este dispositivo.</div>';return}box.innerHTML='';for(const item of items){const meta=SERVICE_META[item.tipo]||SERVICE_META.otro,el=document.createElement('button');el.className='saved';el.innerHTML=`<strong>${escapeHtml(meta.label)} · ${escapeHtml(item.codigo)}</strong><span>Consultando estado… · Toca para conversar</span>`;el.addEventListener('click',()=>openConversation('cliente',{public_id:item.codigo,token:item.token}));box.append(el);try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(item.codigo)}?token=${encodeURIComponent(item.token)}`,{headers});const d=await r.json();el.querySelector('span').textContent=r.ok?`${d.solicitud.estado} · Toca para conversar y revisar precios`:(d.error||'Sin información');}catch{el.querySelector('span').textContent='Sin conexión'}}}
 
-drop trigger if exists nexi_app_reclamos_touch on public.nexi_app_reclamos;
-create trigger nexi_app_reclamos_touch
-before update on public.nexi_app_reclamos
-for each row execute function public.nexi_app_touch_updated_at();
+  function providerAuth(){try{return JSON.parse(localStorage.providerAuth||'null')}catch{return null}}
+  function providerMaterials(){return $$('#providerMaterials input:checked').map(x=>x.value)}
+  function providerBeauty(){return $$('#providerBeauty input:checked').map(x=>x.value)}
+  function providerRoles(){return $$('input[name="providerRole"]:checked').map(x=>x.value)}
 
--- Auditoría mínima; nunca se expone directamente al navegador.
-create table if not exists public.nexi_app_auditoria_seguridad (
-  id uuid primary key default gen_random_uuid(),
-  empresa_id uuid not null,
-  evento text not null,
-  actor_tipo text,
-  actor_id uuid,
-  solicitud_id uuid,
-  metadata jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
-);
+  function conversationQuery(){const c=conversationContext;if(!c)return'';if(c.actor==='cliente')return`actor=cliente&token=${encodeURIComponent(c.token)}`;return`actor=prestador&codigo=${encodeURIComponent(c.codigo)}&token=${encodeURIComponent(c.token)}`}
+  function renderPhotoGallery(photos,box){box.innerHTML='';const items=Array.isArray(photos)?photos:[];box.hidden=!items.length;for(const photo of items){const link=document.createElement('a'),img=document.createElement('img');link.href=photo.url;link.target='_blank';link.rel='noopener';img.src=photo.url;img.alt='Fotografía de la solicitud';img.loading='lazy';link.append(img);box.append(link)}}
+  function renderLocationCard(location,box,title){box.innerHTML=`<strong>${escapeHtml(title)}</strong>`;if(!location){const span=document.createElement('span');span.textContent='No compartida';box.append(span);return}const lat=Number(location.latitud),lng=Number(location.longitud),link=document.createElement('a'),detail=document.createElement('span');link.href=`https://www.google.com/maps?q=${encodeURIComponent(lat+','+lng)}`;link.target='_blank';link.rel='noopener';link.textContent='Abrir en el mapa';const accuracy=Number(location.precision_m||0),updated=location.updated_at?new Date(location.updated_at).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}):'';detail.textContent=[accuracy?`Precisión ±${Math.round(accuracy)} m`:'',updated?`Actualizada ${updated}`:''].filter(Boolean).join(' · ');box.append(link,detail)}
+  function renderLocations(locations){const data=locations||{};renderLocationCard(data.cliente,$('#clientLocationCard'),'Ubicación del cliente');renderLocationCard(data.prestador,$('#providerLocationCard'),'Ubicación del prestador')}
+  async function openConversation(actor,data){clearInterval(conversationTimer);conversationContext={actor,public_id:data.public_id,token:data.token,codigo:data.codigo||''};$('#conversationModal').hidden=false;$('#conversationTitle').textContent=actor==='cliente'?'Tu solicitud':'Cliente y cotización';$('#conversationSubtitle').textContent=data.public_id;$('#clientNotifyBtn').hidden=actor!=='cliente';$('#shareConversationLocation').textContent=actor==='cliente'?'📍 Compartir ubicación con el prestador':'📍 Compartir ubicación con el cliente';$('#reportToggle').hidden=true;$('#reportForm').hidden=true;$('#reportForm').reset();$('#reportNotice').style.display='none';$('#conversationMessages').innerHTML='<div class="empty"><span class="spinner"></span> Abriendo conversación…</div>';await loadConversation();conversationTimer=setInterval(()=>loadConversation(true),5000)}
+  function closeConversation(){clearInterval(conversationTimer);conversationTimer=null;conversationContext=null;$('#reportForm').hidden=true;$('#conversationModal').hidden=true}
+  $('#closeConversation').addEventListener('click',closeConversation);
 
-create index if not exists nexi_app_auditoria_evento_idx
-  on public.nexi_app_auditoria_seguridad (empresa_id, evento, created_at desc);
-alter table public.nexi_app_auditoria_seguridad enable row level security;
+  async function loadConversation(silent=false){const c=conversationContext;if(!c)return;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/conversacion?${conversationQuery()}`,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude abrir la conversación');const box=$('#conversationMessages'),hasProvider=!!d.prestador;if(!silent)box.innerHTML='';renderPhotoGallery(d.fotos,$('#conversationPhotos'));renderLocations(d.ubicaciones);$('#reportToggle').hidden=!hasProvider;if(!hasProvider){box.innerHTML='<div class="empty">Jaime todavía está buscando un prestador compatible. Vuelve a revisar en unos minutos.</div>';$('#conversationForm').hidden=true;$('#quoteForm').hidden=true;$('#quoteBox').hidden=true;$('#reportForm').hidden=true;return}$('#conversationTitle').textContent=c.actor==='cliente'?(d.prestador.nombre||'Prestador'):'Cliente y cotización';$('#conversationForm').hidden=false;box.innerHTML='';for(const m of d.mensajes){const el=document.createElement('div'),mine=(c.actor==='cliente'&&m.remitente_tipo==='cliente')||(c.actor==='prestador'&&m.remitente_tipo==='prestador');el.className='conversation-message '+(m.remitente_tipo==='sistema'?'system':mine?'mine':'');el.textContent=m.contenido;box.append(el)}if(!d.mensajes.length)box.innerHTML='<div class="empty">La conversación está lista. Envía el primer mensaje.</div>';box.scrollTop=box.scrollHeight;renderQuote(d.cotizacion)}catch(err){if(!silent)$('#conversationMessages').innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
 
--- La toma se valida también dentro de la base: cuenta activa y sin autoasignación.
-create or replace function public.nexi_app_tomar_match(
-  p_match_id uuid,
-  p_prestador_id uuid
-)
-returns jsonb
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_match public.nexi_app_matches%rowtype;
-  v_solicitud public.nexi_app_solicitudes%rowtype;
-  v_prestador public.nexi_app_prestadores%rowtype;
-begin
-  select * into v_prestador
-  from public.nexi_app_prestadores
-  where id = p_prestador_id
-  for update;
+  $('#reportToggle').addEventListener('click',()=>{$('#reportForm').hidden=!$('#reportForm').hidden;$('#reportNotice').style.display='none'});
+  $('#reportForm').addEventListener('submit',async e=>{e.preventDefault();const c=conversationContext,note=$('#reportNotice'),button=e.submitter;if(!c)return;button.disabled=true;note.style.display='none';const auth=c.actor==='cliente'?{actor:'cliente',token:c.token}:{actor:'prestador',codigo:c.codigo,token:c.token};try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/reclamos`,{method:'POST',headers,body:JSON.stringify({...auth,categoria:$('#reportCategory').value,detalle:$('#reportDescription').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude enviar el reporte');e.target.reset();note.textContent='Reporte enviado de forma privada. El equipo podrá revisarlo y suspender cuentas si corresponde.';note.className='notice';note.style.display='block'}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false}});
 
-  if not found or not v_prestador.activo or v_prestador.estado_cuenta <> 'activa' then
-    return jsonb_build_object('ok', false, 'error', 'La cuenta del prestador no está habilitada');
-  end if;
+  $('#shareConversationLocation').addEventListener('click',async()=>{const c=conversationContext,button=$('#shareConversationLocation');if(!c)return;const original=button.textContent;button.disabled=true;button.textContent='Obteniendo ubicación…';try{const location=await currentPosition(),body=c.actor==='cliente'?{actor:'cliente',token:c.token,...location}:{actor:'prestador',codigo:c.codigo,token:c.token,...location};const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/ubicacion`,{method:'POST',headers,body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude compartir la ubicación');await loadConversation()}catch(error){alert(error.message)}finally{button.disabled=false;button.textContent=original}});
 
-  select * into v_match
-  from public.nexi_app_matches
-  where id = p_match_id and prestador_id = p_prestador_id
-  for update;
+  function renderQuote(quote){const c=conversationContext,box=$('#quoteBox'),form=$('#quoteForm'),paymentNote='<div class="muted-note">Por ahora, el pago se coordina directamente con el prestador. La app no cobra ni retiene dinero.</div>';box.hidden=!quote;form.hidden=!(c&&c.actor==='prestador'&&(!quote||quote.estado==='pendiente'));if(!quote){box.innerHTML='';return}const price=new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(quote.monto_clp);if(quote.estado==='aceptada'){box.innerHTML=`<h3>✓ Precio confirmado: ${escapeHtml(price)}</h3><div>${escapeHtml(quote.detalle||'Servicio acordado')}</div>${paymentNote}`;form.hidden=true;return}if(c.actor==='cliente'){box.innerHTML=`<h3>Cotización: ${escapeHtml(price)}</h3><div>${escapeHtml(quote.detalle||'Sin detalle adicional')}</div>${paymentNote}<div class="quote-actions"><button class="quote-accept" data-quote-action="aceptar">Aceptar precio</button><button class="quote-reject" data-quote-action="rechazar">Rechazar</button></div>`;$$('[data-quote-action]').forEach(b=>b.addEventListener('click',()=>answerQuote(quote.id,b.dataset.quoteAction,b)))}else{box.innerHTML=`<h3>Precio enviado: ${escapeHtml(price)}</h3><div>Esperando respuesta del cliente.</div>${paymentNote}`}}
 
-  if not found then
-    return jsonb_build_object('ok', false, 'error', 'Oportunidad no encontrada');
-  end if;
+  $('#conversationForm').addEventListener('submit',async e=>{e.preventDefault();const c=conversationContext,input=$('#conversationInput'),message=input.value.trim();if(!c||!message)return;const body=c.actor==='cliente'?{actor:'cliente',token:c.token,mensaje:message}:{actor:'prestador',codigo:c.codigo,token:c.token,mensaje:message};input.disabled=true;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/conversacion`,{method:'POST',headers,body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude enviar');input.value='';await loadConversation()}catch(err){alert(err.message)}finally{input.disabled=false;input.focus()}});
 
-  select * into v_solicitud
-  from public.nexi_app_solicitudes
-  where id = v_match.solicitud_id
-  for update;
+  $('#quoteForm').addEventListener('submit',async e=>{e.preventDefault();const c=conversationContext,amount=$('#quoteAmount').value,detail=$('#quoteDetail').value;if(!c||c.actor!=='prestador')return;const button=e.submitter;button.disabled=true;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/cotizaciones`,{method:'POST',headers,body:JSON.stringify({codigo:c.codigo,token:c.token,monto_clp:amount,detalle:detail})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude enviar el precio');$('#quoteAmount').value='';$('#quoteDetail').value='';await loadConversation()}catch(err){alert(err.message)}finally{button.disabled=false}});
 
-  if v_solicitud.estado not in ('publicada','revisando') then
-    return jsonb_build_object('ok', false, 'error', 'La solicitud ya fue tomada');
-  end if;
+  async function answerQuote(quoteId,action,button){const c=conversationContext;if(!c||c.actor!=='cliente')return;if(action==='rechazar'&&!confirm('¿Rechazar este precio y volver a buscar otro prestador?'))return;button.disabled=true;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/cotizaciones/${encodeURIComponent(quoteId)}/responder`,{method:'POST',headers,body:JSON.stringify({token:c.token,accion:action})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude responder');if(action==='rechazar'){closeConversation();go('status');await loadSaved()}else await loadConversation()}catch(err){alert(err.message);button.disabled=false}}
 
-  if v_solicitud.telefono_normalizado is not null
-     and v_prestador.telefono_normalizado is not null
-     and v_solicitud.telefono_normalizado = v_prestador.telefono_normalizado then
-    return jsonb_build_object('ok', false, 'error', 'No puedes tomar una solicitud creada por tu propia cuenta');
-  end if;
+  $('#clientNotifyBtn').addEventListener('click',async()=>{const c=conversationContext;if(!c||c.actor!=='cliente'||!('serviceWorker'in navigator)||!('PushManager'in window)){alert('Este dispositivo no admite notificaciones push.');return}try{const permission=await Notification.requestPermission();if(permission!=='granted')throw new Error('Debes permitir las notificaciones.');const keyResponse=await fetch('/app/api/push/public-key'),keyData=await keyResponse.json();if(!keyResponse.ok)throw new Error('Las notificaciones aún no están configuradas.');const registration=await navigator.serviceWorker.ready;let subscription=await registration.pushManager.getSubscription();if(!subscription)subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(keyData.public_key)});const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/push/subscribe`,{method:'POST',headers,body:JSON.stringify({token:c.token,subscription:subscription.toJSON()})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude activar avisos');$('#clientNotifyBtn').textContent='✓ Avisos activados'}catch(err){alert(err.message)}});
 
-  update public.nexi_app_solicitudes
-  set estado = 'asignada', prestador_id = p_prestador_id, tomada_at = now()
-  where id = v_solicitud.id;
+  function showProviderAccess(mode='register'){const login=mode==='login';$('#providerRegister').hidden=login;$('#providerRegister').style.display=login?'none':'block';$('#providerLogin').hidden=!login;$('#providerLogin').style.display=login?'block':'none';$$('[data-provider-access]').forEach(button=>button.classList.toggle('active',button.dataset.providerAccess===mode))}
+  $$('[data-provider-access]').forEach(button=>button.addEventListener('click',()=>showProviderAccess(button.dataset.providerAccess)));
 
-  update public.nexi_app_matches
-  set estado = case when id = p_match_id then 'tomada' else 'cerrada' end
-  where solicitud_id = v_solicitud.id and estado = 'pendiente';
+  $('#providerForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#providerSubmit'),note=$('#providerNotice');btn.disabled=true;btn.innerHTML='<span class="spinner"></span> Registrando';note.style.display='none';const payload={nombre:$('#providerNameInput').value,rut:$('#providerRut').value,pin:$('#providerPin').value,telefono:$('#providerPhone').value,email:$('#providerEmail').value,roles:providerRoles(),comunas:$('#providerCommunes').value.split(',').map(x=>x.trim()).filter(Boolean),materiales:providerMaterials(),especialidades:providerBeauty(),vehiculo:$('#providerVehicle').value,radio_km:$('#providerRadius').value,acepta_terminos:$('#providerTerms').checked,acepta_privacidad:$('#providerPrivacy').checked};try{const r=await fetch('/app/api/prestadores',{method:'POST',headers,body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear el perfil');localStorage.providerAuth=JSON.stringify(d.prestador);e.target.reset();await loadProvider();}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{btn.disabled=false;btn.textContent='Crear perfil de prestador'}});
 
-  insert into public.nexi_app_auditoria_seguridad
-    (empresa_id, evento, actor_tipo, actor_id, solicitud_id)
-  values
-    (v_solicitud.empresa_id, 'solicitud_tomada', 'prestador', p_prestador_id, v_solicitud.id);
+  $('#providerLoginForm').addEventListener('submit',async e=>{e.preventDefault();const button=$('#providerLoginSubmit'),note=$('#providerLoginNotice');button.disabled=true;button.innerHTML='<span class="spinner"></span> Ingresando';note.style.display='none';try{const r=await fetch('/app/api/prestadores/login',{method:'POST',headers,body:JSON.stringify({rut:$('#providerLoginRut').value,pin:$('#providerLoginPin').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude ingresar');localStorage.providerAuth=JSON.stringify(d.prestador);e.target.reset();await loadProvider()}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false;button.textContent='Ingresar'}});
 
-  return jsonb_build_object(
-    'ok', true,
-    'solicitud_id', v_solicitud.id,
-    'estado', 'asignada'
-  );
-end;
-$$;
+  $('#providerLogout').addEventListener('click',()=>{localStorage.removeItem('providerAuth');showProviderAccess('login');loadProvider()});
 
-revoke all on function public.nexi_app_tomar_match(uuid, uuid) from public;
-grant execute on function public.nexi_app_tomar_match(uuid, uuid) to service_role;
+  async function loadProvider(){const auth=providerAuth();if(!auth){$('#providerAccessSwitch').hidden=false;$('#providerSummary').style.display='none';$('#providerDashboard').hidden=true;$('#notifyBtn').hidden=true;$('#providerLogout').hidden=true;if($('#providerLogin').hidden)showProviderAccess('register');return}$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerSummary').style.display='block';$('#providerDashboard').hidden=false;$('#providerName').textContent=auth.nombre||'Prestador';$('#providerCode').textContent=auth.codigo;$('#providerSecurityStatus').textContent=auth.estado_verificacion==='verificado'?'Identidad verificada':'Identidad pendiente de revisión';$('#notifyBtn').hidden=false;$('#providerLogout').hidden=false;await loadOpportunities();}
 
-comment on table public.nexi_app_reclamos is
-  'Reclamos privados del MVP de Llama a Jaime para moderación y revisión';
-comment on column public.nexi_app_prestadores.estado_verificacion is
-  'Pendiente no equivale a identidad verificada; solo usar verificado tras revisión real';
+  async function loadOpportunities(){const auth=providerAuth(),box=$('#opportunities');if(!auth)return;box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando oportunidades…</div>';try{const url=`/app/api/oportunidades?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`;const r=await fetch(url,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude consultar');$('#availabilityBtn').textContent=d.disponible?'Disponible':'No disponible';$('#availabilityBtn').classList.toggle('off',!d.disponible);if(!d.oportunidades.length){box.innerHTML='<div class="empty">No hay oportunidades compatibles por ahora.</div>';return}box.innerHTML='';for(const item of d.oportunidades){const s=item.solicitud,el=document.createElement('article'),meta=SERVICE_META[s.tipo]||SERVICE_META.otro,subtype=s.tipo==='belleza'?(BEAUTY_META[s.subtipo]||'Belleza y bienestar'):'';el.className='opportunity '+(item.match_estado==='tomada'?'taken':'');const material=(s.materiales||[]).join(', '),summary=subtype?`${subtype} · ${s.detalles||'Sin detalle'}`:(material||s.detalles||'Sin detalle');el.innerHTML=`<h3>${escapeHtml(meta.label)} · ${escapeHtml(s.comuna||'')}</h3><p>${escapeHtml(summary)}</p><p>${escapeHtml(s.fecha_preferida||'Horario a coordinar')}</p>${item.match_estado==='tomada'?`<p><strong>Contacto:</strong> ${escapeHtml(s.nombre||'')} · ${escapeHtml(s.telefono||'')}</p><p><strong>Dirección:</strong> ${escapeHtml(s.direccion_origen||'')}</p>${s.direccion_destino?`<p><strong>Destino:</strong> ${escapeHtml(s.direccion_destino)}</p>`:''}<button class="primary" data-provider-chat="${escapeHtml(s.public_id)}">Conversar y enviar precio</button>`:`<button class="primary" data-take="${item.match_id}">Tomar solicitud</button>`}`;if(item.match_estado==='tomada'&&Array.isArray(s.fotos)&&s.fotos.length){const gallery=document.createElement('div');gallery.className='photo-gallery';renderPhotoGallery(s.fotos,gallery);el.insertBefore(gallery,el.querySelector('[data-provider-chat]'))}box.append(el)}$$('[data-take]').forEach(b=>b.addEventListener('click',()=>takeOpportunity(b.dataset.take,b)));$$('[data-provider-chat]').forEach(b=>b.addEventListener('click',()=>openConversation('prestador',{public_id:b.dataset.providerChat,codigo:auth.codigo,token:auth.token})));}catch(err){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
+
+  function escapeHtml(value){const div=document.createElement('div');div.textContent=String(value||'');return div.innerHTML}
+  async function takeOpportunity(matchId,button){const auth=providerAuth();if(!auth)return;button.disabled=true;button.textContent='Tomando…';try{const r=await fetch(`/app/api/oportunidades/${encodeURIComponent(matchId)}/tomar`,{method:'POST',headers,body:JSON.stringify({codigo:auth.codigo,token:auth.token})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No se pudo tomar');await loadOpportunities();}catch(err){alert(err.message);button.disabled=false;button.textContent='Tomar solicitud'}}
+  $('#refreshOpportunities').addEventListener('click',loadOpportunities);
+  $('#availabilityBtn').addEventListener('click',async()=>{const auth=providerAuth();if(!auth)return;const next=$('#availabilityBtn').classList.contains('off');const r=await fetch('/app/api/prestadores/me',{method:'PATCH',headers,body:JSON.stringify({codigo:auth.codigo,token:auth.token,disponible:next})});if(r.ok)loadOpportunities();});
+
+  function urlBase64ToUint8Array(base64String){const padding='='.repeat((4-base64String.length%4)%4),base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/'),raw=atob(base64);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)))}
+  $('#notifyBtn').addEventListener('click',async()=>{const auth=providerAuth();if(!auth||!('serviceWorker'in navigator)||!('PushManager'in window)){alert('Este dispositivo no admite notificaciones push.');return}try{const permission=await Notification.requestPermission();if(permission!=='granted')throw new Error('Debes permitir las notificaciones.');const keyResponse=await fetch('/app/api/push/public-key');const keyData=await keyResponse.json();if(!keyResponse.ok)throw new Error('Las notificaciones aún no están configuradas en el servidor.');const registration=await navigator.serviceWorker.ready;let subscription=await registration.pushManager.getSubscription();if(!subscription)subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(keyData.public_key)});const r=await fetch('/app/api/push/subscribe',{method:'POST',headers,body:JSON.stringify({codigo:auth.codigo,token:auth.token,subscription:subscription.toJSON()})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude activar notificaciones');$('#notifyBtn').textContent='✓ Notificaciones activas';}catch(err){alert(err.message)}});
+
+  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
+  $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js',{scope:'/app/'}).catch(()=>{});
+  fetch('/app/api/config').then(r=>r.json()).then(d=>{if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
+  const initialView=new URLSearchParams(location.search).get('view');if(['provider','status'].includes(initialView))go(initialView);
+})();
+</script>
+</body>
+</html>
