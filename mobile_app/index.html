@@ -55,6 +55,10 @@
   .doc-actions{min-width:0;flex-wrap:wrap}
   .doc-upload{min-width:0}
 }
+.provider-public-card{display:flex;gap:12px;align-items:flex-start;margin:0 0 12px;padding:13px;border:1px solid var(--line);border-radius:16px;background:#fff;min-width:0}
+.provider-public-avatar{width:46px;height:46px;flex:0 0 46px;border-radius:50%;display:grid;place-items:center;background:#edf7f7;color:var(--forest);font-size:20px;font-weight:900}
+.provider-public-copy{min-width:0;flex:1}.provider-public-title{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.provider-public-title strong{font-size:14px}.provider-public-title span{font-size:10px;font-weight:900;padding:4px 7px;border-radius:999px;background:#e4f5e9;color:#246238}
+.provider-public-meta{font-size:11px;color:var(--muted);margin-top:4px}.provider-public-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.provider-public-tags span{font-size:10px;padding:4px 7px;border-radius:999px;background:#f1f4f5;color:#42535b}
 </style>
 </head>
 <body>
@@ -154,7 +158,14 @@
   <section class="conversation-modal" id="conversationModal" hidden>
     <div class="conversation-head"><button id="closeConversation" aria-label="Cerrar">‹</button><div><h2 id="conversationTitle">Conversación</h2><span id="conversationSubtitle">Llama a Jaime</span></div></div>
     <div class="conversation-body">
-      <button class="client-notify" id="clientNotifyBtn" hidden>🔔 Recibir avisos de mensajes y precios</button>
+      <button class="client-notify" id="clientNotifyBtn" hidden>🔔 Recibir avisos de mensajes y precios</button><div class="provider-public-card" id="providerPublicCard" hidden>
+  <div class="provider-public-avatar" id="providerPublicAvatar">J</div>
+  <div class="provider-public-copy">
+    <div class="provider-public-title"><strong id="providerPublicName">Prestador</strong><span id="providerPublicVerified">✓ Verificado</span></div>
+    <div class="provider-public-meta" id="providerPublicMeta"></div>
+    <div class="provider-public-tags" id="providerPublicTags"></div>
+  </div>
+</div>
       <div class="location-panel" id="conversationLocations"><div class="location-card" id="clientLocationCard"><strong>Ubicación del cliente</strong><span>No compartida</span></div><div class="location-card" id="providerLocationCard"><strong>Ubicación del prestador</strong><span>No compartida</span></div><button class="share-location" id="shareConversationLocation">📍 Compartir o actualizar mi ubicación</button></div>
       <div class="photo-gallery" id="conversationPhotos" hidden></div>
       <div class="quote-box" id="quoteBox" hidden></div>
@@ -226,7 +237,27 @@
   function renderPhotoGallery(photos,box){box.innerHTML='';const items=Array.isArray(photos)?photos:[];box.hidden=!items.length;for(const photo of items){const link=document.createElement('a'),img=document.createElement('img');link.href=photo.url;link.target='_blank';link.rel='noopener';img.src=photo.url;img.alt='Fotografía de la solicitud';img.loading='lazy';link.append(img);box.append(link)}}
   function renderLocationCard(location,box,title){box.innerHTML=`<strong>${escapeHtml(title)}</strong>`;if(!location){const span=document.createElement('span');span.textContent='No compartida';box.append(span);return}const lat=Number(location.latitud),lng=Number(location.longitud),link=document.createElement('a'),detail=document.createElement('span');link.href=`https://www.google.com/maps?q=${encodeURIComponent(lat+','+lng)}`;link.target='_blank';link.rel='noopener';link.textContent='Abrir en el mapa';const accuracy=Number(location.precision_m||0),updated=location.updated_at?new Date(location.updated_at).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}):'';detail.textContent=[accuracy?`Precisión ±${Math.round(accuracy)} m`:'',updated?`Actualizada ${updated}`:''].filter(Boolean).join(' · ');box.append(link,detail)}
   function renderLocations(locations){const data=locations||{};renderLocationCard(data.cliente,$('#clientLocationCard'),'Ubicación del cliente');renderLocationCard(data.prestador,$('#providerLocationCard'),'Ubicación del prestador')}
-  async function openConversation(actor,data){clearInterval(conversationTimer);conversationContext={actor,public_id:data.public_id,token:data.token,codigo:data.codigo||''};$('#conversationModal').hidden=false;$('#conversationTitle').textContent=actor==='cliente'?'Tu solicitud':'Cliente y cotización';$('#conversationSubtitle').textContent=data.public_id;$('#clientNotifyBtn').hidden=actor!=='cliente';$('#shareConversationLocation').textContent=actor==='cliente'?'📍 Compartir ubicación con el prestador':'📍 Compartir ubicación con el cliente';$('#reportToggle').hidden=true;$('#reportForm').hidden=true;$('#reportForm').reset();$('#reportNotice').style.display='none';$('#conversationMessages').innerHTML='<div class="empty"><span class="spinner"></span> Abriendo conversación…</div>';await loadConversation();conversationTimer=setInterval(()=>loadConversation(true),5000)}
+  async function loadPublicProviderProfile(){
+    const c=conversationContext,card=$('#providerPublicCard');
+    card.hidden=true;
+    if(!c||c.actor!=='cliente')return;
+    try{
+      const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/prestador?token=${encodeURIComponent(c.token)}`,{headers,cache:'no-store'});
+      const d=await r.json();
+      if(!r.ok||!d.prestador)return;
+      const p=d.prestador,name=p.nombre||'Prestador';
+      $('#providerPublicName').textContent=name;
+      $('#providerPublicAvatar').textContent=(name.trim()[0]||'J').toUpperCase();
+      $('#providerPublicVerified').hidden=!p.verificado;
+      const since=p.miembro_desde?new Date(p.miembro_desde).toLocaleDateString('es-CL',{month:'short',year:'numeric'}):'';
+      $('#providerPublicMeta').textContent=[since?`En Llama a Jaime desde ${since}`:'',Array.isArray(p.comunas)&&p.comunas.length?p.comunas.slice(0,3).join(', '):''].filter(Boolean).join(' · ');
+      const tags=[...(Array.isArray(p.especialidades)?p.especialidades:[]),...(Array.isArray(p.roles)?p.roles:[])].filter(Boolean).slice(0,6);
+      $('#providerPublicTags').innerHTML=tags.map(x=>`<span>${escapeHtml(String(x).replaceAll('_',' '))}</span>`).join('');
+      card.hidden=false;
+    }catch{}
+  }
+
+  async function openConversation(actor,data){clearInterval(conversationTimer);conversationContext={actor,public_id:data.public_id,token:data.token,codigo:data.codigo||''};$('#conversationModal').hidden=false;$('#conversationTitle').textContent=actor==='cliente'?'Tu solicitud':'Cliente y cotización';$('#conversationSubtitle').textContent=data.public_id;$('#clientNotifyBtn').hidden=actor!=='cliente';$('#shareConversationLocation').textContent=actor==='cliente'?'📍 Compartir ubicación con el prestador':'📍 Compartir ubicación con el cliente';$('#reportToggle').hidden=true;$('#reportForm').hidden=true;$('#reportForm').reset();$('#reportNotice').style.display='none';$('#conversationMessages').innerHTML='<div class="empty"><span class="spinner"></span> Abriendo conversación…</div>';await loadConversation();if(actor==='cliente')await loadPublicProviderProfile();conversationTimer=setInterval(()=>loadConversation(true),5000)}
   function closeConversation(){clearInterval(conversationTimer);conversationTimer=null;conversationContext=null;$('#reportForm').hidden=true;$('#conversationModal').hidden=true}
   $('#closeConversation').addEventListener('click',closeConversation);
 
