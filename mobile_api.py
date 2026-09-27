@@ -676,6 +676,17 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         response.headers["Cache-Control"] = "no-cache"
         return response
 
+    @app.get("/admin")
+    @app.get("/admin/")
+    def mobile_admin_page():
+        response = send_from_directory(app_dir, "admin.html")
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
     @app.get("/app/manifest.webmanifest")
     def mobile_manifest():
         return send_from_directory(app_dir, "manifest.webmanifest", mimetype="application/manifest+json")
@@ -1718,6 +1729,84 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
     # Requiere JWT Supabase Auth + registro activo en
     # nexi_app_administradores. No se enlaza desde la app pública.
     # ============================================================
+
+    @app.post(f"{api_base}/admin/login")
+    def mobile_admin_login():
+        if not _allow("admin-login", 10, 900):
+            return _json(app, {"ok": False, "error": "Demasiados intentos. Espera unos minutos."}, 429)
+
+        body = request.get_json(silent=True) or {}
+        email = _clean(body.get("email"), 320).lower()
+        password = str(body.get("password") or "")
+
+        if not email or "@" not in email or not password:
+            return _json(app, {"ok": False, "error": "Correo y contraseña son obligatorios."}, 400)
+
+        try:
+            base_headers = _db_headers()
+            auth_response = requests.post(
+                f"{settings['supabase_url']}/auth/v1/token",
+                headers={
+                    "apikey": base_headers.get("apikey") or base_headers.get("Apikey") or "",
+                    "Content-Type": "application/json",
+                },
+                params={"grant_type": "password"},
+                json={"email": email, "password": password},
+                timeout=settings["supabase_timeout"],
+            )
+
+            if auth_response.status_code != 200:
+                return _json(app, {"ok": False, "error": "Credenciales incorrectas."}, 401)
+
+            auth_data = auth_response.json() if auth_response.content else {}
+            user = auth_data.get("user") or {}
+            auth_user_id = _clean(user.get("id"), 80)
+            access_token = str(auth_data.get("access_token") or "")
+            refresh_token = str(auth_data.get("refresh_token") or "")
+            expires_in = auth_data.get("expires_in")
+
+            if not auth_user_id or not access_token:
+                return _json(app, {"ok": False, "error": "No pude iniciar la sesión."}, 401)
+
+            admin_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_administradores",
+                headers=_db_headers(),
+                params={
+                    "select": "id,empresa_id,nombre,email,rol,activo",
+                    "auth_user_id": f"eq.{auth_user_id}",
+                    "empresa_id": f"eq.{settings['empresa_id']}",
+                    "activo": "eq.true",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            admin_response.raise_for_status()
+            admins = admin_response.json() if admin_response.content else []
+
+            if not admins:
+                return _json(app, {"ok": False, "error": "Esta cuenta no tiene acceso al panel."}, 403)
+
+            admin = admins[0]
+            if admin.get("rol") not in {"superadmin", "admin", "moderador"}:
+                return _json(app, {"ok": False, "error": "Rol administrativo no autorizado."}, 403)
+
+            return _json(app, {
+                "ok": True,
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "expires_in": expires_in,
+                "admin": {
+                    "id": admin["id"],
+                    "nombre": admin["nombre"],
+                    "email": admin["email"],
+                    "rol": admin["rol"],
+                },
+            })
+
+        except requests.RequestException as exc:
+            app.logger.exception("ADMIN LOGIN ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude conectar con el servicio de autenticación."}, 502)
+
 
     @app.get(f"{api_base}/admin/me")
     def mobile_admin_me():
