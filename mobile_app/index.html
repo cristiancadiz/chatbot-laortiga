@@ -1,3 +1,98 @@
+
+Cargando mensajes anteriores…
+creo que las letras no era n rectas
+Sí, este era el estilo anterior: letras más gruesas, suaves y redondeadas.
+
+Podemos conservar exactamente este estilo y reorganizarlo así:
+
+“Llama a” arriba en azul.
+“Jaime” abajo en naranja.
+Línea inferior.
+Sin símbolo de llama.
+Este estilo se ve más cercano y amigable que la versión recta.
+
+ok
+Listo, Cris. Esta es la versión final:
+
+Letras gruesas y redondeadas.
+“Llama a” en azul.
+“Jaime” en naranja.
+Línea inferior en ambos colores.
+Sin símbolo de llama ni efectos de brillo.
+Archivos actualizados:
+
+Reemplázalos en:
+
+mobile_app/assets/logo-llama-a-jaime-stacked.svg
+mobile_app/sw.js
+Luego confirma los cambios en GitHub y espera el despliegue de Render.
+
+
+LLAMA_A_JAIME_logo_stacked_svg.txt
+Documento
+
+LLAMA_A_JAIME_V5_3_1_sw.txt
+Documento
+ajsutemos las cateogrtia para seguir esta foram, con personas naturales co estilos yn no logos en cada categoria muestrame como quedaria antes.
+
+Así quedaría la propuesta:
+
+Fotografías de personas reales realizando cada servicio.
+Sin emojis ni logos por categoría.
+Tarjetas grandes, redondeadas y fáciles de tocar.
+Nombre del servicio sobre la fotografía.
+“Otros servicios” ocupa todo el ancho.
+Mantiene los colores azul, naranja y crema de Llama a Jaime.
+La imagen es una maqueta: todavía no modifiqué el código. Si aprobamos este estilo, actualizaría solamente las tarjetas de categorías y conservaría las funciones actuales de la app.
+
+ok aplicalo apra que quede asi
+Listo. Quedó aplicada la versión V5.3.2 con:
+
+Fotografías de personas reales en las siete categorías.
+Sin emojis ni logotipos en categorías y formularios.
+Textos blancos legibles sobre degradado oscuro.
+Diseño adaptable a celulares.
+Imágenes WebP optimizadas: solo 432 KB en total.
+Caché renovada para que Android descargue el diseño nuevo.
+Código Python y JavaScript validado sin errores.
+Archivos de código
+Imágenes para mobile_app/assets/categories/
+No necesitas ejecutar SQL ni modificar mobile_api.py. Después de subir todo a GitHub, Render hará el despliegue automáticamente.
+
+
+LLAMA_A_JAIME_V5_3_2_index.txt
+Documento
+
+LLAMA_A_JAIME_V5_3_2_sw.txt
+Documento
+
+INSTRUCCIONES_CATEGORIAS_V5_3_2.txt
+Documento
+
+hogar.webp
+Imagen
+
+limpieza.webp
+Imagen
+
+fletes.webp
+Imagen
+
+jardineria.webp
+Imagen
+
+belleza.webp
+Imagen
+
+reciclaje.webp
+Imagen
+
+otros.webp
+Imagen
+Mostrar menos
+
+
+
 <!doctype html>
 <html lang="es">
 <head>
@@ -29,7 +124,15 @@
     .conversation-modal{position:fixed;inset:0;z-index:60;margin:auto;width:min(640px,100%);background:var(--cream);display:flex;flex-direction:column}.conversation-modal[hidden]{display:none}.conversation-head{display:flex;align-items:center;gap:12px;padding:14px 18px;background:white;border-bottom:1px solid var(--line)}.conversation-head button{width:38px;height:38px;border:0;border-radius:12px;background:#edf3f6;color:var(--forest);font-size:20px}.conversation-head h2{margin:0;font-size:18px}.conversation-head span{display:block;color:var(--muted);font-size:11px}.conversation-body{display:flex;flex:1;min-height:0;flex-direction:column;padding:12px 18px calc(12px + env(safe-area-inset-bottom))}.conversation-messages{flex:1;overflow:auto;padding:5px 0}.conversation-message{max-width:84%;margin:8px 0;padding:10px 12px;border-radius:16px;background:white;border:1px solid var(--line);white-space:pre-wrap}.conversation-message.mine{margin-left:auto;background:#073b66;color:white;border-color:#073b66}.conversation-message.system{max-width:100%;text-align:center;background:#edf7f7;color:#315463;font-size:12px}.quote-box{padding:12px;margin-bottom:8px;border-radius:16px;background:#fff2dc;border:1px solid #ffd18a}.quote-box h3{margin:0 0 4px}.quote-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.quote-actions button{border:0;border-radius:12px;padding:10px;font-weight:800}.quote-accept{background:#08a6a6;color:white}.quote-reject{background:#f3e5e2;color:#923b34}.quote-form{display:grid;grid-template-columns:120px 1fr;gap:8px;margin:8px 0}.quote-form input{min-width:0;border:1px solid var(--line);border-radius:12px;padding:10px}.quote-form button{grid-column:1/-1;border:0;border-radius:12px;padding:10px;background:#08a6a6;color:white;font-weight:800}.conversation-compose{display:flex;gap:8px}.conversation-compose input{flex:1;min-width:0;border:1px solid var(--line);border-radius:14px;padding:12px}.conversation-compose button{width:auto;padding:0 16px;border:0;border-radius:14px;background:#ff9f1c;color:#073b66;font-weight:900}.client-notify{border:0;background:transparent;color:#073b66;font-weight:800;padding:8px 0;text-align:left}
     .photo-picker{display:block;border:1px dashed #91a9b7;border-radius:16px;padding:14px;background:#f7fbfc;text-align:center;color:var(--forest);font-weight:800}.photo-picker input{position:absolute;width:1px;height:1px;opacity:0}.photo-picker small{display:block;color:var(--muted);font-weight:500;margin-top:3px}.photo-preview,.photo-gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:9px}.photo-item{position:relative;aspect-ratio:1;border-radius:13px;overflow:hidden;background:#dce6ea}.photo-item img{width:100%;height:100%;object-fit:cover}.photo-item button{position:absolute;right:4px;top:4px;width:27px;height:27px;border:0;border-radius:50%;background:rgba(9,35,52,.8);color:white;font-weight:900}.photo-gallery{margin:0 0 8px}.photo-gallery a{display:block;aspect-ratio:1;border-radius:13px;overflow:hidden;background:#dce6ea}.photo-gallery img{width:100%;height:100%;object-fit:cover}.opportunity .photo-gallery{grid-template-columns:repeat(3,1fr)}
     .location-btn{width:100%;border:1px solid #9ab6c6;border-radius:14px;padding:11px 13px;background:#edf6fa;color:var(--forest);font-weight:800;text-align:left}.location-btn:disabled{opacity:.6}.location-status{display:block;margin-top:6px;color:var(--muted);font-size:12px}.location-panel{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}.location-card{padding:10px;border:1px solid var(--line);border-radius:14px;background:white;font-size:12px}.location-card strong{display:block;margin-bottom:3px}.location-card a{color:#087f87;font-weight:800;text-decoration:none}.location-card span{display:block;color:var(--muted);margin-top:3px}.share-location{grid-column:1/-1;border:0;border-radius:13px;padding:10px;background:#e1f2f2;color:var(--forest);font-weight:800}
-    .quick .service-card:last-child:nth-child(odd){grid-column:1/-1}.conditional-field[hidden]{display:none}
+    .quick{gap:12px}
+    .service-card{position:relative;isolation:isolate;display:flex;align-items:flex-end;min-height:176px;aspect-ratio:4/3;overflow:hidden;border:0;border-radius:22px;padding:16px;background-image:linear-gradient(180deg,rgba(4,24,39,.02) 30%,rgba(4,24,39,.88) 100%),var(--service-image);background-position:center;background-size:cover;color:white;box-shadow:0 10px 28px rgba(7,59,102,.16);transition:transform .18s ease,box-shadow .18s ease}
+    .service-card:after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(180deg,transparent 45%,rgba(3,24,39,.18) 100%)}
+    .service-card:hover{transform:translateY(-2px);box-shadow:0 14px 32px rgba(7,59,102,.22)}
+    .service-card:focus-visible{outline:3px solid var(--leaf);outline-offset:3px}
+    .service-copy{position:relative;z-index:1;display:block;width:100%;text-shadow:0 1px 8px rgba(0,0,0,.45)}
+    .service-card .service-copy strong{display:block;margin:0 0 2px;color:white;font-size:18px;line-height:1.15}
+    .service-card .service-copy span{display:block;color:rgba(255,255,255,.9);font-size:12px;line-height:1.3}
+    .quick .service-card:last-child:nth-child(odd){grid-column:1/-1;min-height:148px;aspect-ratio:2/1;background-position:center 42%}.conditional-field[hidden]{display:none}
     @media(max-width:380px){.nav button{font-size:9px}.nav button b{font-size:18px}}
   </style>
 </head>
@@ -40,13 +143,13 @@
     <section class="view active" id="home">
       <div class="hero"><div class="eyebrow">Soluciones para tu día</div><h1>¿Necesitas ayuda?<br>Llama a Jaime.</h1><p>Cuéntanos qué necesitas y te conectaremos con prestadores disponibles en tu comuna.</p></div>
       <div class="quick">
-        <button class="service-card" data-start="hogar"><span class="icon">🏠</span><strong>Hogar</strong><span>Arreglos e instalaciones</span></button>
-        <button class="service-card" data-start="limpieza"><span class="icon">🧹</span><strong>Limpieza</strong><span>Hogar, oficina y apoyo</span></button>
-        <button class="service-card" data-start="flete"><span class="icon">🚚</span><strong>Fletes</strong><span>Traslados y entregas</span></button>
-        <button class="service-card" data-start="jardineria"><span class="icon">🌿</span><strong>Jardinería</strong><span>Mantención y áreas verdes</span></button>
-        <button class="service-card" data-start="belleza"><span class="icon">✂️</span><strong>Belleza</strong><span>Barbería, peluquería y bienestar</span></button>
-        <button class="service-card" data-start="reciclaje"><span class="icon">♻️</span><strong>Reciclaje</strong><span>Retiros y materiales</span></button>
-        <button class="service-card" data-start="otro"><span class="icon">✨</span><strong>Otro servicio</strong><span>Cuéntale a Jaime</span></button>
+        <button class="service-card" data-start="hogar" style="--service-image:url('/app/assets/categories/hogar.webp')" aria-label="Solicitar un servicio para el hogar"><span class="service-copy"><strong>Hogar</strong><span>Arreglos e instalaciones</span></span></button>
+        <button class="service-card" data-start="limpieza" style="--service-image:url('/app/assets/categories/limpieza.webp')" aria-label="Solicitar un servicio de limpieza"><span class="service-copy"><strong>Limpieza</strong><span>Hogar, oficina y apoyo</span></span></button>
+        <button class="service-card" data-start="flete" style="--service-image:url('/app/assets/categories/fletes.webp')" aria-label="Solicitar un flete o traslado"><span class="service-copy"><strong>Fletes</strong><span>Traslados y entregas</span></span></button>
+        <button class="service-card" data-start="jardineria" style="--service-image:url('/app/assets/categories/jardineria.webp')" aria-label="Solicitar un servicio de jardinería"><span class="service-copy"><strong>Jardinería</strong><span>Mantención y áreas verdes</span></span></button>
+        <button class="service-card" data-start="belleza" style="--service-image:url('/app/assets/categories/belleza.webp')" aria-label="Solicitar un servicio de belleza o bienestar"><span class="service-copy"><strong>Belleza</strong><span>Barbería, peluquería y bienestar</span></span></button>
+        <button class="service-card" data-start="reciclaje" style="--service-image:url('/app/assets/categories/reciclaje.webp')" aria-label="Solicitar retiro de reciclaje"><span class="service-copy"><strong>Reciclaje</strong><span>Retiros y materiales</span></span></button>
+        <button class="service-card" data-start="otro" style="--service-image:url('/app/assets/categories/otros.webp')" aria-label="Solicitar otro tipo de servicio"><span class="service-copy"><strong>Otros servicios</strong><span>Cuéntale a Jaime qué necesitas</span></span></button>
       </div>
       <button class="provider-cta" data-go="provider"><span class="icon">🧑‍🔧</span><span><b>Quiero ofrecer servicios</b><span>Regístrate y recibe oportunidades cercanas</span></span><i>›</i></button>
       <div class="section-title"><h2>¿Cómo funciona?</h2><span>3 pasos</span></div>
@@ -65,7 +168,7 @@
       <div class="page-head"><h1>Crear solicitud</h1><p>Completa lo esencial. Podrás revisar todo antes de coordinar.</p></div>
       <div class="form-card" id="requestCard">
         <form id="requestForm">
-          <div class="field"><label for="serviceSelect">Categoría del servicio</label><select id="serviceSelect" required><option value="hogar">🏠 Servicios para el hogar</option><option value="limpieza">🧹 Limpieza</option><option value="flete">🚚 Fletes y traslados</option><option value="jardineria">🌿 Jardinería</option><option value="belleza">✂️ Belleza y bienestar</option><option value="reciclaje">♻️ Reciclaje</option><option value="otro">✨ Otros servicios</option></select></div>
+          <div class="field"><label for="serviceSelect">Categoría del servicio</label><select id="serviceSelect" required><option value="hogar">Servicios para el hogar</option><option value="limpieza">Limpieza</option><option value="flete">Fletes y traslados</option><option value="jardineria">Jardinería</option><option value="belleza">Belleza y bienestar</option><option value="reciclaje">Reciclaje</option><option value="otro">Otros servicios</option></select></div>
           <div class="field conditional-field" id="beautyServiceField" hidden><label for="beautyService">Servicio de belleza o bienestar</label><select id="beautyService"><option value="barberia">Barbería</option><option value="peluqueria">Peluquería</option><option value="manicure_pedicure">Manicure y pedicure</option><option value="maquillaje">Maquillaje</option><option value="depilacion">Depilación</option><option value="masaje_relajacion">Masaje de relajación</option><option value="peinado_eventos">Peinado para eventos</option><option value="otro_belleza">Otro servicio de belleza</option></select></div>
           <div class="grid2"><div class="field"><label for="name">Nombre</label><input id="name" required autocomplete="name"></div><div class="field"><label for="phone">Teléfono</label><input id="phone" required type="tel" autocomplete="tel" placeholder="+56 9…"></div></div>
           <div class="grid2"><div class="field"><label for="email">Correo (opcional)</label><input id="email" type="email" autocomplete="email"></div><div class="field"><label for="commune">Comuna</label><input id="commune" required></div></div>
@@ -90,7 +193,7 @@
         <form id="providerForm">
           <div class="field"><label for="providerNameInput">Nombre o empresa</label><input id="providerNameInput" required autocomplete="name"></div>
           <div class="grid2"><div class="field"><label for="providerPhone">Teléfono</label><input id="providerPhone" required type="tel" autocomplete="tel"></div><div class="field"><label for="providerEmail">Correo</label><input id="providerEmail" type="email" autocomplete="email"></div></div>
-          <div class="field"><label>Servicios que realizas</label><div class="checks"><label class="check-pill"><input type="checkbox" name="providerRole" value="hogar"><span>🏠 Hogar</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="limpieza"><span>🧹 Limpieza</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="flete"><span>🚚 Fletes</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="jardineria"><span>🌿 Jardinería</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="belleza"><span>✂️ Belleza</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="reciclaje"><span>♻️ Reciclaje</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="otro"><span>✨ Otros</span></label></div></div>
+          <div class="field"><label>Servicios que realizas</label><div class="checks"><label class="check-pill"><input type="checkbox" name="providerRole" value="hogar"><span>Hogar</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="limpieza"><span>Limpieza</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="flete"><span>Fletes</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="jardineria"><span>Jardinería</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="belleza"><span>Belleza</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="reciclaje"><span>Reciclaje</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="otro"><span>Otros</span></label></div></div>
           <div class="field"><label>Especialidades de belleza (solo si corresponde)</label><div class="checks" id="providerBeauty"><label class="check-pill"><input type="checkbox" value="barberia"><span>Barbería</span></label><label class="check-pill"><input type="checkbox" value="peluqueria"><span>Peluquería</span></label><label class="check-pill"><input type="checkbox" value="manicure_pedicure"><span>Manicure/pedicure</span></label><label class="check-pill"><input type="checkbox" value="maquillaje"><span>Maquillaje</span></label><label class="check-pill"><input type="checkbox" value="depilacion"><span>Depilación</span></label><label class="check-pill"><input type="checkbox" value="masaje_relajacion"><span>Masaje relajación</span></label><label class="check-pill"><input type="checkbox" value="peinado_eventos"><span>Peinados</span></label><label class="check-pill"><input type="checkbox" value="otro_belleza"><span>Otros</span></label></div><div class="muted-note">Los masajes incluidos son de relajación y bienestar, no tratamientos médicos.</div></div>
           <div class="field"><label for="providerCommunes">Comunas de cobertura</label><input id="providerCommunes" required placeholder="Ej.: San Bernardo, El Bosque, La Cisterna"><div class="muted-note">Sepáralas con comas.</div></div>
           <div class="field"><label>Materiales que recibes (solo reciclaje)</label><div class="checks" id="providerMaterials"><label class="check-pill"><input type="checkbox" value="Cartón"><span>Cartón</span></label><label class="check-pill"><input type="checkbox" value="Papel"><span>Papel</span></label><label class="check-pill"><input type="checkbox" value="Plástico"><span>Plástico</span></label><label class="check-pill"><input type="checkbox" value="Vidrio"><span>Vidrio</span></label><label class="check-pill"><input type="checkbox" value="Metales"><span>Metales</span></label><label class="check-pill"><input type="checkbox" value="Textil"><span>Textil</span></label><label class="check-pill"><input type="checkbox" value="Electrónicos"><span>Electrónicos</span></label><label class="check-pill"><input type="checkbox" value="Aceite"><span>Aceite</span></label><label class="check-pill"><input type="checkbox" value="Otros"><span>Otros</span></label></div></div>
@@ -126,13 +229,13 @@
   const session = localStorage.appSession || (localStorage.appSession = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
   const headers = {"Content-Type":"application/json","X-App-Session":session};
   const SERVICE_META = {
-    hogar:{label:"Servicios para el hogar",icon:"🏠",prompt:"Ej.: necesito instalar una repisa en el living…"},
-    limpieza:{label:"Limpieza",icon:"🧹",prompt:"Ej.: limpieza profunda de departamento de dos dormitorios…"},
-    flete:{label:"Fletes y traslados",icon:"🚚",prompt:"Ej.: refrigerador y dos cajas; segundo piso sin ascensor…"},
-    jardineria:{label:"Jardinería",icon:"🌿",prompt:"Ej.: corte de pasto y poda de arbustos…"},
-    belleza:{label:"Belleza y bienestar",icon:"✂️",prompt:"Ej.: corte de cabello a domicilio el sábado por la tarde…"},
-    reciclaje:{label:"Reciclaje",icon:"♻️",prompt:"Ej.: cartón, botellas y dos bolsas de plástico…"},
-    otro:{label:"Otros servicios",icon:"✨",prompt:"Describe con detalle el servicio que necesitas…"}
+    hogar:{label:"Servicios para el hogar",prompt:"Ej.: necesito instalar una repisa en el living…"},
+    limpieza:{label:"Limpieza",prompt:"Ej.: limpieza profunda de departamento de dos dormitorios…"},
+    flete:{label:"Fletes y traslados",prompt:"Ej.: refrigerador y dos cajas; segundo piso sin ascensor…"},
+    jardineria:{label:"Jardinería",prompt:"Ej.: corte de pasto y poda de arbustos…"},
+    belleza:{label:"Belleza y bienestar",prompt:"Ej.: corte de cabello a domicilio el sábado por la tarde…"},
+    reciclaje:{label:"Reciclaje",prompt:"Ej.: cartón, botellas y dos bolsas de plástico…"},
+    otro:{label:"Otros servicios",prompt:"Describe con detalle el servicio que necesitas…"}
   };
   const BEAUTY_META={barberia:"Barbería",peluqueria:"Peluquería",manicure_pedicure:"Manicure y pedicure",maquillaje:"Maquillaje",depilacion:"Depilación",masaje_relajacion:"Masaje de relajación",peinado_eventos:"Peinado para eventos",otro_belleza:"Otro servicio de belleza"};
   let service = "hogar", installPrompt = null;
@@ -168,7 +271,7 @@
     catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{btn.disabled=false;btn.textContent='Publicar solicitud'}
   });
 
-  async function loadSaved(){const box=$('#savedList'),items=JSON.parse(localStorage.requests||'[]');if(!items.length){box.innerHTML='<div class="empty">Aún no has creado solicitudes desde este dispositivo.</div>';return}box.innerHTML='';for(const item of items){const meta=SERVICE_META[item.tipo]||SERVICE_META.otro,el=document.createElement('button');el.className='saved';el.innerHTML=`<strong>${escapeHtml(meta.icon+' '+meta.label)} · ${escapeHtml(item.codigo)}</strong><span>Consultando estado… · Toca para conversar</span>`;el.addEventListener('click',()=>openConversation('cliente',{public_id:item.codigo,token:item.token}));box.append(el);try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(item.codigo)}?token=${encodeURIComponent(item.token)}`,{headers});const d=await r.json();el.querySelector('span').textContent=r.ok?`${d.solicitud.estado} · Toca para conversar y revisar precios`:(d.error||'Sin información');}catch{el.querySelector('span').textContent='Sin conexión'}}}
+  async function loadSaved(){const box=$('#savedList'),items=JSON.parse(localStorage.requests||'[]');if(!items.length){box.innerHTML='<div class="empty">Aún no has creado solicitudes desde este dispositivo.</div>';return}box.innerHTML='';for(const item of items){const meta=SERVICE_META[item.tipo]||SERVICE_META.otro,el=document.createElement('button');el.className='saved';el.innerHTML=`<strong>${escapeHtml(meta.label)} · ${escapeHtml(item.codigo)}</strong><span>Consultando estado… · Toca para conversar</span>`;el.addEventListener('click',()=>openConversation('cliente',{public_id:item.codigo,token:item.token}));box.append(el);try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(item.codigo)}?token=${encodeURIComponent(item.token)}`,{headers});const d=await r.json();el.querySelector('span').textContent=r.ok?`${d.solicitud.estado} · Toca para conversar y revisar precios`:(d.error||'Sin información');}catch{el.querySelector('span').textContent='Sin conexión'}}}
 
   function providerAuth(){try{return JSON.parse(localStorage.providerAuth||'null')}catch{return null}}
   function providerMaterials(){return $$('#providerMaterials input:checked').map(x=>x.value)}
@@ -201,7 +304,7 @@
 
   async function loadProvider(){const auth=providerAuth();if(!auth){$('#providerRegister').style.display='block';$('#providerSummary').style.display='none';$('#providerDashboard').hidden=true;$('#notifyBtn').hidden=true;return}$('#providerRegister').style.display='none';$('#providerSummary').style.display='block';$('#providerDashboard').hidden=false;$('#providerName').textContent=auth.nombre||'Prestador';$('#providerCode').textContent=auth.codigo;$('#notifyBtn').hidden=false;await loadOpportunities();}
 
-  async function loadOpportunities(){const auth=providerAuth(),box=$('#opportunities');if(!auth)return;box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando oportunidades…</div>';try{const url=`/app/api/oportunidades?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`;const r=await fetch(url,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude consultar');$('#availabilityBtn').textContent=d.disponible?'Disponible':'No disponible';$('#availabilityBtn').classList.toggle('off',!d.disponible);if(!d.oportunidades.length){box.innerHTML='<div class="empty">No hay oportunidades compatibles por ahora.</div>';return}box.innerHTML='';for(const item of d.oportunidades){const s=item.solicitud,el=document.createElement('article'),meta=SERVICE_META[s.tipo]||SERVICE_META.otro,subtype=s.tipo==='belleza'?(BEAUTY_META[s.subtipo]||'Belleza y bienestar'):'';el.className='opportunity '+(item.match_estado==='tomada'?'taken':'');const material=(s.materiales||[]).join(', '),summary=subtype?`${subtype} · ${s.detalles||'Sin detalle'}`:(material||s.detalles||'Sin detalle');el.innerHTML=`<h3>${escapeHtml(meta.icon+' '+meta.label)} · ${escapeHtml(s.comuna||'')}</h3><p>${escapeHtml(summary)}</p><p>${escapeHtml(s.fecha_preferida||'Horario a coordinar')}</p>${item.match_estado==='tomada'?`<p><strong>Contacto:</strong> ${escapeHtml(s.nombre||'')} · ${escapeHtml(s.telefono||'')}</p><p><strong>Dirección:</strong> ${escapeHtml(s.direccion_origen||'')}</p>${s.direccion_destino?`<p><strong>Destino:</strong> ${escapeHtml(s.direccion_destino)}</p>`:''}<button class="primary" data-provider-chat="${escapeHtml(s.public_id)}">Conversar y enviar precio</button>`:`<button class="primary" data-take="${item.match_id}">Tomar solicitud</button>`}`;if(item.match_estado==='tomada'&&Array.isArray(s.fotos)&&s.fotos.length){const gallery=document.createElement('div');gallery.className='photo-gallery';renderPhotoGallery(s.fotos,gallery);el.insertBefore(gallery,el.querySelector('[data-provider-chat]'))}box.append(el)}$$('[data-take]').forEach(b=>b.addEventListener('click',()=>takeOpportunity(b.dataset.take,b)));$$('[data-provider-chat]').forEach(b=>b.addEventListener('click',()=>openConversation('prestador',{public_id:b.dataset.providerChat,codigo:auth.codigo,token:auth.token})));}catch(err){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
+  async function loadOpportunities(){const auth=providerAuth(),box=$('#opportunities');if(!auth)return;box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando oportunidades…</div>';try{const url=`/app/api/oportunidades?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`;const r=await fetch(url,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude consultar');$('#availabilityBtn').textContent=d.disponible?'Disponible':'No disponible';$('#availabilityBtn').classList.toggle('off',!d.disponible);if(!d.oportunidades.length){box.innerHTML='<div class="empty">No hay oportunidades compatibles por ahora.</div>';return}box.innerHTML='';for(const item of d.oportunidades){const s=item.solicitud,el=document.createElement('article'),meta=SERVICE_META[s.tipo]||SERVICE_META.otro,subtype=s.tipo==='belleza'?(BEAUTY_META[s.subtipo]||'Belleza y bienestar'):'';el.className='opportunity '+(item.match_estado==='tomada'?'taken':'');const material=(s.materiales||[]).join(', '),summary=subtype?`${subtype} · ${s.detalles||'Sin detalle'}`:(material||s.detalles||'Sin detalle');el.innerHTML=`<h3>${escapeHtml(meta.label)} · ${escapeHtml(s.comuna||'')}</h3><p>${escapeHtml(summary)}</p><p>${escapeHtml(s.fecha_preferida||'Horario a coordinar')}</p>${item.match_estado==='tomada'?`<p><strong>Contacto:</strong> ${escapeHtml(s.nombre||'')} · ${escapeHtml(s.telefono||'')}</p><p><strong>Dirección:</strong> ${escapeHtml(s.direccion_origen||'')}</p>${s.direccion_destino?`<p><strong>Destino:</strong> ${escapeHtml(s.direccion_destino)}</p>`:''}<button class="primary" data-provider-chat="${escapeHtml(s.public_id)}">Conversar y enviar precio</button>`:`<button class="primary" data-take="${item.match_id}">Tomar solicitud</button>`}`;if(item.match_estado==='tomada'&&Array.isArray(s.fotos)&&s.fotos.length){const gallery=document.createElement('div');gallery.className='photo-gallery';renderPhotoGallery(s.fotos,gallery);el.insertBefore(gallery,el.querySelector('[data-provider-chat]'))}box.append(el)}$$('[data-take]').forEach(b=>b.addEventListener('click',()=>takeOpportunity(b.dataset.take,b)));$$('[data-provider-chat]').forEach(b=>b.addEventListener('click',()=>openConversation('prestador',{public_id:b.dataset.providerChat,codigo:auth.codigo,token:auth.token})));}catch(err){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
 
   function escapeHtml(value){const div=document.createElement('div');div.textContent=String(value||'');return div.innerHTML}
   async function takeOpportunity(matchId,button){const auth=providerAuth();if(!auth)return;button.disabled=true;button.textContent='Tomando…';try{const r=await fetch(`/app/api/oportunidades/${encodeURIComponent(matchId)}/tomar`,{method:'POST',headers,body:JSON.stringify({codigo:auth.codigo,token:auth.token})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No se pudo tomar');await loadOpportunities();}catch(err){alert(err.message);button.disabled=false;button.textContent='Tomar solicitud'}}
