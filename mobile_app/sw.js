@@ -1,4 +1,4 @@
-const CACHE = "llama-a-jaime-servicios-v5-3-3-boton-solicitud";
+const CACHE = "llama-a-jaime-servicios-v5-3-4-logo-final";
 const SHELL = [
   "/app/",
   "/app/manifest.webmanifest",
@@ -8,6 +8,7 @@ const SHELL = [
   "/app/assets/apple-touch-icon.png",
   "/app/assets/logo-llama-a-jaime.png",
   "/app/assets/logo-llama-a-jaime-stacked.svg",
+  "/app/assets/logo-llama-a-jaime-final-v534.png",
   "/app/assets/categories/hogar.webp",
   "/app/assets/categories/limpieza.webp",
   "/app/assets/categories/fletes.webp",
