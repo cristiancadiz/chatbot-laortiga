@@ -1,1664 +1,223 @@
-"""API y archivos públicos de la PWA Llama a Jaime Servicios.
+"""
+Llama a Jaime Servicios — V6 APP CLEAN
+Backend exclusivo para la App/PWA.
 
-El módulo no conoce credenciales ni importa el núcleo histórico. Recibe las
-dependencias necesarias al registrarse desde app.py.
+Eliminado del núcleo:
+- WhatsApp / Twilio
+- Gupshup
+- Instagram / Meta Messaging
+- webhooks de mensajería externa
+- router de conversaciones por canales externos
+- Portal Nexia histórico
+- demos/planes basados en mensajes externos
+- lógica heredada de La Ortiga por WhatsApp
+
+Se conserva:
+- App/PWA
+- Supabase
+- IA opcional
+- solicitudes
+- prestadores
+- matching
+- cotizaciones
+- chat interno del servicio
+- ubicación
+- fotos
+- reclamos
+- auditoría
+- Web Push
 """
 
-from __future__ import annotations
-
-import hashlib
-import hmac
-import json
 import os
-import re
-import time
-import uuid
-from collections import defaultdict, deque
-from datetime import datetime, timedelta, timezone
-from threading import Lock, Thread
 
-import requests
-from flask import request, send_from_directory
+from dotenv import load_dotenv
+from flask import Flask
+from openai import OpenAI
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+from mobile_api import register_mobile_app
 
 
-_RATE_LOCK = Lock()
-_RATE_EVENTS: dict[str, deque[float]] = defaultdict(deque)
+APP_VERSION = "2026-09-27-LLAMA-A-JAIME-V6-APP-CLEAN"
 
-SERVICE_TYPES = {
-    "hogar",
-    "limpieza",
-    "flete",
-    "jardineria",
-    "belleza",
-    "reciclaje",
-    "otro",
+load_dotenv()
+
+app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY", "").strip()
+app.wsgi_app = ProxyFix(
+    app.wsgi_app,
+    x_for=1,
+    x_proto=1,
+    x_host=1,
+    x_port=1,
+)
+
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+SUPABASE_TIMEOUT = int(os.getenv("SUPABASE_TIMEOUT", "15"))
+
+LLAMA_A_JAIME_EMPRESA_ID = (
+    os.getenv("LLAMA_A_JAIME_EMPRESA_ID")
+    or os.getenv("SUPABASE_EMPRESA_ID")
+    or ""
+).strip()
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini").strip()
+IA_ACTIVA = os.getenv("IA_ACTIVA", "true").strip().lower() in {
+    "1", "true", "yes", "si", "sí"
 }
 
-SERVICE_LABELS = {
-    "hogar": "Servicios para el hogar",
-    "limpieza": "Limpieza",
-    "flete": "Fletes y traslados",
-    "jardineria": "Jardinería",
-    "belleza": "Belleza y bienestar",
-    "reciclaje": "Reciclaje",
-    "otro": "Otros servicios",
-}
+WEB_PUSH_VAPID_PUBLIC_KEY = os.getenv(
+    "WEB_PUSH_VAPID_PUBLIC_KEY", ""
+).strip()
 
-BEAUTY_TYPES = {
-    "barberia",
-    "peluqueria",
-    "manicure_pedicure",
-    "maquillaje",
-    "depilacion",
-    "masaje_relajacion",
-    "peinado_eventos",
-    "otro_belleza",
-}
+WEB_PUSH_VAPID_PRIVATE_KEY = os.getenv(
+    "WEB_PUSH_VAPID_PRIVATE_KEY", ""
+).strip()
 
-PHOTO_BUCKET = "llama-jaime-solicitudes"
-PHOTO_MAX_FILES = 5
-PHOTO_MAX_BYTES = 8 * 1024 * 1024
-PHOTO_MIME_TYPES = {
-    "image/jpeg": "jpg",
-    "image/png": "png",
-    "image/webp": "webp",
-}
+WEB_PUSH_CONTACT = os.getenv(
+    "WEB_PUSH_CONTACT",
+    "mailto:contacto@nexia-tech.com",
+).strip()
 
-TERMS_VERSION = "2026-09-27-v1"
-REPORT_CATEGORIES = {"seguridad", "estafa", "trato", "cobro", "servicio", "contenido", "otro"}
-RISKY_SERVICE_PATTERNS = (
-    (r"\b(fuga|escape)\s+de\s+gas\b", "Una fuga de gas requiere atención de emergencia, no una publicación en la app."),
-    (r"\b(arma|armas|explosivo|explosivos|municion|municiones)\b", "La app no admite servicios relacionados con armas o explosivos."),
-    (r"\b(droga|drogas|cocaina|marihuana|trafico)\b", "La app no admite solicitudes relacionadas con actividades ilegales."),
-    (r"\b(servicio sexual|servicios sexuales|escort)\b", "La app no admite servicios sexuales."),
-    (r"\b(cirugia|inyeccion|procedimiento medico|tratamiento medico)\b", "La app no admite procedimientos médicos."),
-    (r"\b(alta tension|asbesto|amianto)\b", "Ese trabajo requiere especialistas y protocolos que este MVP todavía no verifica."),
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MOBILE_APP_DIR = os.getenv(
+    "MOBILE_APP_DIR",
+    os.path.join(BASE_DIR, "mobile_app"),
+).strip()
+
+
+# ============================================================
+# VALIDACIÓN DE CONFIGURACIÓN
+# ============================================================
+
+def validar_configuracion():
+    faltantes = []
+
+    if not app.secret_key:
+        faltantes.append("SECRET_KEY")
+
+    if not SUPABASE_URL:
+        faltantes.append("SUPABASE_URL")
+
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        faltantes.append("SUPABASE_SERVICE_ROLE_KEY")
+
+    if not LLAMA_A_JAIME_EMPRESA_ID:
+        faltantes.append("LLAMA_A_JAIME_EMPRESA_ID o SUPABASE_EMPRESA_ID")
+
+    if faltantes:
+        raise RuntimeError(
+            "Faltan variables de entorno obligatorias: "
+            + ", ".join(faltantes)
+        )
+
+
+validar_configuracion()
+
+
+# ============================================================
+# SUPABASE
+# ============================================================
+
+def supabase_headers():
+    return {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+# ============================================================
+# OPENAI — IA OPCIONAL
+# ============================================================
+
+openai_client = (
+    OpenAI(api_key=OPENAI_API_KEY)
+    if OPENAI_API_KEY and IA_ACTIVA
+    else None
 )
 
 
-def _json(app, payload, status=200):
-    response = app.json.response(payload)
-    response.status_code = status
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    return response
-
-
-def _client_key(scope: str) -> str:
-    forwarded = request.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip()
-    remote = forwarded or request.remote_addr or "unknown"
-    session = str(request.headers.get("X-App-Session") or "")[:80]
-    raw = f"{scope}:{remote}:{session}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _allow(scope: str, limit: int, window_seconds: int = 3600) -> bool:
-    now = time.time()
-    key = _client_key(scope)
-    with _RATE_LOCK:
-        events = _RATE_EVENTS[key]
-        while events and events[0] <= now - window_seconds:
-            events.popleft()
-        if len(events) >= limit:
-            return False
-        events.append(now)
-        return True
-
-
-def _clean(value, limit=500):
-    return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
-
-
-def _plain_assistant_text(value, limit=4000):
-    """Normaliza respuestas para un chat que muestra texto plano, no Markdown."""
-    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text, flags=re.DOTALL)
-    text = re.sub(r"__(.*?)__", r"\1", text, flags=re.DOTALL)
-    text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", text)
-    text = re.sub(r"`([^`\n]+)`", r"\1", text)
-    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", text)
-    text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1 (\2)", text)
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()[:limit]
-
-
-def _valid_email(value):
-    value = _clean(value, 180).lower()
-    return not value or bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value))
-
-
-def _valid_phone(value):
-    digits = re.sub(r"\D", "", str(value or ""))
-    return 8 <= len(digits) <= 15
-
-
-def _normalize_phone(value):
-    digits = re.sub(r"\D", "", str(value or ""))
-    if len(digits) == 9 and digits.startswith("9"):
-        return "56" + digits
-    if len(digits) == 11 and digits.startswith("56"):
-        return digits
-    return digits[:15]
-
-
-def _normalize_rut(value):
-    compact = re.sub(r"[^0-9kK]", "", str(value or "")).upper()
-    if len(compact) < 8 or len(compact) > 9 or not compact[:-1].isdigit():
-        return ""
-    return f"{int(compact[:-1])}-{compact[-1]}"
-
-
-def _valid_rut(value):
-    normalized = _normalize_rut(value)
-    if not normalized:
-        return False
-    body, verifier = normalized.split("-", 1)
-    total = 0
-    factor = 2
-    for digit in reversed(body):
-        total += int(digit) * factor
-        factor = 2 if factor == 7 else factor + 1
-    expected_number = 11 - (total % 11)
-    expected = "0" if expected_number == 11 else "K" if expected_number == 10 else str(expected_number)
-    return hmac.compare_digest(expected, verifier)
-
-
-def _valid_pin(value):
-    return bool(re.fullmatch(r"\d{6}", str(value or "")))
-
-
-def _pin_hash(pin, salt):
-    return hashlib.pbkdf2_hmac("sha256", str(pin).encode("utf-8"), bytes.fromhex(salt), 210000).hex()
-
-
-def _risky_service_reason(*values):
-    text = _norm(" ".join(str(value or "") for value in values))
-    for pattern, reason in RISKY_SERVICE_PATTERNS:
-        if re.search(pattern, text):
-            return reason
-    return ""
-
-
-def _valid_image_signature(content, mime_type):
-    if mime_type == "image/jpeg":
-        return content.startswith(b"\xff\xd8\xff")
-    if mime_type == "image/png":
-        return content.startswith(b"\x89PNG\r\n\x1a\n")
-    if mime_type == "image/webp":
-        return len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP"
-    return False
-
-
-def _location_values(latitude, longitude, accuracy=None):
-    try:
-        latitude = round(float(latitude), 6)
-        longitude = round(float(longitude), 6)
-        accuracy = round(float(accuracy), 2) if accuracy not in (None, "") else None
-    except (TypeError, ValueError):
-        return None
-    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
-        return None
-    if accuracy is not None and not (0 <= accuracy <= 100000):
-        accuracy = None
-    return latitude, longitude, accuracy
-
-
-def _list_clean(value, item_limit=120, max_items=50):
-    if isinstance(value, str):
-        value = value.split(",")
-    if not isinstance(value, list):
-        return []
-    output = []
-    seen = set()
-    for item in value[:max_items]:
-        clean = _clean(item, item_limit)
-        key = _norm(clean)
-        if clean and key not in seen:
-            seen.add(key)
-            output.append(clean)
-    return output
-
-
-def _norm(value):
-    import unicodedata
-
-    text = unicodedata.normalize("NFKD", str(value or "").lower())
-    return re.sub(r"[^a-z0-9]+", " ", "".join(c for c in text if not unicodedata.combining(c))).strip()
-
-
-def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dispatch=None):
-    app_dir = settings["app_dir"]
-    api_base = "/app/api"
-
-    def _db_headers(prefer=None):
-        headers = supabase_headers()
-        if not headers:
-            raise RuntimeError("Supabase no está configurado")
-        return {**headers, **({"Prefer": prefer} if prefer else {})}
-
-    def _provider_auth(code, token):
-        code = _clean(code, 40).upper()
-        token = _clean(token, 100)
-        if not re.fullmatch(r"PR-\d{6}-[A-F0-9]{8}", code) or len(token) < 20:
-            return None
-        response = requests.get(
-            f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
-            headers=_db_headers(),
-            params={
-                "select": "*",
-                "public_id": f"eq.{code}",
-                "access_token_hash": f"eq.{hashlib.sha256(token.encode('utf-8')).hexdigest()}",
-                "activo": "eq.true",
-                "estado_cuenta": "eq.activa",
-                "limit": "1",
-            },
-            timeout=settings["supabase_timeout"],
-        )
-        response.raise_for_status()
-        rows = response.json() if response.content else []
-        return rows[0] if rows else None
-
-    def _audit(event, actor_type=None, actor_id=None, request_id=None, metadata=None):
-        try:
-            requests.post(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_auditoria_seguridad",
-                headers=_db_headers("return=minimal"),
-                json={
-                    "empresa_id": settings["empresa_id"],
-                    "evento": _clean(event, 80),
-                    "actor_tipo": _clean(actor_type, 30) or None,
-                    "actor_id": actor_id or None,
-                    "solicitud_id": request_id or None,
-                    "metadata": metadata if isinstance(metadata, dict) else {},
-                },
-                timeout=settings["supabase_timeout"],
-            ).raise_for_status()
-        except Exception as exc:
-            app.logger.warning("SECURITY AUDIT ERROR event=%s: %r", event, exc)
-
-    def _request_by_code(public_id):
-        public_id = _clean(public_id, 40).upper()
-        if not re.fullmatch(r"NX-\d{6}-[A-F0-9]{8}", public_id):
-            return None
-        response = requests.get(
-            f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
-            headers=_db_headers(),
-            params={"select": "*", "public_id": f"eq.{public_id}", "limit": "1"},
-            timeout=settings["supabase_timeout"],
-        )
-        response.raise_for_status()
-        rows = response.json() if response.content else []
-        return rows[0] if rows else None
-
-    def _client_auth(public_id, token):
-        token = _clean(token, 100)
-        request_row = _request_by_code(public_id)
-        if not request_row or len(token) < 20:
-            return None
-        expected = str(request_row.get("access_token_hash") or "")
-        actual = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        return request_row if expected and expected == actual else None
-
-    def _photo_rows(request_id):
-        response = requests.get(
-            f"{settings['supabase_url']}/rest/v1/nexi_app_fotos_solicitud",
-            headers=_db_headers(),
-            params={
-                "select": "id,object_path,mime_type,created_at",
-                "solicitud_id": f"eq.{request_id}",
-                "order": "created_at.asc",
-                "limit": str(PHOTO_MAX_FILES),
-            },
-            timeout=settings["supabase_timeout"],
-        )
-        response.raise_for_status()
-        return response.json() if response.content else []
-
-    def _signed_photo_url(object_path, expires_in=3600):
-        response = requests.post(
-            f"{settings['supabase_url']}/storage/v1/object/sign/{PHOTO_BUCKET}/{object_path}",
-            headers=_db_headers(),
-            json={"expiresIn": expires_in},
-            timeout=settings["supabase_timeout"],
-        )
-        response.raise_for_status()
-        data = response.json() if response.content else {}
-        signed = data.get("signedURL") or data.get("signedUrl") or ""
-        if signed.startswith("http"):
-            return signed
-        if signed.startswith("/storage/v1/"):
-            return f"{settings['supabase_url']}{signed}"
-        if signed:
-            return f"{settings['supabase_url']}/storage/v1{signed if signed.startswith('/') else '/' + signed}"
-        return ""
-
-    def _safe_photos(request_id):
-        output = []
-        for row in _photo_rows(request_id):
-            url = _signed_photo_url(row.get("object_path"))
-            if url:
-                output.append({"id": row.get("id"), "url": url, "mime_type": row.get("mime_type")})
-        return output
-
-    def _send_custom_push(table, filter_key, filter_value, title, body, url, tag):
-        if not settings.get("vapid_public_key") or not settings.get("vapid_private_key"):
-            return 0
-        try:
-            from pywebpush import WebPushException, webpush
-        except ImportError:
-            app.logger.warning("PUSH DESACTIVADO: falta pywebpush")
-            return 0
-        response = requests.get(
-            f"{settings['supabase_url']}/rest/v1/{table}",
-            headers=_db_headers(),
-            params={
-                "select": "id,endpoint,p256dh,auth",
-                filter_key: f"eq.{filter_value}",
-                "activa": "eq.true",
-                "limit": "10",
-            },
-            timeout=settings["supabase_timeout"],
-        )
-        response.raise_for_status()
-        payload = json.dumps({
-            "title": title,
-            "body": body,
-            "url": url,
-            "tag": tag,
-        }, ensure_ascii=False)
-        sent = 0
-        for subscription in (response.json() if response.content else []):
-            try:
-                webpush(
-                    subscription_info={
-                        "endpoint": subscription["endpoint"],
-                        "keys": {"p256dh": subscription["p256dh"], "auth": subscription["auth"]},
-                    },
-                    data=payload,
-                    vapid_private_key=settings["vapid_private_key"],
-                    vapid_claims={"sub": settings["vapid_contact"]},
-                    ttl=3600,
-                )
-                sent += 1
-            except WebPushException as exc:
-                status = getattr(getattr(exc, "response", None), "status_code", None)
-                app.logger.warning("CUSTOM PUSH ERROR table=%s status=%s", table, status)
-                if status in {404, 410}:
-                    requests.patch(
-                        f"{settings['supabase_url']}/rest/v1/{table}",
-                        headers=_db_headers("return=minimal"),
-                        params={"id": f"eq.{subscription['id']}"},
-                        json={"activa": False},
-                        timeout=settings["supabase_timeout"],
-                    )
-        return sent
-
-    def _send_push(provider_id, request_row):
-        if not settings.get("vapid_public_key") or not settings.get("vapid_private_key"):
-            return 0
-        try:
-            from pywebpush import WebPushException, webpush
-        except ImportError:
-            app.logger.warning("PUSH DESACTIVADO: falta pywebpush")
-            return 0
-
-        response = requests.get(
-            f"{settings['supabase_url']}/rest/v1/nexi_app_push_suscripciones",
-            headers=_db_headers(),
-            params={
-                "select": "id,endpoint,p256dh,auth",
-                "prestador_id": f"eq.{provider_id}",
-                "activa": "eq.true",
-                "limit": "10",
-            },
-            timeout=settings["supabase_timeout"],
-        )
-        response.raise_for_status()
-        subscriptions = response.json() if response.content else []
-        sent = 0
-        payload = json.dumps({
-            "title": "Nueva oportunidad · Llama a Jaime",
-            "body": f"{SERVICE_LABELS.get(request_row.get('tipo'), 'Servicio')} disponible en {request_row.get('comuna') or 'tu zona'}.",
-            "url": "/app/?view=provider",
-            "tag": f"solicitud-{request_row.get('id')}",
-        }, ensure_ascii=False)
-
-        for subscription in subscriptions:
-            try:
-                webpush(
-                    subscription_info={
-                        "endpoint": subscription["endpoint"],
-                        "keys": {
-                            "p256dh": subscription["p256dh"],
-                            "auth": subscription["auth"],
-                        },
-                    },
-                    data=payload,
-                    vapid_private_key=settings["vapid_private_key"],
-                    vapid_claims={"sub": settings["vapid_contact"]},
-                    ttl=3600,
-                )
-                sent += 1
-            except WebPushException as exc:
-                status = getattr(getattr(exc, "response", None), "status_code", None)
-                app.logger.warning("PUSH ERROR provider=%s status=%s", provider_id, status)
-                if status in {404, 410}:
-                    requests.patch(
-                        f"{settings['supabase_url']}/rest/v1/nexi_app_push_suscripciones",
-                        headers=_db_headers("return=minimal"),
-                        params={"id": f"eq.{subscription['id']}"},
-                        json={"activa": False},
-                        timeout=settings["supabase_timeout"],
-                    )
-        return sent
-
-    def _provider_matches_request(provider, request_row):
-        roles = {_norm(x) for x in (provider.get("roles") or [])}
-        communes = {_norm(x) for x in (provider.get("comunas") or [])}
-        materials = {_norm(x) for x in (provider.get("materiales") or [])}
-        specialties = {_norm(x).replace(" ", "_") for x in (provider.get("especialidades") or [])}
-        request_commune = _norm(request_row.get("comuna"))
-        request_materials = {_norm(x) for x in (request_row.get("materiales") or []) if _norm(x)}
-        provider_phone = _normalize_phone(provider.get("telefono_normalizado") or provider.get("telefono"))
-        request_phone = _normalize_phone(request_row.get("telefono_normalizado") or request_row.get("telefono"))
-        if provider_phone and request_phone and provider_phone == request_phone:
-            return False
-        if _norm(request_row.get("tipo")) not in roles:
-            return False
-        if request_commune and request_commune not in communes:
-            return False
-        if request_row.get("tipo") == "reciclaje" and request_materials and materials and not (request_materials & materials):
-            return False
-        if request_row.get("tipo") == "belleza" and request_row.get("subtipo") not in specialties:
-            return False
-        return True
-
-    def _create_match(provider, request_row, notify=True):
-        match_response = requests.post(
-            f"{settings['supabase_url']}/rest/v1/nexi_app_matches",
-            headers=_db_headers("return=representation,resolution=ignore-duplicates"),
-            json={
-                "empresa_id": settings["empresa_id"],
-                "solicitud_id": request_row["id"],
-                "prestador_id": provider["id"],
-                "estado": "pendiente",
-            },
-            timeout=settings["supabase_timeout"],
-        )
-        if not match_response.ok:
-            app.logger.warning("MATCH DB ERROR %s: %s", match_response.status_code, match_response.text[:500])
-            return 0, 0
-        return 1, _send_push(provider["id"], request_row) if notify else 0
-
-    def _match_request(request_row):
-        try:
-            response = requests.get(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
-                headers=_db_headers(),
-                params={
-                    "select": "id,roles,comunas,materiales,especialidades,vehiculo,telefono,telefono_normalizado,estado_cuenta",
-                    "empresa_id": f"eq.{settings['empresa_id']}",
-                    "activo": "eq.true",
-                    "estado_cuenta": "eq.activa",
-                    "disponible": "eq.true",
-                    "limit": "500",
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            response.raise_for_status()
-            providers = response.json() if response.content else []
-            matched = 0
-            notified = 0
-
-            for provider in providers:
-                if not _provider_matches_request(provider, request_row):
-                    continue
-                created, sent = _create_match(provider, request_row, notify=True)
-                matched += created
-                notified += sent
-
-            app.logger.info(
-                "MOBILE DISPATCH solicitud=%s matches=%s pushes=%s",
-                request_row.get("public_id"), matched, notified,
-            )
-        except Exception as exc:
-            app.logger.exception("MOBILE DISPATCH ERROR: %r", exc)
-
-    def _match_provider(provider):
-        """Entrega solicitudes abiertas a quien recién crea su perfil."""
-        try:
-            cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
-            response = requests.get(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
-                headers=_db_headers(),
-                params={
-                    "select": "id,public_id,tipo,subtipo,comuna,materiales,telefono,telefono_normalizado,estado,created_at",
-                    "empresa_id": f"eq.{settings['empresa_id']}",
-                    "estado": "in.(publicada,revisando)",
-                    "created_at": f"gte.{cutoff}",
-                    "order": "created_at.desc",
-                    "limit": "100",
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            response.raise_for_status()
-            for request_row in (response.json() if response.content else []):
-                if _provider_matches_request(provider, request_row):
-                    _create_match(provider, request_row, notify=False)
-        except Exception as exc:
-            app.logger.exception("PROVIDER BACKFILL ERROR: %r", exc)
-
-    def _dispatch_request(request_row):
-        _match_request(request_row)
-        if request_row.get("tipo") == "reciclaje" and legacy_dispatch:
-            try:
-                legacy_dispatch(request_row)
-            except Exception as exc:
-                app.logger.exception("MOBILE LEGACY DISPATCH ERROR: %r", exc)
-
-    def _notify_pending_matches(request_row):
-        """Vuelve a avisar a los prestadores disponibles tras un rechazo de precio."""
-        try:
-            response = requests.get(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_matches",
-                headers=_db_headers(),
-                params={
-                    "select": "prestador_id",
-                    "solicitud_id": f"eq.{request_row['id']}",
-                    "estado": "eq.pendiente",
-                    "limit": "500",
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            response.raise_for_status()
-            for match in (response.json() if response.content else []):
-                _send_custom_push(
-                    "nexi_app_push_suscripciones",
-                    "prestador_id",
-                    match["prestador_id"],
-                    "Oportunidad nuevamente disponible",
-                    f"{SERVICE_LABELS.get(request_row.get('tipo'), 'Servicio')} en {request_row.get('comuna') or 'tu zona'}.",
-                    "/app/?view=provider",
-                    f"reabierta-{request_row['id']}",
-                )
-        except Exception as exc:
-            app.logger.exception("REMATCH PUSH ERROR: %r", exc)
-
-    @app.get("/app")
-    @app.get("/app/")
-    def mobile_index():
-        response = send_from_directory(app_dir, "index.html")
-        response.headers["Cache-Control"] = "no-cache"
-        return response
-
-    @app.get("/app/manifest.webmanifest")
-    def mobile_manifest():
-        return send_from_directory(app_dir, "manifest.webmanifest", mimetype="application/manifest+json")
-
-    @app.get("/app/sw.js")
-    def mobile_service_worker():
-        response = send_from_directory(app_dir, "sw.js", mimetype="application/javascript")
-        response.headers["Cache-Control"] = "no-cache"
-        response.headers["Service-Worker-Allowed"] = "/app/"
-        return response
-
-    @app.get("/app/assets/<path:filename>")
-    def mobile_assets(filename):
-        return send_from_directory(os.path.join(app_dir, "assets"), filename)
-
-    @app.get(f"{api_base}/config")
-    def mobile_config():
-        return _json(app, {
-            "ok": True,
-            "name": "Llama a Jaime Servicios",
-            "version": settings["app_version"],
-            "services": [
-                {"id": key, "name": SERVICE_LABELS[key]}
-                for key in ("hogar", "limpieza", "flete", "jardineria", "belleza", "reciclaje", "otro")
-            ],
-            "ai": bool(settings["ai_enabled"]),
-            "dispatch": True,
-            "push": bool(settings.get("vapid_public_key") and settings.get("vapid_private_key")),
-            "chat": True,
-            "quotes": True,
-            "photos": True,
-            "location": True,
-            "security": {
-                "provider_login": True,
-                "self_assignment_blocked": True,
-                "complaints": True,
-                "terms_version": TERMS_VERSION,
-                "location_mode": "voluntary_private_point_in_time",
-            },
-        })
-
-    @app.post(f"{api_base}/chat")
-    def mobile_chat():
-        if not _allow("chat", limit=30):
-            return _json(app, {"ok": False, "error": "Alcanzaste el límite temporal de mensajes. Intenta más tarde."}, 429)
-        if not settings["ai_enabled"]:
-            return _json(app, {"ok": False, "error": "La asistencia con IA no está disponible en este momento."}, 503)
-
-        body = request.get_json(silent=True) or {}
-        message = _clean(body.get("message"), 1500)
-        service = _clean(body.get("service"), 30).lower()
-        if not message:
-            return _json(app, {"ok": False, "error": "Escribe una pregunta."}, 400)
-        if service not in ({""} | SERVICE_TYPES):
-            service = ""
-
-        history_lines = []
-        history = body.get("history") if isinstance(body.get("history"), list) else []
-        for item in history[-8:]:
-            if not isinstance(item, dict):
-                continue
-            role = "Usuario" if item.get("role") == "user" else "Asistente"
-            content = _clean(item.get("content"), 800)
-            if content:
-                history_lines.append(f"{role}: {content}")
-
-        instructions = (
-            "Eres Jaime, asistente de Llama a Jaime Servicios en Chile. "
-            "Responde en español claro, cercano y breve. Ayudas a las personas a definir y publicar "
-            "solicitudes de servicios para el hogar, limpieza, fletes, jardinería, belleza y bienestar, "
-            "reciclaje u otras "
-            "necesidades cotidianas. No inventes precios, disponibilidad, certificaciones, "
-            "destinos ni estados. Explica que el valor final lo propone y confirma un prestador. "
-            "Nunca pidas claves, datos bancarios ni documentos sensibles. Si existe una urgencia "
-            "o riesgo físico, recomienda contactar servicios de emergencia. Cuando ya estén los "
-            "datos esenciales, invita a pulsar 'Crear solicitud'. Responde siempre como texto plano: "
-            "no uses Markdown, asteriscos, negritas, encabezados con #, tablas ni bloques de código. "
-            "Si necesitas enumerar información, usa frases cortas o guiones simples."
-        )
-        context = (
-            f"Servicio seleccionado: {service or 'sin seleccionar'}\n"
-            + ("Conversación reciente:\n" + "\n".join(history_lines) + "\n" if history_lines else "")
-            + f"Mensaje actual: {message}"
-        )
-        try:
-            reply, usage = ai_generate(settings["ai_model"], instructions, context)
-            reply = _plain_assistant_text(reply)
-            if not reply:
-                raise RuntimeError("La IA respondió sin contenido")
-            return _json(app, {"ok": True, "reply": reply, "usage": {"api": usage.get("api")}})
-        except Exception as exc:
-            app.logger.exception("MOBILE CHAT ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude responder ahora. Intenta nuevamente en unos segundos."}, 502)
-
-    @app.post(f"{api_base}/solicitudes")
-    def mobile_create_request():
-        if not _allow("request", limit=8):
-            return _json(app, {"ok": False, "error": "Alcanzaste el límite temporal de solicitudes."}, 429)
-
-        body = request.get_json(silent=True) or {}
-        service_type = _clean(body.get("tipo"), 20).lower()
-        subtype = _clean(body.get("subtipo"), 40).lower()
-        name = _clean(body.get("nombre"), 120)
-        phone = _clean(body.get("telefono"), 40)
-        email = _clean(body.get("email"), 180).lower()
-        commune = _clean(body.get("comuna"), 120)
-        origin = _clean(body.get("direccion_origen"), 500)
-        destination = _clean(body.get("direccion_destino"), 500)
-        details = _clean(body.get("detalles"), 2000)
-        schedule = _clean(body.get("fecha_preferida"), 120)
-        materials = _list_clean(body.get("materiales"), item_limit=120, max_items=30)
-        accepts_terms = body.get("acepta_terminos") is True
-        accepts_privacy = body.get("acepta_privacidad") is True
-        location = None
-        if body.get("latitud") not in (None, "") or body.get("longitud") not in (None, ""):
-            location = _location_values(body.get("latitud"), body.get("longitud"), body.get("precision_m"))
-            if not location:
-                return _json(app, {"ok": False, "error": "La ubicación compartida no es válida."}, 400)
-
-        if service_type not in SERVICE_TYPES:
-            return _json(app, {"ok": False, "error": "Selecciona una categoría de servicio."}, 400)
-        if service_type == "belleza" and subtype not in BEAUTY_TYPES:
-            return _json(app, {"ok": False, "error": "Selecciona el servicio de belleza que necesitas."}, 400)
-        if not name or not commune or not origin or not details:
-            return _json(app, {"ok": False, "error": "Completa nombre, comuna, dirección y detalle."}, 400)
-        if not _valid_phone(phone):
-            return _json(app, {"ok": False, "error": "Ingresa un teléfono válido."}, 400)
-        if not _valid_email(email):
-            return _json(app, {"ok": False, "error": "Ingresa un correo válido."}, 400)
-        if service_type == "flete" and not destination:
-            return _json(app, {"ok": False, "error": "Para un flete debes indicar el destino."}, 400)
-        if service_type == "reciclaje" and not materials:
-            return _json(app, {"ok": False, "error": "Selecciona al menos un material."}, 400)
-        if not accepts_terms or not accepts_privacy:
-            return _json(app, {"ok": False, "error": "Debes aceptar los términos y el tratamiento privado de tus datos."}, 400)
-        risky_reason = _risky_service_reason(details, destination, subtype)
-        if risky_reason:
-            return _json(app, {"ok": False, "error": risky_reason}, 400)
-
-        headers = supabase_headers()
-        if not headers:
-            return _json(app, {"ok": False, "error": "La base de datos no está configurada."}, 503)
-
-        public_id = f"NX-{datetime.now(timezone.utc):%y%m%d}-{uuid.uuid4().hex[:8].upper()}"
-        access_token = uuid.uuid4().hex
-        payload = {
-            "public_id": public_id,
-            "access_token_hash": hashlib.sha256(access_token.encode("utf-8")).hexdigest(),
-            "empresa_id": settings["empresa_id"],
-            "tipo": service_type,
-            "subtipo": subtype if service_type == "belleza" else None,
-            "nombre": name,
-            "telefono": phone,
-            "telefono_normalizado": _normalize_phone(phone),
-            "email": email or None,
-            "comuna": commune,
-            "direccion_origen": origin,
-            "direccion_destino": destination or None,
-            "detalles": details,
-            "materiales": materials,
-            "fecha_preferida": schedule or None,
-            "estado": "publicada",
-            "canal": "app",
-            "acepta_terminos": True,
-            "acepta_privacidad": True,
-            "consentimiento_at": datetime.now(timezone.utc).isoformat(),
-            "terminos_version": TERMS_VERSION,
-        }
-        if location:
-            payload.update({
-                "cliente_latitud": location[0],
-                "cliente_longitud": location[1],
-                "cliente_precision_m": location[2],
-                "cliente_ubicacion_at": datetime.now(timezone.utc).isoformat(),
-            })
-        try:
-            response = requests.post(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
-                headers={**headers, "Prefer": "return=representation"},
-                json=payload,
-                timeout=settings["supabase_timeout"],
-            )
-            if not response.ok:
-                app.logger.error("MOBILE REQUEST DB ERROR %s: %s", response.status_code, response.text[:800])
-                if response.status_code == 404 or "nexi_app_solicitudes" in response.text:
-                    return _json(app, {"ok": False, "error": "Falta aplicar la migración de la app en Supabase."}, 503)
-                return _json(app, {"ok": False, "error": "No pude guardar la solicitud."}, 502)
-            rows = response.json() if response.content else []
-            created = rows[0] if rows else {**payload, "id": None}
-            if created.get("id"):
-                Thread(target=_audit, args=("solicitud_creada", "cliente", None, created["id"], {"tipo": service_type}), daemon=True).start()
-                Thread(target=_dispatch_request, args=(created,), daemon=True).start()
-            return _json(app, {
-                "ok": True,
-                "solicitud": {
-                    "codigo": public_id,
-                    "token": access_token,
-                    "tipo": service_type,
-                    "subtipo": subtype if service_type == "belleza" else None,
-                    "estado": "publicada",
-                    "despacho": "buscando_prestadores",
-                },
-            }, 201)
-        except requests.RequestException as exc:
-            app.logger.exception("MOBILE REQUEST NETWORK ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude conectar con la base de datos."}, 502)
-
-    @app.get(f"{api_base}/solicitudes/<public_id>")
-    def mobile_request_status(public_id):
-        public_id = _clean(public_id, 40).upper()
-        access_token = _clean(request.args.get("token"), 80)
-        if not re.fullmatch(r"NX-\d{6}-[A-F0-9]{8}", public_id) or len(access_token) < 20:
-            return _json(app, {"ok": False, "error": "Código o acceso inválido."}, 400)
-        headers = supabase_headers()
-        if not headers:
-            return _json(app, {"ok": False, "error": "La base de datos no está configurada."}, 503)
-        try:
-            response = requests.get(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
-                headers=headers,
-                params={
-                    "select": "public_id,tipo,subtipo,comuna,estado,fecha_preferida,created_at,updated_at",
-                    "public_id": f"eq.{public_id}",
-                    "access_token_hash": f"eq.{hashlib.sha256(access_token.encode('utf-8')).hexdigest()}",
-                    "limit": "1",
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            response.raise_for_status()
-            rows = response.json() if response.content else []
-            if not rows:
-                return _json(app, {"ok": False, "error": "Solicitud no encontrada."}, 404)
-            return _json(app, {"ok": True, "solicitud": rows[0]})
-        except requests.RequestException as exc:
-            app.logger.exception("MOBILE STATUS ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude consultar la solicitud."}, 502)
-
-    @app.post(f"{api_base}/solicitudes/<public_id>/fotos")
-    def mobile_upload_request_photos(public_id):
-        if not _allow("request-photos", limit=20):
-            return _json(app, {"ok": False, "error": "Alcanzaste el límite temporal de fotografías."}, 429)
-        if request.content_length and request.content_length > (PHOTO_MAX_FILES * PHOTO_MAX_BYTES + 1024 * 1024):
-            return _json(app, {"ok": False, "error": "La carga de fotografías es demasiado grande."}, 413)
-        try:
-            request_row = _client_auth(public_id, request.form.get("token"))
-            if not request_row:
-                return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
-            incoming = request.files.getlist("fotos")
-            if not incoming:
-                return _json(app, {"ok": False, "error": "Selecciona al menos una fotografía."}, 400)
-            existing = _photo_rows(request_row["id"])
-            available = PHOTO_MAX_FILES - len(existing)
-            if available <= 0 or len(incoming) > available:
-                return _json(app, {"ok": False, "error": f"Puedes guardar hasta {PHOTO_MAX_FILES} fotografías por solicitud."}, 400)
-
-            prepared = []
-            for photo in incoming:
-                mime_type = _clean(photo.mimetype, 80).lower()
-                extension = PHOTO_MIME_TYPES.get(mime_type)
-                if not extension:
-                    return _json(app, {"ok": False, "error": "Usa fotografías JPG, PNG o WebP."}, 400)
-                content = photo.read(PHOTO_MAX_BYTES + 1)
-                if not content or len(content) > PHOTO_MAX_BYTES:
-                    return _json(app, {"ok": False, "error": "Cada fotografía debe pesar menos de 8 MB."}, 400)
-                if not _valid_image_signature(content, mime_type):
-                    return _json(app, {"ok": False, "error": "Uno de los archivos no es una imagen válida."}, 400)
-                prepared.append((mime_type, extension, content))
-
-            uploaded = []
-            for mime_type, extension, content in prepared:
-                object_path = f"{settings['empresa_id']}/{request_row['id']}/{uuid.uuid4().hex}.{extension}"
-                storage_headers = {
-                    **_db_headers(),
-                    "Content-Type": mime_type,
-                    "x-upsert": "false",
-                }
-                storage_response = requests.post(
-                    f"{settings['supabase_url']}/storage/v1/object/{PHOTO_BUCKET}/{object_path}",
-                    headers=storage_headers,
-                    data=content,
-                    timeout=max(30, settings["supabase_timeout"]),
-                )
-                storage_response.raise_for_status()
-                metadata_response = requests.post(
-                    f"{settings['supabase_url']}/rest/v1/nexi_app_fotos_solicitud",
-                    headers=_db_headers("return=representation"),
-                    json={
-                        "empresa_id": settings["empresa_id"],
-                        "solicitud_id": request_row["id"],
-                        "object_path": object_path,
-                        "mime_type": mime_type,
-                        "size_bytes": len(content),
-                    },
-                    timeout=settings["supabase_timeout"],
-                )
-                metadata_response.raise_for_status()
-                rows = metadata_response.json() if metadata_response.content else []
-                url = _signed_photo_url(object_path)
-                uploaded.append({
-                    "id": rows[0].get("id") if rows else None,
-                    "url": url,
-                    "mime_type": mime_type,
-                })
-            return _json(app, {"ok": True, "fotos": uploaded}, 201)
-        except requests.RequestException as exc:
-            app.logger.exception("REQUEST PHOTOS ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude guardar las fotografías."}, 502)
-
-    @app.post(f"{api_base}/solicitudes/<public_id>/ubicacion")
-    def mobile_share_location(public_id):
-        if not _allow("share-location", limit=60):
-            return _json(app, {"ok": False, "error": "Alcanzaste el límite temporal de actualizaciones."}, 429)
-        body = request.get_json(silent=True) or {}
-        actor = _clean(body.get("actor"), 20).lower()
-        location = _location_values(body.get("latitud"), body.get("longitud"), body.get("precision_m"))
-        if not location:
-            return _json(app, {"ok": False, "error": "No pude validar la ubicación."}, 400)
-        now = datetime.now(timezone.utc).isoformat()
-        try:
-            if actor == "cliente":
-                request_row = _client_auth(public_id, body.get("token"))
-                if not request_row:
-                    return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
-                response = requests.patch(
-                    f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
-                    headers=_db_headers("return=minimal"),
-                    params={"id": f"eq.{request_row['id']}"},
-                    json={
-                        "cliente_latitud": location[0],
-                        "cliente_longitud": location[1],
-                        "cliente_precision_m": location[2],
-                        "cliente_ubicacion_at": now,
-                    },
-                    timeout=settings["supabase_timeout"],
-                )
-                response.raise_for_status()
-                return _json(app, {"ok": True, "ubicacion": {"latitud": location[0], "longitud": location[1], "precision_m": location[2], "updated_at": now}})
-
-            if actor == "prestador":
-                provider = _provider_auth(body.get("codigo"), body.get("token"))
-                request_row = _request_by_code(public_id) if provider else None
-                if not request_row or str(request_row.get("prestador_id") or "") != str(provider.get("id") or ""):
-                    return _json(app, {"ok": False, "error": "No tienes esta solicitud asignada."}, 401)
-                response = requests.post(
-                    f"{settings['supabase_url']}/rest/v1/nexi_app_ubicaciones_prestador",
-                    headers=_db_headers("return=representation,resolution=merge-duplicates"),
-                    params={"on_conflict": "solicitud_id,prestador_id"},
-                    json={
-                        "empresa_id": settings["empresa_id"],
-                        "solicitud_id": request_row["id"],
-                        "prestador_id": provider["id"],
-                        "latitud": location[0],
-                        "longitud": location[1],
-                        "precision_m": location[2],
-                        "updated_at": now,
-                    },
-                    timeout=settings["supabase_timeout"],
-                )
-                response.raise_for_status()
-                return _json(app, {"ok": True, "ubicacion": {"latitud": location[0], "longitud": location[1], "precision_m": location[2], "updated_at": now}})
-
-            return _json(app, {"ok": False, "error": "Tipo de usuario inválido."}, 400)
-        except requests.RequestException as exc:
-            app.logger.exception("SHARE LOCATION ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude guardar la ubicación."}, 502)
-
-    @app.post(f"{api_base}/prestadores")
-    def mobile_create_provider():
-        if not _allow("provider-register", limit=5):
-            return _json(app, {"ok": False, "error": "Alcanzaste el límite temporal de registros."}, 429)
-        body = request.get_json(silent=True) or {}
-        name = _clean(body.get("nombre"), 120)
-        phone = _clean(body.get("telefono"), 40)
-        email = _clean(body.get("email"), 180).lower()
-        rut = _normalize_rut(body.get("rut"))
-        pin = str(body.get("pin") or "")
-        accepts_terms = body.get("acepta_terminos") is True
-        accepts_privacy = body.get("acepta_privacidad") is True
-        roles = [_norm(x) for x in _list_clean(body.get("roles"), 30, 8)]
-        roles = list(dict.fromkeys(x for x in roles if x in SERVICE_TYPES))
-        communes = _list_clean(body.get("comunas"), 120, 80)
-        materials = _list_clean(body.get("materiales"), 120, 50)
-        specialties = [
-            _norm(x).replace(" ", "_")
-            for x in _list_clean(body.get("especialidades"), 60, 20)
-        ]
-        specialties = list(dict.fromkeys(x for x in specialties if x in BEAUTY_TYPES))
-        vehicle = _clean(body.get("vehiculo"), 120)
-        try:
-            radius = float(body.get("radio_km")) if body.get("radio_km") not in (None, "") else None
-            if radius is not None:
-                radius = min(300, max(1, radius))
-        except (TypeError, ValueError):
-            return _json(app, {"ok": False, "error": "El radio de cobertura no es válido."}, 400)
-
-        if not name or not _valid_phone(phone) or not roles or not communes:
-            return _json(app, {"ok": False, "error": "Completa nombre, teléfono, tipo de servicio y comunas."}, 400)
-        if not _valid_email(email):
-            return _json(app, {"ok": False, "error": "Ingresa un correo válido."}, 400)
-        if not _valid_rut(rut):
-            return _json(app, {"ok": False, "error": "Ingresa un RUT chileno válido."}, 400)
-        if not _valid_pin(pin):
-            return _json(app, {"ok": False, "error": "Crea una clave de acceso de exactamente 6 números."}, 400)
-        if not accepts_terms or not accepts_privacy:
-            return _json(app, {"ok": False, "error": "Debes aceptar los términos y la política de privacidad."}, 400)
-        if "reciclaje" in roles and not materials:
-            return _json(app, {"ok": False, "error": "Selecciona los materiales que recibes."}, 400)
-        if "belleza" in roles and not specialties:
-            return _json(app, {"ok": False, "error": "Selecciona al menos una especialidad de belleza."}, 400)
-        if "flete" in roles and not vehicle:
-            return _json(app, {"ok": False, "error": "Indica el vehículo que utilizas para fletes."}, 400)
-
-        code = f"PR-{datetime.now(timezone.utc):%y%m%d}-{uuid.uuid4().hex[:8].upper()}"
-        token = uuid.uuid4().hex
-        pin_salt = os.urandom(16).hex()
-        payload = {
-            "public_id": code,
-            "access_token_hash": hashlib.sha256(token.encode("utf-8")).hexdigest(),
-            "empresa_id": settings["empresa_id"],
-            "nombre": name,
-            "telefono": phone,
-            "telefono_normalizado": _normalize_phone(phone),
-            "email": email or None,
-            "rut_normalizado": rut,
-            "pin_salt": pin_salt,
-            "pin_hash": _pin_hash(pin, pin_salt),
-            "roles": roles,
-            "comunas": communes,
-            "materiales": materials,
-            "especialidades": specialties,
-            "vehiculo": vehicle or None,
-            "radio_km": radius,
-            "disponible": True,
-            "activo": True,
-            "estado_cuenta": "activa",
-            "estado_verificacion": "pendiente",
-            "acepta_terminos": True,
-            "acepta_privacidad": True,
-            "consentimiento_at": datetime.now(timezone.utc).isoformat(),
-            "terminos_version": TERMS_VERSION,
-        }
-        try:
-            duplicate_response = requests.get(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
-                headers=_db_headers(),
-                params={
-                    "select": "id",
-                    "empresa_id": f"eq.{settings['empresa_id']}",
-                    "rut_normalizado": f"eq.{rut}",
-                    "limit": "1",
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            duplicate_response.raise_for_status()
-            duplicate_rows = duplicate_response.json() if duplicate_response.content else []
-            if duplicate_rows:
-                return _json(app, {"ok": False, "error": "Ya existe una cuenta con este RUT. Usa la opción Ingresar."}, 409)
-            response = requests.post(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
-                headers=_db_headers("return=representation"),
-                json=payload,
-                timeout=settings["supabase_timeout"],
-            )
-            if not response.ok:
-                app.logger.error("PROVIDER DB ERROR %s: %s", response.status_code, response.text[:800])
-                return _json(app, {"ok": False, "error": "No pude completar el registro. Revisa la migración de Llama a Jaime Servicios."}, 502)
-            rows = response.json() if response.content else []
-            created_provider = rows[0] if rows else None
-            if created_provider:
-                Thread(target=_audit, args=("prestador_registrado", "prestador", created_provider["id"], None, {"verificacion": "pendiente"}), daemon=True).start()
-                Thread(target=_match_provider, args=(created_provider,), daemon=True).start()
-            return _json(app, {
-                "ok": True,
-                "prestador": {"codigo": code, "token": token, "nombre": name, "roles": roles, "especialidades": specialties, "disponible": True, "estado_verificacion": "pendiente"},
-            }, 201)
-        except requests.RequestException as exc:
-            app.logger.exception("PROVIDER NETWORK ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude conectar con la base de datos."}, 502)
-
-    @app.post(f"{api_base}/prestadores/login")
-    def mobile_provider_login():
-        if not _allow("provider-login", limit=10):
-            return _json(app, {"ok": False, "error": "Demasiados intentos. Espera antes de volver a ingresar."}, 429)
-        body = request.get_json(silent=True) or {}
-        rut = _normalize_rut(body.get("rut"))
-        pin = str(body.get("pin") or "")
-        if not _valid_rut(rut) or not _valid_pin(pin):
-            return _json(app, {"ok": False, "error": "RUT o clave incorrectos."}, 401)
-        try:
-            response = requests.get(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
-                headers=_db_headers(),
-                params={
-                    "select": "*",
-                    "empresa_id": f"eq.{settings['empresa_id']}",
-                    "rut_normalizado": f"eq.{rut}",
-                    "limit": "1",
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            response.raise_for_status()
-            rows = response.json() if response.content else []
-            provider = rows[0] if rows else None
-            salt = str((provider or {}).get("pin_salt") or "")
-            stored_hash = str((provider or {}).get("pin_hash") or "")
-            if not provider or not salt or not stored_hash or not hmac.compare_digest(_pin_hash(pin, salt), stored_hash):
-                return _json(app, {"ok": False, "error": "RUT o clave incorrectos."}, 401)
-            if not provider.get("activo") or provider.get("estado_cuenta") != "activa":
-                return _json(app, {"ok": False, "error": "Esta cuenta está suspendida o cerrada. Contacta a soporte."}, 403)
-
-            token = uuid.uuid4().hex
-            login_at = datetime.now(timezone.utc).isoformat()
-            update_response = requests.patch(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
-                headers=_db_headers("return=minimal"),
-                params={"id": f"eq.{provider['id']}"},
-                json={
-                    "access_token_hash": hashlib.sha256(token.encode("utf-8")).hexdigest(),
-                    "ultimo_login_at": login_at,
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            update_response.raise_for_status()
-            Thread(target=_audit, args=("prestador_login", "prestador", provider["id"]), daemon=True).start()
-            return _json(app, {
-                "ok": True,
-                "prestador": {
-                    "codigo": provider["public_id"],
-                    "token": token,
-                    "nombre": provider.get("nombre"),
-                    "roles": provider.get("roles") or [],
-                    "especialidades": provider.get("especialidades") or [],
-                    "disponible": bool(provider.get("disponible")),
-                    "estado_verificacion": provider.get("estado_verificacion") or "pendiente",
-                },
-            })
-        except (ValueError, requests.RequestException) as exc:
-            app.logger.exception("PROVIDER LOGIN ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude iniciar la sesión."}, 502)
-
-    @app.route(f"{api_base}/prestadores/me", methods=["GET", "PATCH"])
-    def mobile_provider_me():
-        body = request.get_json(silent=True) or {}
-        code = request.args.get("codigo") or body.get("codigo")
-        token = request.args.get("token") or body.get("token")
-        try:
-            provider = _provider_auth(code, token)
-            if not provider:
-                return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
-            if request.method == "GET":
-                safe = {key: provider.get(key) for key in (
-                    "public_id", "nombre", "email", "roles", "comunas", "materiales", "especialidades",
-                    "vehiculo", "radio_km", "disponible", "estado_cuenta", "estado_verificacion", "created_at"
-                )}
-                return _json(app, {"ok": True, "prestador": safe})
-
-            update = {}
-            if isinstance(body.get("disponible"), bool):
-                update["disponible"] = body["disponible"]
-            if "comunas" in body:
-                communes = _list_clean(body.get("comunas"), 120, 80)
-                if communes:
-                    update["comunas"] = communes
-            if "materiales" in body:
-                update["materiales"] = _list_clean(body.get("materiales"), 120, 50)
-            if "especialidades" in body:
-                update["especialidades"] = [
-                    item for item in (
-                        _norm(x).replace(" ", "_")
-                        for x in _list_clean(body.get("especialidades"), 60, 20)
-                    ) if item in BEAUTY_TYPES
-                ]
-            if "vehiculo" in body:
-                update["vehiculo"] = _clean(body.get("vehiculo"), 120) or None
-            if not update:
-                return _json(app, {"ok": False, "error": "No hay cambios válidos."}, 400)
-            response = requests.patch(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
-                headers=_db_headers("return=representation"),
-                params={"id": f"eq.{provider['id']}"},
-                json=update,
-                timeout=settings["supabase_timeout"],
-            )
-            response.raise_for_status()
-            rows = response.json() if response.content else []
-            return _json(app, {"ok": True, "prestador": rows[0] if rows else update})
-        except requests.RequestException as exc:
-            app.logger.exception("PROVIDER ME ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude consultar el perfil."}, 502)
-
-    @app.get(f"{api_base}/oportunidades")
-    def mobile_opportunities():
-        try:
-            provider = _provider_auth(request.args.get("codigo"), request.args.get("token"))
-            if not provider:
-                return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
-            response = requests.get(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_matches",
-                headers=_db_headers(),
-                params={
-                    "select": "id,solicitud_id,estado,created_at",
-                    "prestador_id": f"eq.{provider['id']}",
-                    "estado": "in.(pendiente,tomada)",
-                    "order": "created_at.desc",
-                    "limit": "50",
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            response.raise_for_status()
-            matches = response.json() if response.content else []
-            request_ids = [row["solicitud_id"] for row in matches]
-            requests_by_id = {}
-            if request_ids:
-                request_response = requests.get(
-                    f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
-                    headers=_db_headers(),
-                    params={
-                        "select": "id,public_id,tipo,subtipo,comuna,direccion_origen,direccion_destino,detalles,materiales,fecha_preferida,estado,telefono,nombre,created_at",
-                        "id": f"in.({','.join(request_ids)})",
-                    },
-                    timeout=settings["supabase_timeout"],
-                )
-                request_response.raise_for_status()
-                requests_by_id = {row["id"]: row for row in (request_response.json() if request_response.content else [])}
-
-            output = []
-            for match in matches:
-                item = dict(requests_by_id.get(match["solicitud_id"]) or {})
-                if not item:
-                    continue
-                taken = match["estado"] == "tomada"
-                if not taken:
-                    item.pop("telefono", None)
-                    item.pop("nombre", None)
-                    item.pop("direccion_origen", None)
-                    item.pop("direccion_destino", None)
-                else:
-                    item["fotos"] = _safe_photos(item["id"])
-                output.append({"match_id": match["id"], "match_estado": match["estado"], "solicitud": item})
-            return _json(app, {"ok": True, "disponible": provider.get("disponible"), "oportunidades": output})
-        except requests.RequestException as exc:
-            app.logger.exception("OPPORTUNITIES ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude consultar las oportunidades."}, 502)
-
-    @app.post(f"{api_base}/oportunidades/<match_id>/tomar")
-    def mobile_take_opportunity(match_id):
-        body = request.get_json(silent=True) or {}
-        try:
-            provider = _provider_auth(body.get("codigo"), body.get("token"))
-            if not provider:
-                return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
-            response = requests.post(
-                f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_tomar_match",
-                headers=_db_headers(),
-                json={"p_match_id": _clean(match_id, 80), "p_prestador_id": provider["id"]},
-                timeout=settings["supabase_timeout"],
-            )
-            response.raise_for_status()
-            result = response.json() if response.content else {}
-            if isinstance(result, list):
-                result = result[0] if result else {}
-            if not result.get("ok"):
-                return _json(app, {"ok": False, "error": result.get("error") or "No se pudo tomar la solicitud."}, 409)
-            return _json(app, {"ok": True, "resultado": result})
-        except requests.RequestException as exc:
-            app.logger.exception("TAKE OPPORTUNITY ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude tomar la solicitud."}, 502)
-
-    @app.get(f"{api_base}/push/public-key")
-    def mobile_push_public_key():
-        key = settings.get("vapid_public_key") or ""
-        return _json(app, {"ok": bool(key), "public_key": key}, 200 if key else 503)
-
-    @app.post(f"{api_base}/push/subscribe")
-    def mobile_push_subscribe():
-        body = request.get_json(silent=True) or {}
-        subscription = body.get("subscription") if isinstance(body.get("subscription"), dict) else {}
-        keys = subscription.get("keys") if isinstance(subscription.get("keys"), dict) else {}
-        endpoint = _clean(subscription.get("endpoint"), 2000)
-        p256dh = _clean(keys.get("p256dh"), 500)
-        auth = _clean(keys.get("auth"), 500)
-        try:
-            provider = _provider_auth(body.get("codigo"), body.get("token"))
-            if not provider:
-                return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
-            if not endpoint.startswith("https://") or not p256dh or not auth:
-                return _json(app, {"ok": False, "error": "Suscripción push inválida."}, 400)
-            response = requests.post(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_push_suscripciones",
-                headers=_db_headers("return=representation,resolution=merge-duplicates"),
-                params={"on_conflict": "endpoint"},
-                json={
-                    "empresa_id": settings["empresa_id"],
-                    "prestador_id": provider["id"],
-                    "endpoint": endpoint,
-                    "p256dh": p256dh,
-                    "auth": auth,
-                    "user_agent": _clean(request.headers.get("User-Agent"), 500),
-                    "activa": True,
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            response.raise_for_status()
-            return _json(app, {"ok": True})
-        except requests.RequestException as exc:
-            app.logger.exception("PUSH SUBSCRIBE ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude activar las notificaciones."}, 502)
-
-    def _conversation_access(public_id, values):
-        actor = _clean(values.get("actor"), 20).lower()
-        if actor == "cliente":
-            request_row = _client_auth(public_id, values.get("token"))
-            return actor, request_row, None
-        if actor == "prestador":
-            provider = _provider_auth(values.get("codigo"), values.get("token"))
-            request_row = _request_by_code(public_id) if provider else None
-            if not request_row or str(request_row.get("prestador_id") or "") != str(provider.get("id") or ""):
-                return actor, None, None
-            return actor, request_row, provider
-        return actor, None, None
-
-    @app.route(f"{api_base}/solicitudes/<public_id>/conversacion", methods=["GET", "POST"])
-    def mobile_conversation(public_id):
-        body = request.get_json(silent=True) or {}
-        values = request.args if request.method == "GET" else body
-        try:
-            actor, request_row, provider = _conversation_access(public_id, values)
-            if not request_row:
-                return _json(app, {"ok": False, "error": "Acceso a la conversación inválido."}, 401)
-            provider_id = request_row.get("prestador_id")
-            if request.method == "POST":
-                content = _clean(body.get("mensaje"), 2000)
-                if not provider_id:
-                    return _json(app, {"ok": False, "error": "Aún no hay un prestador asignado."}, 409)
-                if not content:
-                    return _json(app, {"ok": False, "error": "Escribe un mensaje."}, 400)
-                response = requests.post(
-                    f"{settings['supabase_url']}/rest/v1/nexi_app_mensajes_servicio",
-                    headers=_db_headers("return=representation"),
-                    json={
-                        "empresa_id": settings["empresa_id"],
-                        "solicitud_id": request_row["id"],
-                        "prestador_id": provider_id,
-                        "remitente_tipo": actor,
-                        "contenido": content,
-                    },
-                    timeout=settings["supabase_timeout"],
-                )
-                response.raise_for_status()
-                rows = response.json() if response.content else []
-                if actor == "cliente":
-                    _send_custom_push(
-                        "nexi_app_push_suscripciones", "prestador_id", provider_id,
-                        "Nuevo mensaje del cliente", content[:120],
-                        "/app/?view=provider", f"mensaje-{request_row['id']}",
-                    )
-                else:
-                    _send_custom_push(
-                        "nexi_app_push_clientes", "solicitud_id", request_row["id"],
-                        "Jaime tiene un nuevo mensaje", content[:120],
-                        "/app/?view=status", f"mensaje-{request_row['id']}",
-                    )
-                return _json(app, {"ok": True, "mensaje": rows[0] if rows else {"contenido": content}}, 201)
-
-            messages_response = requests.get(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_mensajes_servicio",
-                headers=_db_headers(),
-                params={
-                    "select": "id,remitente_tipo,contenido,cotizacion_id,created_at",
-                    "solicitud_id": f"eq.{request_row['id']}",
-                    "prestador_id": f"eq.{provider_id}",
-                    "order": "created_at.asc",
-                    "limit": "200",
-                } if provider_id else {"select": "id", "limit": "0"},
-                timeout=settings["supabase_timeout"],
-            )
-            messages_response.raise_for_status()
-            quote = None
-            if provider_id:
-                quote_response = requests.get(
-                    f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio",
-                    headers=_db_headers(),
-                    params={
-                        "select": "id,monto_clp,detalle,estado,created_at",
-                        "solicitud_id": f"eq.{request_row['id']}",
-                        "prestador_id": f"eq.{provider_id}",
-                        "estado": "in.(pendiente,aceptada)",
-                        "order": "created_at.desc",
-                        "limit": "1",
-                    },
-                    timeout=settings["supabase_timeout"],
-                )
-                quote_response.raise_for_status()
-                quote_rows = quote_response.json() if quote_response.content else []
-                quote = quote_rows[0] if quote_rows else None
-
-            provider_name = None
-            provider_location = None
-            if provider_id:
-                provider_response = requests.get(
-                    f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
-                    headers=_db_headers(),
-                    params={"select": "nombre", "id": f"eq.{provider_id}", "limit": "1"},
-                    timeout=settings["supabase_timeout"],
-                )
-                provider_response.raise_for_status()
-                provider_rows = provider_response.json() if provider_response.content else []
-                provider_name = provider_rows[0].get("nombre") if provider_rows else None
-                location_response = requests.get(
-                    f"{settings['supabase_url']}/rest/v1/nexi_app_ubicaciones_prestador",
-                    headers=_db_headers(),
-                    params={
-                        "select": "latitud,longitud,precision_m,updated_at",
-                        "solicitud_id": f"eq.{request_row['id']}",
-                        "prestador_id": f"eq.{provider_id}",
-                        "limit": "1",
-                    },
-                    timeout=settings["supabase_timeout"],
-                )
-                location_response.raise_for_status()
-                location_rows = location_response.json() if location_response.content else []
-                provider_location = location_rows[0] if location_rows else None
-
-            client_location = None
-            if request_row.get("cliente_latitud") is not None and request_row.get("cliente_longitud") is not None:
-                client_location = {
-                    "latitud": request_row.get("cliente_latitud"),
-                    "longitud": request_row.get("cliente_longitud"),
-                    "precision_m": request_row.get("cliente_precision_m"),
-                    "updated_at": request_row.get("cliente_ubicacion_at"),
-                }
-
-            safe_request = {key: request_row.get(key) for key in (
-                "public_id", "tipo", "comuna", "detalles", "fecha_preferida", "estado"
-            )}
-            return _json(app, {
-                "ok": True,
-                "actor": actor,
-                "solicitud": safe_request,
-                "prestador": {"nombre": provider_name or "Prestador"} if provider_id else None,
-                "mensajes": messages_response.json() if messages_response.content and provider_id else [],
-                "cotizacion": quote,
-                "fotos": _safe_photos(request_row["id"]),
-                "ubicaciones": {"cliente": client_location, "prestador": provider_location},
-            })
-        except requests.RequestException as exc:
-            app.logger.exception("CONVERSATION ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude abrir la conversación."}, 502)
-
-    @app.post(f"{api_base}/solicitudes/<public_id>/reclamos")
-    def mobile_create_complaint(public_id):
-        if not _allow("complaint", limit=5, window_seconds=86400):
-            return _json(app, {"ok": False, "error": "Alcanzaste el límite diario de reportes."}, 429)
-        body = request.get_json(silent=True) or {}
-        category = _clean(body.get("categoria"), 30).lower()
-        description = _clean(body.get("descripcion"), 2000)
-        try:
-            actor, request_row, provider = _conversation_access(public_id, body)
-            if not request_row:
-                return _json(app, {"ok": False, "error": "Acceso inválido para reportar esta solicitud."}, 401)
-            provider_id = request_row.get("prestador_id")
-            if not provider_id:
-                return _json(app, {"ok": False, "error": "Todavía no existe un prestador asignado para reportar."}, 409)
-            if category not in REPORT_CATEGORIES:
-                return _json(app, {"ok": False, "error": "Selecciona un motivo válido."}, 400)
-            if len(description) < 10:
-                return _json(app, {"ok": False, "error": "Describe el problema con al menos 10 caracteres."}, 400)
-            response = requests.post(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_reclamos",
-                headers=_db_headers("return=representation"),
-                json={
-                    "empresa_id": settings["empresa_id"],
-                    "solicitud_id": request_row["id"],
-                    "prestador_id": provider_id,
-                    "reportante_tipo": actor,
-                    "categoria": category,
-                    "descripcion": description,
-                    "estado": "abierto",
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            response.raise_for_status()
-            rows = response.json() if response.content else []
-            complaint = rows[0] if rows else {"estado": "abierto"}
-            actor_id = provider.get("id") if provider else None
-            Thread(target=_audit, args=("reclamo_creado", actor, actor_id, request_row["id"], {"categoria": category}), daemon=True).start()
-            return _json(app, {"ok": True, "reclamo": {"id": complaint.get("id"), "estado": complaint.get("estado", "abierto")}}, 201)
-        except requests.RequestException as exc:
-            app.logger.exception("COMPLAINT ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude registrar el reporte."}, 502)
-
-    @app.post(f"{api_base}/solicitudes/<public_id>/cotizaciones")
-    def mobile_create_quote(public_id):
-        body = request.get_json(silent=True) or {}
-        try:
-            provider = _provider_auth(body.get("codigo"), body.get("token"))
-            request_row = _request_by_code(public_id) if provider else None
-            if not request_row or str(request_row.get("prestador_id") or "") != str(provider.get("id") or ""):
-                return _json(app, {"ok": False, "error": "No tienes esta solicitud asignada."}, 401)
-            digits = re.sub(r"\D", "", str(body.get("monto_clp") or ""))
-            amount = int(digits) if digits else 0
-            detail = _clean(body.get("detalle"), 500)
-            if amount < 1000 or amount > 100000000:
-                return _json(app, {"ok": False, "error": "Ingresa un precio válido en pesos chilenos."}, 400)
-            accepted_response = requests.get(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio",
-                headers=_db_headers(),
-                params={
-                    "select": "id",
-                    "solicitud_id": f"eq.{request_row['id']}",
-                    "estado": "eq.aceptada",
-                    "limit": "1",
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            accepted_response.raise_for_status()
-            if accepted_response.content and accepted_response.json():
-                return _json(app, {"ok": False, "error": "El precio de este servicio ya fue confirmado."}, 409)
-            requests.patch(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio",
-                headers=_db_headers("return=minimal"),
-                params={"solicitud_id": f"eq.{request_row['id']}", "estado": "eq.pendiente"},
-                json={"estado": "reemplazada"},
-                timeout=settings["supabase_timeout"],
-            ).raise_for_status()
-            quote_response = requests.post(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio",
-                headers=_db_headers("return=representation"),
-                json={
-                    "empresa_id": settings["empresa_id"],
-                    "solicitud_id": request_row["id"],
-                    "prestador_id": provider["id"],
-                    "monto_clp": amount,
-                    "detalle": detail or None,
-                    "estado": "pendiente",
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            quote_response.raise_for_status()
-            quote_rows = quote_response.json() if quote_response.content else []
-            quote = quote_rows[0] if quote_rows else None
-            message_text = f"Cotización enviada: ${amount:,.0f} CLP".replace(",", ".")
-            if detail:
-                message_text += f" · {detail}"
-            requests.post(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_mensajes_servicio",
-                headers=_db_headers("return=minimal"),
-                json={
-                    "empresa_id": settings["empresa_id"],
-                    "solicitud_id": request_row["id"],
-                    "prestador_id": provider["id"],
-                    "remitente_tipo": "sistema",
-                    "contenido": message_text,
-                    "cotizacion_id": quote.get("id") if quote else None,
-                },
-                timeout=settings["supabase_timeout"],
-            ).raise_for_status()
-            _send_custom_push(
-                "nexi_app_push_clientes", "solicitud_id", request_row["id"],
-                "Recibiste una cotización", message_text,
-                "/app/?view=status", f"cotizacion-{request_row['id']}",
-            )
-            return _json(app, {"ok": True, "cotizacion": quote}, 201)
-        except requests.RequestException as exc:
-            app.logger.exception("QUOTE CREATE ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude enviar la cotización."}, 502)
-
-    @app.post(f"{api_base}/solicitudes/<public_id>/cotizaciones/<quote_id>/responder")
-    def mobile_answer_quote(public_id, quote_id):
-        body = request.get_json(silent=True) or {}
-        action = _clean(body.get("accion"), 20).lower()
-        try:
-            request_row = _client_auth(public_id, body.get("token"))
-            if not request_row:
-                return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
-            if action not in {"aceptar", "rechazar"}:
-                return _json(app, {"ok": False, "error": "Respuesta inválida."}, 400)
-            quote_response = requests.get(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio",
-                headers=_db_headers(),
-                params={
-                    "select": "id,prestador_id,monto_clp",
-                    "id": f"eq.{_clean(quote_id, 80)}",
-                    "solicitud_id": f"eq.{request_row['id']}",
-                    "estado": "eq.pendiente",
-                    "limit": "1",
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            quote_response.raise_for_status()
-            quote_rows = quote_response.json() if quote_response.content else []
-            if not quote_rows:
-                return _json(app, {"ok": False, "error": "La cotización ya no está disponible."}, 409)
-            quote = quote_rows[0]
-            rpc_response = requests.post(
-                f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_responder_cotizacion",
-                headers=_db_headers(),
-                json={
-                    "p_solicitud_id": request_row["id"],
-                    "p_cotizacion_id": quote["id"],
-                    "p_accion": action,
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            rpc_response.raise_for_status()
-            result = rpc_response.json() if rpc_response.content else {}
-            if isinstance(result, list):
-                result = result[0] if result else {}
-            if not result.get("ok"):
-                return _json(app, {"ok": False, "error": result.get("error") or "No pude responder."}, 409)
-            system_text = "El cliente aceptó la cotización." if action == "aceptar" else "El cliente rechazó la cotización y la solicitud volvió a estar disponible."
-            requests.post(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_mensajes_servicio",
-                headers=_db_headers("return=minimal"),
-                json={
-                    "empresa_id": settings["empresa_id"],
-                    "solicitud_id": request_row["id"],
-                    "prestador_id": quote["prestador_id"],
-                    "remitente_tipo": "sistema",
-                    "contenido": system_text,
-                    "cotizacion_id": quote["id"],
-                },
-                timeout=settings["supabase_timeout"],
-            ).raise_for_status()
-            _send_custom_push(
-                "nexi_app_push_suscripciones", "prestador_id", quote["prestador_id"],
-                "Respuesta a tu cotización", system_text,
-                "/app/?view=provider", f"precio-{request_row['id']}",
-            )
-            if action == "rechazar":
-                Thread(target=_notify_pending_matches, args=(request_row,), daemon=True).start()
-            return _json(app, {"ok": True, "resultado": result})
-        except requests.RequestException as exc:
-            app.logger.exception("QUOTE ANSWER ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude responder la cotización."}, 502)
-
-    @app.post(f"{api_base}/solicitudes/<public_id>/push/subscribe")
-    def mobile_client_push_subscribe(public_id):
-        body = request.get_json(silent=True) or {}
-        subscription = body.get("subscription") if isinstance(body.get("subscription"), dict) else {}
-        keys = subscription.get("keys") if isinstance(subscription.get("keys"), dict) else {}
-        endpoint = _clean(subscription.get("endpoint"), 2000)
-        p256dh = _clean(keys.get("p256dh"), 500)
-        auth = _clean(keys.get("auth"), 500)
-        try:
-            request_row = _client_auth(public_id, body.get("token"))
-            if not request_row:
-                return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
-            if not endpoint.startswith("https://") or not p256dh or not auth:
-                return _json(app, {"ok": False, "error": "Suscripción push inválida."}, 400)
-            response = requests.post(
-                f"{settings['supabase_url']}/rest/v1/nexi_app_push_clientes",
-                headers=_db_headers("return=representation,resolution=merge-duplicates"),
-                params={"on_conflict": "solicitud_id,endpoint"},
-                json={
-                    "empresa_id": settings["empresa_id"],
-                    "solicitud_id": request_row["id"],
-                    "endpoint": endpoint,
-                    "p256dh": p256dh,
-                    "auth": auth,
-                    "user_agent": _clean(request.headers.get("User-Agent"), 500),
-                    "activa": True,
-                },
-                timeout=settings["supabase_timeout"],
-            )
-            response.raise_for_status()
-            return _json(app, {"ok": True})
-        except requests.RequestException as exc:
-            app.logger.exception("CLIENT PUSH SUBSCRIBE ERROR: %r", exc)
-            return _json(app, {"ok": False, "error": "No pude activar las notificaciones."}, 502)
+def generar_texto_ia(modelo, instrucciones, contexto):
+    if not openai_client:
+        raise RuntimeError("IA no configurada")
+
+    response = openai_client.responses.create(
+        model=modelo,
+        instructions=instrucciones,
+        input=contexto,
+    )
+
+    texto = (response.output_text or "").strip()
+
+    return texto, {
+        "api": "responses",
+    }
+
+
+# ============================================================
+# APP / PWA LLAMA A JAIME
+# ============================================================
+
+register_mobile_app(
+    app,
+    settings={
+        "app_dir": MOBILE_APP_DIR,
+        "app_version": APP_VERSION,
+        "empresa_id": LLAMA_A_JAIME_EMPRESA_ID,
+        "supabase_url": SUPABASE_URL,
+        "supabase_timeout": SUPABASE_TIMEOUT,
+        "ai_model": OPENAI_MODEL,
+        "ai_enabled": bool(openai_client),
+        "vapid_public_key": WEB_PUSH_VAPID_PUBLIC_KEY,
+        "vapid_private_key": WEB_PUSH_VAPID_PRIVATE_KEY,
+        "vapid_contact": WEB_PUSH_CONTACT,
+    },
+    supabase_headers=supabase_headers,
+    ai_generate=generar_texto_ia,
+
+    # V6: ya no existe despacho legado por WhatsApp/La Ortiga.
+    legacy_dispatch=None,
+)
+
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
+@app.get("/")
+def health():
+    return {
+        "ok": True,
+        "app": "Llama a Jaime Servicios",
+        "version": APP_VERSION,
+        "architecture": "app-only",
+        "database": "Supabase",
+        "ai": bool(openai_client),
+        "external_chat": False,
+        "whatsapp": False,
+        "instagram": False,
+        "gupshup": False,
+    }, 200
+
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "5000"))
+
+    print("APP_VERSION:", APP_VERSION)
+    print("MODO: APP/PWA ONLY")
+    print("IA:", bool(openai_client))
+    print("WHATSAPP: OFF")
+    print("INSTAGRAM: OFF")
+    print("GUPSHUP: OFF")
+
+    app.run(
+        host="0.0.0.0",
+        port=port,
+    )
