@@ -2418,6 +2418,58 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {"ok": False, "error": "No pude aplicar la acción administrativa."}, 502)
 
 
+    @app.get(f"{api_base}/solicitudes/<public_id>/prestador")
+    def mobile_public_provider_profile(public_id):
+        """Ficha segura del prestador asignado, visible solo para el cliente dueño de la solicitud."""
+        public_id = _clean(public_id, 40).upper()
+        access_token = _clean(request.args.get("token"), 120)
+        if not re.fullmatch(r"NX-\d{6}-[A-F0-9]{8}", public_id) or len(access_token) < 20:
+            return _json(app, {"ok": False, "error": "Código o acceso inválido."}, 400)
+        try:
+            request_row = _client_auth(public_id, access_token)
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
+            provider_id = request_row.get("prestador_id")
+            if not provider_id:
+                return _json(app, {"ok": True, "prestador": None, "mensaje": "Aún no hay un prestador asignado."})
+
+            response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers(),
+                params={
+                    "select": "id,nombre,roles,comunas,especialidades,radio_km,estado_verificacion,verificado_at,created_at",
+                    "id": f"eq.{provider_id}",
+                    "empresa_id": f"eq.{settings['empresa_id']}",
+                    "activo": "eq.true",
+                    "estado_cuenta": "eq.activa",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            rows = response.json() if response.content else []
+            if not rows:
+                return _json(app, {"ok": False, "error": "Prestador no disponible."}, 404)
+
+            provider = rows[0]
+            # Nunca exponer RUT, teléfono, correo, documentos, tokens ni datos administrativos.
+            profile = {
+                "id": provider.get("id"),
+                "nombre": provider.get("nombre"),
+                "roles": provider.get("roles") or [],
+                "especialidades": provider.get("especialidades") or [],
+                "comunas": provider.get("comunas") or [],
+                "radio_km": provider.get("radio_km"),
+                "verificado": provider.get("estado_verificacion") == "verificado",
+                "verificado_at": provider.get("verificado_at"),
+                "miembro_desde": provider.get("created_at"),
+            }
+            return _json(app, {"ok": True, "prestador": profile})
+        except requests.RequestException as exc:
+            app.logger.exception("PUBLIC PROVIDER PROFILE ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude cargar la ficha del prestador."}, 502)
+
+
     @app.post(f"{api_base}/solicitudes/<public_id>/push/subscribe")
     def mobile_client_push_subscribe(public_id):
         body = request.get_json(silent=True) or {}
