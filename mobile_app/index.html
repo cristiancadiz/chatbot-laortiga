@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="es">
 <head>
@@ -238,9 +237,66 @@
 
   $('#providerLogout').addEventListener('click',()=>{localStorage.removeItem('providerAuth');showProviderAccess('login');loadProvider()});
 
-  async function loadProvider(){const auth=providerAuth();if(!auth){$('#providerAccessSwitch').hidden=false;$('#providerSummary').style.display='none';$('#providerDashboard').hidden=true;$('#notifyBtn').hidden=true;$('#providerLogout').hidden=true;if($('#providerLogin').hidden)showProviderAccess('register');return}$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerSummary').style.display='block';$('#providerDashboard').hidden=false;$('#providerName').textContent=auth.nombre||'Prestador';$('#providerCode').textContent=auth.codigo;$('#providerSecurityStatus').textContent=auth.estado_verificacion==='verificado'?'Identidad verificada':'Identidad pendiente de revisión';$('#notifyBtn').hidden=false;$('#providerLogout').hidden=false;await loadOpportunities();}
+  async function loadProvider(){
+    let auth=providerAuth();
+    if(!auth){
+      $('#providerAccessSwitch').hidden=false;
+      $('#providerSummary').style.display='none';
+      $('#providerDashboard').hidden=true;
+      $('#notifyBtn').hidden=true;
+      $('#providerLogout').hidden=true;
+      if($('#providerLogin').hidden)showProviderAccess('register');
+      return;
+    }
 
-  async function loadOpportunities(){const auth=providerAuth(),box=$('#opportunities');if(!auth)return;box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando oportunidades…</div>';try{const url=`/app/api/oportunidades?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`;const r=await fetch(url,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude consultar');$('#availabilityBtn').textContent=d.disponible?'Disponible':'No disponible';$('#availabilityBtn').classList.toggle('off',!d.disponible);if(!d.oportunidades.length){box.innerHTML='<div class="empty">No hay oportunidades compatibles por ahora.</div>';return}box.innerHTML='';for(const item of d.oportunidades){const s=item.solicitud,el=document.createElement('article'),meta=SERVICE_META[s.tipo]||SERVICE_META.otro,subtype=s.tipo==='belleza'?(BEAUTY_META[s.subtipo]||'Belleza y bienestar'):'';el.className='opportunity '+(item.match_estado==='tomada'?'taken':'');const material=(s.materiales||[]).join(', '),summary=subtype?`${subtype} · ${s.detalles||'Sin detalle'}`:(material||s.detalles||'Sin detalle');el.innerHTML=`<h3>${escapeHtml(meta.label)} · ${escapeHtml(s.comuna||'')}</h3><p>${escapeHtml(summary)}</p><p>${escapeHtml(s.fecha_preferida||'Horario a coordinar')}</p>${item.match_estado==='tomada'?`<p><strong>Contacto:</strong> ${escapeHtml(s.nombre||'')} · ${escapeHtml(s.telefono||'')}</p><p><strong>Dirección:</strong> ${escapeHtml(s.direccion_origen||'')}</p>${s.direccion_destino?`<p><strong>Destino:</strong> ${escapeHtml(s.direccion_destino)}</p>`:''}<button class="primary" data-provider-chat="${escapeHtml(s.public_id)}">Conversar y enviar precio</button>`:`<button class="primary" data-take="${item.match_id}">Tomar solicitud</button>`}`;if(item.match_estado==='tomada'&&Array.isArray(s.fotos)&&s.fotos.length){const gallery=document.createElement('div');gallery.className='photo-gallery';renderPhotoGallery(s.fotos,gallery);el.insertBefore(gallery,el.querySelector('[data-provider-chat]'))}box.append(el)}$$('[data-take]').forEach(b=>b.addEventListener('click',()=>takeOpportunity(b.dataset.take,b)));$$('[data-provider-chat]').forEach(b=>b.addEventListener('click',()=>openConversation('prestador',{public_id:b.dataset.providerChat,codigo:auth.codigo,token:auth.token})));}catch(err){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
+    // Siempre consultar el estado real al servidor.
+    try{
+      const r=await fetch(`/app/api/prestadores/me?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`,{headers,cache:'no-store'});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||'No pude actualizar tu cuenta');
+
+      const p=d.prestador||{};
+      auth={...auth,
+        nombre:p.nombre||auth.nombre,
+        estado_verificacion:p.estado_verificacion||auth.estado_verificacion||'pendiente',
+        estado_cuenta:p.estado_cuenta||auth.estado_cuenta||'activa',
+        verificado_at:p.verificado_at||auth.verificado_at||null,
+        disponible:typeof p.disponible==='boolean'?p.disponible:auth.disponible
+      };
+      localStorage.providerAuth=JSON.stringify(auth);
+    }catch(err){
+      console.warn('No pude refrescar estado del prestador',err);
+    }
+
+    $('#providerAccessSwitch').hidden=true;
+    $('#providerRegister').hidden=true;
+    $('#providerRegister').style.display='none';
+    $('#providerLogin').hidden=true;
+    $('#providerLogin').style.display='none';
+    $('#providerSummary').style.display='block';
+    $('#providerDashboard').hidden=false;
+    $('#providerName').textContent=auth.nombre||'Prestador';
+    $('#providerCode').textContent=auth.codigo;
+
+    const status=$('#providerSecurityStatus');
+    if(auth.estado_cuenta==='suspendida'){
+      status.textContent='Cuenta suspendida';
+    }else if(auth.estado_cuenta==='cerrada'){
+      status.textContent='Cuenta cerrada';
+    }else if(auth.estado_verificacion==='verificado'){
+      status.textContent='Identidad verificada · Cuenta habilitada';
+    }else if(auth.estado_verificacion==='rechazado'){
+      status.textContent='Verificación rechazada · Contacta a soporte';
+    }else{
+      status.textContent='Identidad pendiente de revisión';
+    }
+
+    $('#notifyBtn').hidden=false;
+    $('#providerLogout').hidden=false;
+    await loadOpportunities();
+  }
+
+  async function loadOpportunities(){const auth=providerAuth(),box=$('#opportunities');if(!auth)return;box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando oportunidades…</div>';try{const url=`/app/api/oportunidades?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`;const r=await fetch(url,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude consultar');$('#availabilityBtn').textContent=d.habilitado===false?'No habilitado':(d.disponible?'Disponible':'No disponible');$('#availabilityBtn').classList.toggle('off',!d.disponible||d.habilitado===false);if(d.habilitado===false){box.innerHTML=`<div class="empty">${escapeHtml(d.mensaje||'Tu cuenta aún no está habilitada para recibir trabajos.')}</div>`;return}if(!d.oportunidades.length){box.innerHTML='<div class="empty">No hay oportunidades compatibles por ahora.</div>';return}box.innerHTML='';for(const item of d.oportunidades){const s=item.solicitud,el=document.createElement('article'),meta=SERVICE_META[s.tipo]||SERVICE_META.otro,subtype=s.tipo==='belleza'?(BEAUTY_META[s.subtipo]||'Belleza y bienestar'):'';el.className='opportunity '+(item.match_estado==='tomada'?'taken':'');const material=(s.materiales||[]).join(', '),summary=subtype?`${subtype} · ${s.detalles||'Sin detalle'}`:(material||s.detalles||'Sin detalle');el.innerHTML=`<h3>${escapeHtml(meta.label)} · ${escapeHtml(s.comuna||'')}</h3><p>${escapeHtml(summary)}</p><p>${escapeHtml(s.fecha_preferida||'Horario a coordinar')}</p>${item.match_estado==='tomada'?`<p><strong>Contacto:</strong> ${escapeHtml(s.nombre||'')} · ${escapeHtml(s.telefono||'')}</p><p><strong>Dirección:</strong> ${escapeHtml(s.direccion_origen||'')}</p>${s.direccion_destino?`<p><strong>Destino:</strong> ${escapeHtml(s.direccion_destino)}</p>`:''}<button class="primary" data-provider-chat="${escapeHtml(s.public_id)}">Conversar y enviar precio</button>`:`<button class="primary" data-take="${item.match_id}">Tomar solicitud</button>`}`;if(item.match_estado==='tomada'&&Array.isArray(s.fotos)&&s.fotos.length){const gallery=document.createElement('div');gallery.className='photo-gallery';renderPhotoGallery(s.fotos,gallery);el.insertBefore(gallery,el.querySelector('[data-provider-chat]'))}box.append(el)}$$('[data-take]').forEach(b=>b.addEventListener('click',()=>takeOpportunity(b.dataset.take,b)));$$('[data-provider-chat]').forEach(b=>b.addEventListener('click',()=>openConversation('prestador',{public_id:b.dataset.providerChat,codigo:auth.codigo,token:auth.token})));}catch(err){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
 
   function escapeHtml(value){const div=document.createElement('div');div.textContent=String(value||'');return div.innerHTML}
   async function takeOpportunity(matchId,button){const auth=providerAuth();if(!auth)return;button.disabled=true;button.textContent='Tomando…';try{const r=await fetch(`/app/api/oportunidades/${encodeURIComponent(matchId)}/tomar`,{method:'POST',headers,body:JSON.stringify({codigo:auth.codigo,token:auth.token})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No se pudo tomar');await loadOpportunities();}catch(err){alert(err.message);button.disabled=false;button.textContent='Tomar solicitud'}}
