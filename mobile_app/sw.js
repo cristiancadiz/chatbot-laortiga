@@ -1,4 +1,4 @@
-const CACHE = "llama-a-jaime-servicios-v5-3-brand-v3-plain-chat";
+const CACHE = "llama-a-jaime-servicios-v5-3-1-belleza";
 const SHELL = [
   "/app/",
   "/app/manifest.webmanifest",
