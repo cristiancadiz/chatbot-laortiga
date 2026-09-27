@@ -1,9 +1,13 @@
-const CACHE = "llama-a-jaime-servicios-v5-3";
+const CACHE = "llama-a-jaime-servicios-v5-3-brand-v3-plain-chat";
 const SHELL = [
   "/app/",
   "/app/manifest.webmanifest",
   "/app/assets/icon-192.png",
-  "/app/assets/icon-512.png"
+  "/app/assets/icon-512.png",
+  "/app/assets/icon-maskable-512.png",
+  "/app/assets/apple-touch-icon.png",
+  "/app/assets/logo-llama-a-jaime.png",
+  "/app/assets/logo-llama-a-jaime-stacked.svg"
 ];
 
 self.addEventListener("install", event => {
