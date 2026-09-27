@@ -84,6 +84,20 @@ def _clean(value, limit=500):
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
 
+def _plain_assistant_text(value, limit=4000):
+    """Normaliza respuestas para un chat que muestra texto plano, no Markdown."""
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"__(.*?)__", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", text)
+    text = re.sub(r"`([^`\n]+)`", r"\1", text)
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", text)
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1 (\2)", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()[:limit]
+
+
 def _valid_email(value):
     value = _clean(value, 180).lower()
     return not value or bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value))
@@ -546,7 +560,9 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "destinos ni estados. Explica que el valor final lo propone y confirma un prestador. "
             "Nunca pidas claves, datos bancarios ni documentos sensibles. Si existe una urgencia "
             "o riesgo físico, recomienda contactar servicios de emergencia. Cuando ya estén los "
-            "datos esenciales, invita a pulsar 'Crear solicitud'."
+            "datos esenciales, invita a pulsar 'Crear solicitud'. Responde siempre como texto plano: "
+            "no uses Markdown, asteriscos, negritas, encabezados con #, tablas ni bloques de código. "
+            "Si necesitas enumerar información, usa frases cortas o guiones simples."
         )
         context = (
             f"Servicio seleccionado: {service or 'sin seleccionar'}\n"
@@ -555,6 +571,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         )
         try:
             reply, usage = ai_generate(settings["ai_model"], instructions, context)
+            reply = _plain_assistant_text(reply)
             if not reply:
                 raise RuntimeError("La IA respondió sin contenido")
             return _json(app, {"ok": True, "reply": reply, "usage": {"api": usage.get("api")}})
