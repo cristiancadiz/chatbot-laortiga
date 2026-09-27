@@ -24,13 +24,14 @@ from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 from cryptography.fernet import Fernet, InvalidToken
+from mobile_api import register_mobile_app
 
 ECOMMERCE_MEDIA_URL = ContextVar("ECOMMERCE_MEDIA_URL", default="")
 ECOMMERCE_CAROUSEL_PRODUCTS = ContextVar("ECOMMERCE_CAROUSEL_PRODUCTS", default=None)
 ECOMMERCE_PRODUCT_CARDS = ContextVar("ECOMMERCE_PRODUCT_CARDS", default=None)
 
 
-APP_VERSION = "2026-09-26-LAORTIGA-RECICLA-V4.0-IA-FULL"
+APP_VERSION = "2026-09-26-LAORTIGA-APP-V4.1-PWA"
 load_dotenv()
 
 app = Flask(__name__)
@@ -16335,6 +16336,27 @@ def public_cotizacion_aceptar(cotizacion_id):
         'solicitud':sol,
         'mensaje':'Cotización aceptada. El reciclador fue adjudicado.',
     })
+
+
+# ============================================================
+# APP MÓVIL / PWA - RECICLAJE Y FLETES
+# ============================================================
+# Se registra como módulo aislado para no mezclar la experiencia web con los
+# webhooks históricos de WhatsApp, Instagram o Gupshup.
+register_mobile_app(
+    app,
+    settings={
+        "app_dir": os.path.join(os.path.dirname(os.path.abspath(__file__)), "mobile_app"),
+        "app_version": APP_VERSION,
+        "empresa_id": LAORTIGA_EMPRESA_ID,
+        "supabase_url": SUPABASE_URL,
+        "supabase_timeout": SUPABASE_TIMEOUT,
+        "ai_model": OPENAI_CORE_MODEL or OPENAI_MODEL,
+        "ai_enabled": bool(openai_client and IA_FULL_ACTIVA),
+    },
+    supabase_headers=backend_headers,
+    ai_generate=_openai_generar_texto,
+)
 
 if __name__ == "__main__":
     print("APP_VERSION:", APP_VERSION)
