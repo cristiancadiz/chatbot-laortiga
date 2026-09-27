@@ -64,6 +64,7 @@
 .provider-public-reputation{margin-top:5px;font-size:13px;font-weight:800;color:#263238}.provider-public-reputation .star{color:#d49b16}.provider-public-reputation .new-provider{font-weight:700;color:var(--muted)}
 .profile-photo-card{margin:0 0 14px;padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff}.profile-photo-head{display:flex;align-items:center;gap:13px;margin-bottom:12px}.profile-photo-head h3{margin:0 0 3px}.profile-photo-head p{margin:0;color:var(--muted);font-size:12px}.profile-photo-preview{width:70px;height:70px;flex:0 0 70px;border-radius:50%;overflow:hidden;background:#edf2ef;display:grid;place-items:center;font-size:27px;font-weight:800}.profile-photo-preview img{width:100%;height:100%;object-fit:cover}.profile-photo-actions{display:flex;gap:8px}.profile-photo-actions .primary{flex:1}
 .provider-public-avatar img{width:100%;height:100%;object-fit:cover;display:block}.provider-public-avatar img[hidden]{display:none}
+.provider-public-jobs{margin-top:4px;font-size:12px;font-weight:800;color:var(--text)}.provider-public-jobs .jobs-check{color:#08a66c}
 </style>
 </head>
 <body>
@@ -179,6 +180,7 @@
     <div class="provider-public-title"><strong id="providerPublicName">Prestador</strong><span id="providerPublicVerified">✓ Verificado</span></div>
     <div class="provider-public-meta" id="providerPublicMeta"></div>
     <div class="provider-public-reputation" id="providerPublicReputation"></div>
+    <div class="provider-public-jobs" id="providerPublicJobs"></div>
     <div class="provider-public-tags" id="providerPublicTags"></div>
   </div>
 </div>
@@ -312,6 +314,8 @@
       const rep=p.reputacion||{},repEl=$('#providerPublicReputation'),total=Number(rep.evaluaciones||0),avg=Number(rep.promedio||0);
       if(total>0){const avgText=avg.toLocaleString('es-CL',{minimumFractionDigits:1,maximumFractionDigits:1});repEl.innerHTML=`<span class="star">★</span> ${avgText} · ${total} ${total===1?'evaluación':'evaluaciones'}`;}
       else{repEl.innerHTML='<span class="new-provider">Nuevo en Llama a Jaime</span>';}
+      const jobs=Math.max(0,Number(p.trabajos_completados||0)),jobsEl=$('#providerPublicJobs');
+      jobsEl.innerHTML=`<span class="jobs-check">✓</span> ${jobs} ${jobs===1?'trabajo completado':'trabajos completados'}`;
       const tags=[...(Array.isArray(p.especialidades)?p.especialidades:[]),...(Array.isArray(p.roles)?p.roles:[])].filter(Boolean).slice(0,6);
       $('#providerPublicTags').innerHTML=tags.map(x=>`<span>${escapeHtml(String(x).replaceAll('_',' '))}</span>`).join('');
       card.hidden=false;
