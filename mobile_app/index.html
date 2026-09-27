@@ -59,6 +59,7 @@
 .provider-public-avatar{width:46px;height:46px;flex:0 0 46px;border-radius:50%;display:grid;place-items:center;background:#edf7f7;color:var(--forest);font-size:20px;font-weight:900}
 .provider-public-copy{min-width:0;flex:1}.provider-public-title{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.provider-public-title strong{font-size:14px}.provider-public-title span{font-size:10px;font-weight:900;padding:4px 7px;border-radius:999px;background:#e4f5e9;color:#246238}
 .provider-public-meta{font-size:11px;color:var(--muted);margin-top:4px}.provider-public-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.provider-public-tags span{font-size:10px;padding:4px 7px;border-radius:999px;background:#f1f4f5;color:#42535b}
+.review-card{margin:0 0 12px;padding:14px;border:1px solid var(--line);border-radius:16px;background:#fff}.review-card p{margin:4px 0 10px;color:var(--muted);font-size:11px}.review-stars{display:flex;gap:5px;margin-bottom:10px}.review-stars button{border:0;background:transparent;padding:0;font-size:30px;line-height:1;color:#c9d0d3;cursor:pointer}.review-stars button.selected{color:#d49b16}.review-card textarea{width:100%;min-height:72px;resize:vertical;box-sizing:border-box;border:1px solid var(--line);border-radius:11px;padding:10px;margin-bottom:9px}.review-card .primary{width:100%}
 </style>
 </head>
 <body>
@@ -166,6 +167,16 @@
     <div class="provider-public-tags" id="providerPublicTags"></div>
   </div>
 </div>
+      <div class="review-card" id="providerReviewCard" hidden>
+        <strong>¿Cómo fue tu experiencia?</strong>
+        <p>Califica al prestador. Solo puedes evaluar una vez esta solicitud.</p>
+        <div class="review-stars" id="providerReviewStars">
+          <button type="button" data-rating="1">★</button><button type="button" data-rating="2">★</button><button type="button" data-rating="3">★</button><button type="button" data-rating="4">★</button><button type="button" data-rating="5">★</button>
+        </div>
+        <textarea id="providerReviewComment" maxlength="1000" placeholder="Comentario opcional"></textarea>
+        <button type="button" class="primary" id="providerReviewSubmit">Enviar evaluación</button>
+        <div class="notice" id="providerReviewNotice"></div>
+      </div>
       <div class="location-panel" id="conversationLocations"><div class="location-card" id="clientLocationCard"><strong>Ubicación del cliente</strong><span>No compartida</span></div><div class="location-card" id="providerLocationCard"><strong>Ubicación del prestador</strong><span>No compartida</span></div><button class="share-location" id="shareConversationLocation">📍 Compartir o actualizar mi ubicación</button></div>
       <div class="photo-gallery" id="conversationPhotos" hidden></div>
       <div class="quote-box" id="quoteBox" hidden></div>
@@ -195,7 +206,7 @@
   const BEAUTY_META={barberia:"Barbería",peluqueria:"Peluquería",manicure_pedicure:"Manicure y pedicure",maquillaje:"Maquillaje",depilacion:"Depilación",masaje_relajacion:"Masaje de relajación",peinado_eventos:"Peinado para eventos",otro_belleza:"Otro servicio de belleza"};
   let service = "hogar", installPrompt = null;
   let history = JSON.parse(sessionStorage.getItem("llamaAJaimeHistory") || "[]");
-  let conversationContext = null, conversationTimer = null, requestPhotos = [], pendingLocation = null;
+  let conversationContext = null, conversationTimer = null, requestPhotos = [], pendingLocation = null, providerReviewRating = 0;
 
   function go(id){ $$(".view").forEach(v=>v.classList.toggle("active",v.id===id)); $$(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.go===id)); window.scrollTo({top:0,behavior:"smooth"}); if(id==="status") loadSaved(); if(id==="provider") loadProvider(); }
   $$('[data-go]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.go)));
@@ -237,6 +248,26 @@
   function renderPhotoGallery(photos,box){box.innerHTML='';const items=Array.isArray(photos)?photos:[];box.hidden=!items.length;for(const photo of items){const link=document.createElement('a'),img=document.createElement('img');link.href=photo.url;link.target='_blank';link.rel='noopener';img.src=photo.url;img.alt='Fotografía de la solicitud';img.loading='lazy';link.append(img);box.append(link)}}
   function renderLocationCard(location,box,title){box.innerHTML=`<strong>${escapeHtml(title)}</strong>`;if(!location){const span=document.createElement('span');span.textContent='No compartida';box.append(span);return}const lat=Number(location.latitud),lng=Number(location.longitud),link=document.createElement('a'),detail=document.createElement('span');link.href=`https://www.google.com/maps?q=${encodeURIComponent(lat+','+lng)}`;link.target='_blank';link.rel='noopener';link.textContent='Abrir en el mapa';const accuracy=Number(location.precision_m||0),updated=location.updated_at?new Date(location.updated_at).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}):'';detail.textContent=[accuracy?`Precisión ±${Math.round(accuracy)} m`:'',updated?`Actualizada ${updated}`:''].filter(Boolean).join(' · ');box.append(link,detail)}
   function renderLocations(locations){const data=locations||{};renderLocationCard(data.cliente,$('#clientLocationCard'),'Ubicación del cliente');renderLocationCard(data.prestador,$('#providerLocationCard'),'Ubicación del prestador')}
+  function paintReviewStars(value){providerReviewRating=Number(value)||0;$$('#providerReviewStars button').forEach(b=>b.classList.toggle('selected',Number(b.dataset.rating)<=providerReviewRating))}
+  $$('#providerReviewStars button').forEach(b=>b.addEventListener('click',()=>paintReviewStars(b.dataset.rating)));
+  async function loadProviderReview(){
+    const c=conversationContext,card=$('#providerReviewCard');card.hidden=true;paintReviewStars(0);$('#providerReviewComment').value='';$('#providerReviewNotice').style.display='none';
+    if(!c||c.actor!=='cliente')return;
+    try{
+      const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/evaluacion?token=${encodeURIComponent(c.token)}`,{headers,cache:'no-store'}),d=await r.json();
+      if(!r.ok||(!d.puede_evaluar&&!d.evaluacion))return;card.hidden=false;
+      if(d.evaluacion){paintReviewStars(d.evaluacion.calificacion);$('#providerReviewComment').value=d.evaluacion.comentario||'';$('#providerReviewComment').disabled=true;$$('#providerReviewStars button').forEach(b=>b.disabled=true);$('#providerReviewSubmit').hidden=true;const n=$('#providerReviewNotice');n.className='notice success';n.textContent='Evaluación enviada. Gracias por compartir tu experiencia.';n.style.display='block'}
+      else{$('#providerReviewComment').disabled=false;$$('#providerReviewStars button').forEach(b=>b.disabled=false);$('#providerReviewSubmit').hidden=false}
+    }catch{}
+  }
+  $('#providerReviewSubmit').addEventListener('click',async()=>{
+    const c=conversationContext,n=$('#providerReviewNotice'),btn=$('#providerReviewSubmit');if(!c||c.actor!=='cliente')return;
+    if(providerReviewRating<1){n.className='notice error';n.textContent='Selecciona entre 1 y 5 estrellas.';n.style.display='block';return}
+    btn.disabled=true;n.style.display='none';
+    try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/evaluacion`,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({token:c.token,calificacion:providerReviewRating,comentario:$('#providerReviewComment').value.trim()})}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude guardar la evaluación');await loadProviderReview()}
+    catch(err){n.className='notice error';n.textContent=err.message;n.style.display='block'}finally{btn.disabled=false}
+  });
+
   async function loadPublicProviderProfile(){
     const c=conversationContext,card=$('#providerPublicCard');
     card.hidden=true;
@@ -257,7 +288,7 @@
     }catch{}
   }
 
-  async function openConversation(actor,data){clearInterval(conversationTimer);conversationContext={actor,public_id:data.public_id,token:data.token,codigo:data.codigo||''};$('#conversationModal').hidden=false;$('#conversationTitle').textContent=actor==='cliente'?'Tu solicitud':'Cliente y cotización';$('#conversationSubtitle').textContent=data.public_id;$('#clientNotifyBtn').hidden=actor!=='cliente';$('#shareConversationLocation').textContent=actor==='cliente'?'📍 Compartir ubicación con el prestador':'📍 Compartir ubicación con el cliente';$('#reportToggle').hidden=true;$('#reportForm').hidden=true;$('#reportForm').reset();$('#reportNotice').style.display='none';$('#conversationMessages').innerHTML='<div class="empty"><span class="spinner"></span> Abriendo conversación…</div>';await loadConversation();if(actor==='cliente')await loadPublicProviderProfile();conversationTimer=setInterval(()=>loadConversation(true),5000)}
+  async function openConversation(actor,data){clearInterval(conversationTimer);conversationContext={actor,public_id:data.public_id,token:data.token,codigo:data.codigo||''};$('#conversationModal').hidden=false;$('#conversationTitle').textContent=actor==='cliente'?'Tu solicitud':'Cliente y cotización';$('#conversationSubtitle').textContent=data.public_id;$('#clientNotifyBtn').hidden=actor!=='cliente';$('#shareConversationLocation').textContent=actor==='cliente'?'📍 Compartir ubicación con el prestador':'📍 Compartir ubicación con el cliente';$('#reportToggle').hidden=true;$('#reportForm').hidden=true;$('#reportForm').reset();$('#reportNotice').style.display='none';$('#conversationMessages').innerHTML='<div class="empty"><span class="spinner"></span> Abriendo conversación…</div>';await loadConversation();if(actor==='cliente'){await loadPublicProviderProfile();await loadProviderReview();}conversationTimer=setInterval(()=>loadConversation(true),5000)}
   function closeConversation(){clearInterval(conversationTimer);conversationTimer=null;conversationContext=null;$('#reportForm').hidden=true;$('#conversationModal').hidden=true}
   $('#closeConversation').addEventListener('click',closeConversation);
 
