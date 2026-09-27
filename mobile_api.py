@@ -56,6 +56,21 @@ BEAUTY_TYPES = {
 }
 
 PHOTO_BUCKET = "llama-jaime-solicitudes"
+DOCUMENT_BUCKET = "documentos-prestadores"
+DOCUMENT_MAX_BYTES = 10 * 1024 * 1024
+DOCUMENT_TYPES = {
+    "cedula_frontal", "cedula_reverso", "antecedentes", "cv",
+    "titulo", "certificado", "licencia_conducir", "otro",
+}
+DOCUMENT_SINGLE_TYPES = {
+    "cedula_frontal", "cedula_reverso", "antecedentes", "cv", "licencia_conducir",
+}
+DOCUMENT_MIME_TYPES = {
+    "application/pdf": "pdf",
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
 PHOTO_MAX_FILES = 5
 PHOTO_MAX_BYTES = 8 * 1024 * 1024
 PHOTO_MIME_TYPES = {
@@ -188,6 +203,12 @@ def _valid_image_signature(content, mime_type):
     if mime_type == "image/webp":
         return len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP"
     return False
+
+
+def _valid_document_signature(content, mime_type):
+    if mime_type == "application/pdf":
+        return content.startswith(b"%PDF-")
+    return _valid_image_signature(content, mime_type)
 
 
 def _location_values(latitude, longitude, accuracy=None):
@@ -1276,6 +1297,227 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         except requests.RequestException as exc:
             app.logger.exception("PROVIDER ME ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude consultar el perfil."}, 502)
+
+    def _provider_document_rows(provider_id):
+        response = requests.get(
+            f"{settings['supabase_url']}/rest/v1/nexi_app_documentos_prestador",
+            headers=_db_headers(),
+            params={
+                "select": "id,tipo_documento,nombre_documento,archivo_nombre,archivo_mime,archivo_bytes,estado_revision,fecha_emision,fecha_vencimiento,observacion_prestador,observacion_admin,revisado_at,created_at,updated_at",
+                "empresa_id": f"eq.{settings['empresa_id']}",
+                "prestador_id": f"eq.{provider_id}",
+                "order": "created_at.desc",
+                "limit": "200",
+            },
+            timeout=settings["supabase_timeout"],
+        )
+        response.raise_for_status()
+        return response.json() if response.content else []
+
+    def _refresh_documentation_status(provider_id):
+        rows = _provider_document_rows(provider_id)
+        latest = {}
+        for row in rows:
+            latest.setdefault(row.get("tipo_documento"), row)
+        required = {"cedula_frontal", "cedula_reverso", "antecedentes"}
+        present = {kind for kind in required if kind in latest}
+        states = [latest[kind].get("estado_revision") for kind in present]
+        if len(present) < len(required):
+            status = "incompleta"
+        elif any(state == "rechazado" for state in states):
+            status = "observada"
+        elif any(state == "en_revision" for state in states):
+            status = "en_revision"
+        elif all(state == "aprobado" for state in states):
+            status = "aprobada"
+        else:
+            status = "pendiente"
+        identity_ok = all(latest.get(kind, {}).get("estado_revision") == "aprobado" for kind in {"cedula_frontal", "cedula_reverso"})
+        antecedents_ok = latest.get("antecedentes", {}).get("estado_revision") == "aprobado"
+        requests.patch(
+            f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+            headers=_db_headers("return=minimal"),
+            params={"id": f"eq.{provider_id}", "empresa_id": f"eq.{settings['empresa_id']}"},
+            json={
+                "documentacion_estado": status,
+                "documentacion_actualizada_at": datetime.now(timezone.utc).isoformat(),
+                "identidad_documental_verificada": identity_ok,
+                "antecedentes_verificados": antecedents_ok,
+                "antecedentes_verificados_at": datetime.now(timezone.utc).isoformat() if antecedents_ok else None,
+            },
+            timeout=settings["supabase_timeout"],
+        ).raise_for_status()
+        return status
+
+    @app.get(f"{api_base}/prestadores/documentos")
+    def mobile_provider_documents():
+        try:
+            provider = _provider_auth(request.args.get("codigo"), request.args.get("token"))
+            if not provider:
+                return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
+            rows = _provider_document_rows(provider["id"])
+            return _json(app, {
+                "ok": True,
+                "documentacion_estado": provider.get("documentacion_estado") or "incompleta",
+                "documentos": rows,
+                "tipos": sorted(DOCUMENT_TYPES),
+            })
+        except requests.RequestException as exc:
+            app.logger.exception("PROVIDER DOCUMENTS ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude consultar tus documentos."}, 502)
+
+    @app.post(f"{api_base}/prestadores/documentos")
+    def mobile_provider_upload_document():
+        if not _allow("provider-documents", limit=30):
+            return _json(app, {"ok": False, "error": "Alcanzaste el límite temporal de cargas."}, 429)
+        if request.content_length and request.content_length > DOCUMENT_MAX_BYTES + 1024 * 1024:
+            return _json(app, {"ok": False, "error": "El archivo supera el máximo permitido de 10 MB."}, 413)
+        try:
+            provider = _provider_auth(request.form.get("codigo"), request.form.get("token"))
+            if not provider:
+                return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
+            document_type = _clean(request.form.get("tipo_documento"), 40).lower()
+            if document_type not in DOCUMENT_TYPES:
+                return _json(app, {"ok": False, "error": "Tipo de documento inválido."}, 400)
+            incoming = request.files.get("archivo")
+            if not incoming:
+                return _json(app, {"ok": False, "error": "Selecciona un archivo."}, 400)
+            mime_type = _clean(incoming.mimetype, 80).lower()
+            extension = DOCUMENT_MIME_TYPES.get(mime_type)
+            if not extension:
+                return _json(app, {"ok": False, "error": "Usa PDF, JPG, PNG o WebP."}, 400)
+            content = incoming.read(DOCUMENT_MAX_BYTES + 1)
+            if not content or len(content) > DOCUMENT_MAX_BYTES:
+                return _json(app, {"ok": False, "error": "El archivo debe pesar como máximo 10 MB."}, 400)
+            if not _valid_document_signature(content, mime_type):
+                return _json(app, {"ok": False, "error": "El contenido del archivo no coincide con su formato."}, 400)
+
+            original_name = _clean(incoming.filename, 240) or f"{document_type}.{extension}"
+            object_path = f"{settings['empresa_id']}/{provider['id']}/{document_type}/{uuid.uuid4().hex}.{extension}"
+            storage_response = requests.post(
+                f"{settings['supabase_url']}/storage/v1/object/{DOCUMENT_BUCKET}/{object_path}",
+                headers={**_db_headers(), "Content-Type": mime_type, "x-upsert": "false"},
+                data=content,
+                timeout=max(30, settings["supabase_timeout"]),
+            )
+            storage_response.raise_for_status()
+
+            # Los documentos de una sola vigencia reemplazan el registro anterior.
+            old_rows = []
+            if document_type in DOCUMENT_SINGLE_TYPES:
+                old_response = requests.get(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_documentos_prestador",
+                    headers=_db_headers(),
+                    params={
+                        "select": "id,archivo_path",
+                        "empresa_id": f"eq.{settings['empresa_id']}",
+                        "prestador_id": f"eq.{provider['id']}",
+                        "tipo_documento": f"eq.{document_type}",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                old_response.raise_for_status()
+                old_rows = old_response.json() if old_response.content else []
+                if old_rows:
+                    requests.delete(
+                        f"{settings['supabase_url']}/rest/v1/nexi_app_documentos_prestador",
+                        headers=_db_headers("return=minimal"),
+                        params={"id": f"in.({','.join(row['id'] for row in old_rows)})"},
+                        timeout=settings["supabase_timeout"],
+                    ).raise_for_status()
+
+            metadata_response = requests.post(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_documentos_prestador",
+                headers=_db_headers("return=representation"),
+                json={
+                    "empresa_id": settings["empresa_id"],
+                    "prestador_id": provider["id"],
+                    "tipo_documento": document_type,
+                    "nombre_documento": _clean(request.form.get("nombre_documento"), 180) or None,
+                    "archivo_path": object_path,
+                    "archivo_nombre": original_name,
+                    "archivo_mime": mime_type,
+                    "archivo_bytes": len(content),
+                    "estado_revision": "pendiente",
+                    "fecha_emision": _clean(request.form.get("fecha_emision"), 10) or None,
+                    "fecha_vencimiento": _clean(request.form.get("fecha_vencimiento"), 10) or None,
+                    "observacion_prestador": _clean(request.form.get("observacion_prestador"), 1000) or None,
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            metadata_response.raise_for_status()
+            rows = metadata_response.json() if metadata_response.content else []
+
+            # Elimina del Storage los archivos reemplazados sólo después de guardar el nuevo registro.
+            for old in old_rows:
+                old_path = old.get("archivo_path")
+                if old_path:
+                    try:
+                        requests.delete(
+                            f"{settings['supabase_url']}/storage/v1/object/{DOCUMENT_BUCKET}/{old_path}",
+                            headers=_db_headers(),
+                            timeout=settings["supabase_timeout"],
+                        ).raise_for_status()
+                    except Exception as exc:
+                        app.logger.warning("OLD PROVIDER DOCUMENT DELETE ERROR: %r", exc)
+
+            status = _refresh_documentation_status(provider["id"])
+            Thread(target=_audit, args=("prestador_documento_subido", "prestador", provider["id"], None, {"tipo_documento": document_type}), daemon=True).start()
+            return _json(app, {"ok": True, "documento": rows[0] if rows else None, "documentacion_estado": status}, 201)
+        except requests.RequestException as exc:
+            app.logger.exception("PROVIDER DOCUMENT UPLOAD ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude guardar el documento."}, 502)
+
+    @app.delete(f"{api_base}/prestadores/documentos/<document_id>")
+    def mobile_provider_delete_document(document_id):
+        body = request.get_json(silent=True) or {}
+        try:
+            provider = _provider_auth(request.args.get("codigo") or body.get("codigo"), request.args.get("token") or body.get("token"))
+            if not provider:
+                return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
+            try:
+                document_uuid = str(uuid.UUID(document_id))
+            except (ValueError, TypeError):
+                return _json(app, {"ok": False, "error": "Documento inválido."}, 400)
+            response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_documentos_prestador",
+                headers=_db_headers(),
+                params={
+                    "select": "id,archivo_path,tipo_documento,estado_revision",
+                    "id": f"eq.{document_uuid}",
+                    "empresa_id": f"eq.{settings['empresa_id']}",
+                    "prestador_id": f"eq.{provider['id']}",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            rows = response.json() if response.content else []
+            if not rows:
+                return _json(app, {"ok": False, "error": "Documento no encontrado."}, 404)
+            document = rows[0]
+            if document.get("estado_revision") == "aprobado":
+                return _json(app, {"ok": False, "error": "Un documento aprobado no puede eliminarse directamente. Contacta a soporte para reemplazarlo."}, 409)
+            requests.delete(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_documentos_prestador",
+                headers=_db_headers("return=minimal"),
+                params={"id": f"eq.{document_uuid}"},
+                timeout=settings["supabase_timeout"],
+            ).raise_for_status()
+            try:
+                requests.delete(
+                    f"{settings['supabase_url']}/storage/v1/object/{DOCUMENT_BUCKET}/{document['archivo_path']}",
+                    headers=_db_headers(),
+                    timeout=settings["supabase_timeout"],
+                ).raise_for_status()
+            except Exception as exc:
+                app.logger.warning("PROVIDER DOCUMENT STORAGE DELETE ERROR: %r", exc)
+            status = _refresh_documentation_status(provider["id"])
+            Thread(target=_audit, args=("prestador_documento_eliminado", "prestador", provider["id"], None, {"tipo_documento": document.get("tipo_documento")}), daemon=True).start()
+            return _json(app, {"ok": True, "documentacion_estado": status})
+        except requests.RequestException as exc:
+            app.logger.exception("PROVIDER DOCUMENT DELETE ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude eliminar el documento."}, 502)
 
     @app.get(f"{api_base}/oportunidades")
     def mobile_opportunities():
