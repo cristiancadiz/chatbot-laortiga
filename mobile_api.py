@@ -2700,6 +2700,20 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     "cinco_estrellas": int(reputation_data.get("cinco_estrellas") or 0),
                 }
 
+            jobs_completed = 0
+            jobs_response = requests.post(
+                f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_resumen_trabajos",
+                headers=_db_headers(),
+                json={"p_prestador_id": provider.get("id")},
+                timeout=settings["supabase_timeout"],
+            )
+            jobs_response.raise_for_status()
+            jobs_data = jobs_response.json() if jobs_response.content else {}
+            if isinstance(jobs_data, list):
+                jobs_data = jobs_data[0] if jobs_data else {}
+            if isinstance(jobs_data, dict):
+                jobs_completed = int(jobs_data.get("completados") or 0)
+
             profile = {
                 "id": provider.get("id"),
                 "nombre": provider.get("nombre"),
@@ -2711,6 +2725,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 "verificado_at": provider.get("verificado_at"),
                 "miembro_desde": provider.get("created_at"),
                 "foto_url": profile_photo_url,
+                "trabajos_completados": jobs_completed,
                 "reputacion": reputation,
             }
             return _json(app, {"ok": True, "prestador": profile})
