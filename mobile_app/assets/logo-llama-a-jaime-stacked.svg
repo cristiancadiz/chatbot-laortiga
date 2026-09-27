@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="title desc">
   <title id="title">Llama a Jaime</title>
-  <desc id="desc">Logotipo tipográfico recto con Llama a en azul, Jaime en naranja y línea inferior.</desc>
-  <g text-anchor="middle" font-family="Arial, Helvetica, DejaVu Sans, sans-serif" font-weight="800">
-    <text x="600" y="255" font-size="225" letter-spacing="-5" fill="#073B66">Llama a</text>
-    <text x="600" y="555" font-size="300" letter-spacing="-8" fill="#FF684A">Jaime</text>
+  <desc id="desc">Logotipo tipográfico redondeado con Llama a en azul, Jaime en naranja y línea inferior.</desc>
+  <g text-anchor="middle" font-family="DejaVu Sans, Arial, Helvetica, sans-serif" font-weight="700" stroke-linejoin="round" paint-order="stroke fill">
+    <text x="600" y="260" font-size="235" letter-spacing="-10" fill="#073B66" stroke="#073B66" stroke-width="5">Llama a</text>
+    <text x="600" y="570" font-size="320" letter-spacing="-12" fill="#FF684A" stroke="#FF684A" stroke-width="5">Jaime</text>
   </g>
-  <rect x="230" y="625" width="740" height="22" fill="#073B66"/>
-  <rect x="970" y="625" width="95" height="22" fill="#FF684A"/>
+  <line x1="220" y1="640" x2="970" y2="640" stroke="#073B66" stroke-width="24" stroke-linecap="round"/>
+  <line x1="970" y1="640" x2="1065" y2="640" stroke="#FF684A" stroke-width="24" stroke-linecap="round"/>
 </svg>
