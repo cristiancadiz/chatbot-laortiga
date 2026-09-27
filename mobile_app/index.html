@@ -62,6 +62,7 @@
 .review-card{margin:0 0 12px;padding:14px;border:1px solid var(--line);border-radius:16px;background:#fff}.review-card p{margin:4px 0 10px;color:var(--muted);font-size:11px}.review-stars{display:flex;gap:5px;margin-bottom:10px}.review-stars button{border:0;background:transparent;padding:0;font-size:30px;line-height:1;color:#c9d0d3;cursor:pointer}.review-stars button.selected{color:#d49b16}.review-card textarea{width:100%;min-height:72px;resize:vertical;box-sizing:border-box;border:1px solid var(--line);border-radius:11px;padding:10px;margin-bottom:9px}.review-card .primary{width:100%}
 .provider-public-reputation{margin-top:5px;font-size:13px;font-weight:800;color:#263238}.provider-public-reputation .star{color:#d49b16}.provider-public-reputation .new-provider{font-weight:700;color:var(--muted)}
 .profile-photo-card{margin:0 0 14px;padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff}.profile-photo-head{display:flex;align-items:center;gap:13px;margin-bottom:12px}.profile-photo-head h3{margin:0 0 3px}.profile-photo-head p{margin:0;color:var(--muted);font-size:12px}.profile-photo-preview{width:70px;height:70px;flex:0 0 70px;border-radius:50%;overflow:hidden;background:#edf2ef;display:grid;place-items:center;font-size:27px;font-weight:800}.profile-photo-preview img{width:100%;height:100%;object-fit:cover}.profile-photo-actions{display:flex;gap:8px}.profile-photo-actions .primary{flex:1}
+.provider-public-avatar img{width:100%;height:100%;object-fit:cover;display:block}.provider-public-avatar img[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -172,7 +173,7 @@
     <div class="conversation-head"><button id="closeConversation" aria-label="Cerrar">‹</button><div><h2 id="conversationTitle">Conversación</h2><span id="conversationSubtitle">Llama a Jaime</span></div></div>
     <div class="conversation-body">
       <button class="client-notify" id="clientNotifyBtn" hidden>🔔 Recibir avisos de mensajes y precios</button><div class="provider-public-card" id="providerPublicCard" hidden>
-  <div class="provider-public-avatar" id="providerPublicAvatar">J</div>
+  <div class="provider-public-avatar" id="providerPublicAvatar"><span id="providerPublicAvatarInitial">J</span><img id="providerPublicAvatarImage" alt="Foto del prestador" hidden></div>
   <div class="provider-public-copy">
     <div class="provider-public-title"><strong id="providerPublicName">Prestador</strong><span id="providerPublicVerified">✓ Verificado</span></div>
     <div class="provider-public-meta" id="providerPublicMeta"></div>
@@ -291,7 +292,14 @@
       if(!r.ok||!d.prestador)return;
       const p=d.prestador,name=p.nombre||'Prestador';
       $('#providerPublicName').textContent=name;
-      $('#providerPublicAvatar').textContent=(name.trim()[0]||'J').toUpperCase();
+      const avatarInitial=$('#providerPublicAvatarInitial'),avatarImage=$('#providerPublicAvatarImage');
+      avatarInitial.textContent=(name.trim()[0]||'J').toUpperCase();
+      if(p.foto_url){
+        avatarImage.src=p.foto_url;avatarImage.hidden=false;avatarInitial.hidden=true;
+        avatarImage.onerror=()=>{avatarImage.hidden=true;avatarInitial.hidden=false;};
+      }else{
+        avatarImage.removeAttribute('src');avatarImage.hidden=true;avatarInitial.hidden=false;
+      }
       $('#providerPublicVerified').hidden=!p.verificado;
       const since=p.miembro_desde?new Date(p.miembro_desde).toLocaleDateString('es-CL',{month:'short',year:'numeric'}):'';
       $('#providerPublicMeta').textContent=[since?`En Llama a Jaime desde ${since}`:'',Array.isArray(p.comunas)&&p.comunas.length?p.comunas.slice(0,3).join(', '):''].filter(Boolean).join(' · ');
