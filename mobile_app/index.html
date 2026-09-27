@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#123d2b">
+  <meta name="description" content="Solicita reciclaje y fletes desde tu celular con La Ortiga.">
+  <link rel="manifest" href="/app/manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="/app/assets/icon.svg">
+  <title>La Ortiga · Recicla & Fletes</title>
+  <style>
+    :root{--forest:#123d2b;--green:#2f7444;--leaf:#a8cf45;--cream:#f7f5eb;--gold:#f2b544;--ink:#173328;--muted:#68766e;--line:#dce3da;--white:#fff;--danger:#a6382f;--shadow:0 14px 38px rgba(18,61,43,.12)}
+    *{box-sizing:border-box}html{background:var(--forest)}body{margin:0;background:var(--cream);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh}button,input,textarea,select{font:inherit}button{cursor:pointer}.app{min-height:100vh;max-width:640px;margin:auto;background:var(--cream);padding-bottom:88px}.top{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:12px;padding:14px 18px;background:rgba(247,245,235,.94);backdrop-filter:blur(14px);border-bottom:1px solid rgba(18,61,43,.08)}.brandmark{width:42px;height:42px;border-radius:14px;background:var(--forest);display:grid;place-items:center;box-shadow:0 8px 20px rgba(18,61,43,.2)}.brandmark img{width:32px;height:32px}.brand strong{display:block;font-size:16px;line-height:1.15}.brand span{font-size:12px;color:var(--muted)}.status-dot{margin-left:auto;width:10px;height:10px;border-radius:50%;background:#59a865;box-shadow:0 0 0 4px rgba(89,168,101,.15)}main{padding:0 18px}.view{display:none}.view.active{display:block}.hero{position:relative;overflow:hidden;margin:12px -2px 18px;padding:30px 24px 28px;border-radius:28px;color:white;background:linear-gradient(145deg,#123d2b,#286a3d);box-shadow:var(--shadow)}.hero:after{content:"";position:absolute;width:230px;height:230px;border-radius:50%;right:-90px;top:-95px;border:34px solid rgba(168,207,69,.16)}.eyebrow{font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:#d9ed9e}.hero h1{position:relative;z-index:1;font-size:34px;line-height:1.03;letter-spacing:-.04em;margin:12px 0}.hero p{position:relative;z-index:1;max-width:390px;margin:0;color:#edf5ee;font-size:16px}.quick{display:grid;grid-template-columns:1fr 1fr;gap:12px}.service-card{border:0;text-align:left;border-radius:22px;padding:18px;background:white;color:var(--ink);box-shadow:0 8px 26px rgba(18,61,43,.08)}.service-card .icon{display:grid;place-items:center;width:46px;height:46px;border-radius:15px;font-size:24px;margin-bottom:14px;background:#e7f2cf}.service-card:nth-child(2) .icon{background:#fff0d1}.service-card strong{display:block;font-size:17px;margin-bottom:4px}.service-card span{font-size:12px;color:var(--muted)}.section-title{display:flex;align-items:end;justify-content:space-between;margin:24px 2px 12px}.section-title h2{font-size:20px;margin:0;letter-spacing:-.02em}.section-title span{font-size:12px;color:var(--muted)}.steps{display:grid;gap:10px}.step{display:flex;align-items:center;gap:13px;padding:14px;background:rgba(255,255,255,.68);border:1px solid var(--line);border-radius:17px}.step b{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:var(--forest);color:white}.step div{font-size:13px}.step strong{display:block;font-size:14px}.page-head{padding:22px 2px 12px}.page-head h1{margin:0;font-size:28px;letter-spacing:-.04em}.page-head p{margin:6px 0 0;color:var(--muted)}.chat-box{height:calc(100vh - 260px);min-height:390px;overflow:auto;padding:10px 0 18px}.message{max-width:86%;margin:9px 0;padding:12px 14px;border-radius:18px;background:white;box-shadow:0 4px 16px rgba(18,61,43,.06);white-space:pre-wrap}.message.bot{border-bottom-left-radius:5px}.message.user{margin-left:auto;color:white;background:var(--forest);border-bottom-right-radius:5px}.message small{display:block;opacity:.65;margin-top:5px}.chat-compose{position:sticky;bottom:76px;display:flex;align-items:end;gap:8px;padding:10px;background:white;border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow)}.chat-compose textarea{flex:1;border:0;resize:none;max-height:110px;outline:0;padding:8px;background:transparent}.send{border:0;width:44px;height:44px;border-radius:15px;background:var(--leaf);color:var(--forest);font-size:20px;font-weight:800}.chips{display:flex;gap:7px;overflow:auto;padding:2px 0 8px}.chip{white-space:nowrap;border:1px solid #bdd29a;border-radius:999px;padding:8px 12px;background:#f4f8e9;color:var(--forest);font-size:12px}.form-card{background:white;border:1px solid var(--line);border-radius:24px;padding:18px;box-shadow:0 8px 26px rgba(18,61,43,.06)}.service-toggle{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}.toggle{border:1px solid var(--line);padding:12px;border-radius:14px;background:white;color:var(--ink);font-weight:700}.toggle.active{background:var(--forest);border-color:var(--forest);color:white}.field{margin:12px 0}.field label{display:block;font-size:12px;font-weight:800;margin:0 0 6px}.field input,.field textarea,.field select{width:100%;border:1px solid #ccd7cf;border-radius:13px;padding:12px 13px;outline:none;background:#fbfcf8;color:var(--ink)}.field textarea{min-height:92px;resize:vertical}.field input:focus,.field textarea:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(47,116,68,.1)}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.primary{width:100%;border:0;border-radius:15px;padding:14px 18px;background:var(--leaf);color:var(--forest);font-weight:900}.primary:disabled{opacity:.55;cursor:wait}.notice{display:none;margin:14px 0;padding:13px;border-radius:14px;background:#eaf4dc;color:#23452d}.notice.error{background:#fde8e5;color:var(--danger)}.tracking-card{display:none;text-align:center;padding:25px;background:white;border:1px solid var(--line);border-radius:24px}.tracking-card .check{width:58px;height:58px;margin:auto;display:grid;place-items:center;border-radius:50%;background:#e6f3d2;font-size:28px}.code{font-size:20px;font-weight:900;letter-spacing:.05em;margin:12px}.saved-list{display:grid;gap:10px}.saved{width:100%;text-align:left;border:1px solid var(--line);border-radius:16px;padding:14px;background:white}.saved strong,.saved span{display:block}.saved span{color:var(--muted);font-size:12px}.empty{text-align:center;color:var(--muted);padding:42px 18px}.install{margin-top:18px;padding:18px;border-radius:20px;background:#e8f1d5}.install h3{margin:0 0 5px}.install p{margin:0 0 12px;color:#526052}.install button{border:0;border-radius:12px;padding:10px 14px;background:var(--forest);color:white;font-weight:800}.nav{position:fixed;bottom:0;left:50%;z-index:30;transform:translateX(-50%);display:grid;grid-template-columns:repeat(4,1fr);width:min(640px,100%);padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:rgba(255,255,255,.96);backdrop-filter:blur(16px);border-top:1px solid var(--line)}.nav button{border:0;background:transparent;color:#758079;padding:5px 2px;font-size:10px}.nav button b{display:block;font-size:20px;line-height:1.15}.nav button.active{color:var(--forest);font-weight:800}.spinner{display:inline-block;width:15px;height:15px;border:2px solid rgba(18,61,43,.25);border-top-color:var(--forest);border-radius:50%;animation:spin .7s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:420px){.hero h1{font-size:31px}.grid2{grid-template-columns:1fr}.quick{gap:9px}.service-card{padding:15px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <header class="top"><div class="brandmark"><img src="/app/assets/icon.svg" alt=""></div><div class="brand"><strong>La Ortiga</strong><span>Recicla & Fletes</span></div><span class="status-dot" title="Servicio activo"></span></header>
+  <main>
+    <section class="view active" id="home">
+      <div class="hero"><div class="eyebrow">Economía circular en movimiento</div><h1>Tu retiro o flete,<br>más simple.</h1><p>Cuéntanos qué necesitas y conectaremos tu solicitud con personas disponibles.</p></div>
+      <div class="quick">
+        <button class="service-card" data-start="reciclaje"><span class="icon">♻️</span><strong>Reciclaje</strong><span>Materiales, enseres y retiros</span></button>
+        <button class="service-card" data-start="flete"><span class="icon">🚚</span><strong>Fletes</strong><span>Traslados y entregas</span></button>
+      </div>
+      <div class="section-title"><h2>¿Cómo funciona?</h2><span>3 pasos</span></div>
+      <div class="steps"><div class="step"><b>1</b><div><strong>Describe tu necesidad</strong>La IA te ayuda a ordenar los datos.</div></div><div class="step"><b>2</b><div><strong>Publicamos la solicitud</strong>Prestadores disponibles pueden revisarla.</div></div><div class="step"><b>3</b><div><strong>Coordina con seguridad</strong>Revisa la propuesta antes de confirmar.</div></div></div>
+      <div class="install" id="installCard"><h3>Instala La Ortiga</h3><p>Úsala desde tu pantalla de inicio como cualquier aplicación.</p><button id="installBtn">Instalar aplicación</button></div>
+    </section>
+
+    <section class="view" id="chat">
+      <div class="page-head"><h1>Habla con Ortiguín</h1><p>Pregunta libremente o prepara tu solicitud.</p></div>
+      <div class="chips"><button class="chip">¿Qué puedo reciclar?</button><button class="chip">Necesito un flete</button><button class="chip">¿Cómo funciona?</button></div>
+      <div class="chat-box" id="chatBox"><div class="message bot">¡Hola! Soy Ortiguín 🌿. Puedo orientarte y ayudarte a preparar una solicitud de reciclaje o flete.</div></div>
+      <form class="chat-compose" id="chatForm"><textarea id="chatInput" rows="1" maxlength="1500" placeholder="Escribe tu pregunta…"></textarea><button class="send" aria-label="Enviar">↑</button></form>
+    </section>
+
+    <section class="view" id="request">
+      <div class="page-head"><h1>Crear solicitud</h1><p>Completa lo esencial. Podrás revisar todo antes de coordinar.</p></div>
+      <div class="form-card" id="requestCard">
+        <div class="service-toggle"><button class="toggle active" data-service="reciclaje">♻️ Reciclaje</button><button class="toggle" data-service="flete">🚚 Flete</button></div>
+        <form id="requestForm">
+          <div class="grid2"><div class="field"><label for="name">Nombre</label><input id="name" required autocomplete="name"></div><div class="field"><label for="phone">Teléfono</label><input id="phone" required type="tel" autocomplete="tel" placeholder="+56 9…"></div></div>
+          <div class="grid2"><div class="field"><label for="email">Correo (opcional)</label><input id="email" type="email" autocomplete="email"></div><div class="field"><label for="commune">Comuna</label><input id="commune" required></div></div>
+          <div class="field"><label for="origin">Dirección de origen o retiro</label><input id="origin" required autocomplete="street-address"></div>
+          <div class="field" id="destinationField" hidden><label for="destination">Dirección de destino</label><input id="destination"></div>
+          <div class="field"><label for="details" id="detailsLabel">¿Qué materiales necesitas retirar?</label><textarea id="details" required placeholder="Ej.: cartón, botellas y dos bolsas de plástico…"></textarea></div>
+          <div class="field"><label for="schedule">Fecha u horario preferido (opcional)</label><input id="schedule" placeholder="Ej.: sábado por la mañana"></div>
+          <button class="primary" id="submitRequest">Publicar solicitud</button><div class="notice" id="formNotice"></div>
+        </form>
+      </div>
+      <div class="tracking-card" id="trackingCard"><div class="check">✓</div><h2>Solicitud publicada</h2><p>Guarda este código para consultar el estado.</p><div class="code" id="requestCode"></div><button class="primary" data-go="status">Ver mis solicitudes</button></div>
+    </section>
+
+    <section class="view" id="status">
+      <div class="page-head"><h1>Mis solicitudes</h1><p>Consulta el estado de lo que publicaste desde este dispositivo.</p></div>
+      <div class="saved-list" id="savedList"></div>
+    </section>
+  </main>
+  <nav class="nav"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button data-go="chat"><b>✦</b>IA</button><button data-go="request"><b>＋</b>Solicitar</button><button data-go="status"><b>◷</b>Estado</button></nav>
+</div>
+<script>
+(() => {
+  const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+  const session = localStorage.appSession || (localStorage.appSession = crypto.randomUUID());
+  const headers = {"Content-Type":"application/json","X-App-Session":session};
+  let service = "reciclaje", installPrompt = null;
+  let history = JSON.parse(sessionStorage.getItem("ortiguinHistory") || "[]");
+
+  function go(id){ $$(".view").forEach(v=>v.classList.toggle("active",v.id===id)); $$(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.go===id)); window.scrollTo({top:0,behavior:"smooth"}); if(id==="status") loadSaved(); }
+  $$('[data-go]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.go)));
+  $$('[data-start]').forEach(b=>b.addEventListener('click',()=>{ setService(b.dataset.start); go('request'); }));
+
+  function setService(value){ service=value; $$('.toggle').forEach(b=>b.classList.toggle('active',b.dataset.service===value)); const flete=value==='flete'; $('#destinationField').hidden=!flete; $('#destination').required=flete; $('#detailsLabel').textContent=flete?'¿Qué necesitas trasladar?':'¿Qué materiales necesitas retirar?'; $('#details').placeholder=flete?'Ej.: refrigerador y dos cajas; segundo piso sin ascensor…':'Ej.: cartón, botellas y dos bolsas de plástico…'; }
+  $$('.toggle').forEach(b=>b.addEventListener('click',e=>{e.preventDefault();setService(b.dataset.service)}));
+
+  function addMessage(content, role){ const el=document.createElement('div'); el.className='message '+(role==='user'?'user':'bot'); el.textContent=content; $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; }
+  history.forEach(m=>addMessage(m.content,m.role));
+  async function ask(message){ addMessage(message,'user'); const prior=history.slice(-8); history.push({role:'user',content:message}); $('#chatInput').disabled=true; const waiting=document.createElement('div'); waiting.className='message bot'; waiting.innerHTML='<span class="spinner"></span> Pensando…'; $('#chatBox').append(waiting); $('#chatBox').scrollTop=$('#chatBox').scrollHeight;
+    try{ const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message,service,history:prior})}); const d=await r.json(); waiting.remove(); if(!r.ok) throw new Error(d.error||'No pude responder'); addMessage(d.reply,'assistant'); history.push({role:'assistant',content:d.reply}); history=history.slice(-10); sessionStorage.setItem('ortiguinHistory',JSON.stringify(history)); }
+    catch(e){waiting.remove();addMessage(e.message||'No pude conectar. Intenta nuevamente.','assistant')} finally{$('#chatInput').disabled=false;$('#chatInput').focus()}
+  }
+  $('#chatForm').addEventListener('submit',e=>{e.preventDefault();const m=$('#chatInput').value.trim();if(!m)return;$('#chatInput').value='';ask(m)});
+  $$('.chip').forEach(b=>b.addEventListener('click',()=>ask(b.textContent)));
+
+  $('#requestForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submitRequest'),note=$('#formNotice');btn.disabled=true;btn.innerHTML='<span class="spinner"></span> Publicando';note.style.display='none';const payload={tipo:service,nombre:$('#name').value,telefono:$('#phone').value,email:$('#email').value,comuna:$('#commune').value,direccion_origen:$('#origin').value,direccion_destino:$('#destination').value,detalles:$('#details').value,fecha_preferida:$('#schedule').value};
+    try{const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));$('#requestCode').textContent=d.solicitud.codigo;$('#requestCard').style.display='none';$('#trackingCard').style.display='block';}
+    catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{btn.disabled=false;btn.textContent='Publicar solicitud'}
+  });
+
+  async function loadSaved(){const box=$('#savedList'),items=JSON.parse(localStorage.requests||'[]');if(!items.length){box.innerHTML='<div class="empty">Aún no has creado solicitudes desde este dispositivo.</div>';return}box.innerHTML='';for(const item of items){const el=document.createElement('button');el.className='saved';el.innerHTML=`<strong>${item.codigo}</strong><span>${item.tipo} · Consultando estado…</span>`;box.append(el);try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(item.codigo)}?token=${encodeURIComponent(item.token)}`,{headers});const d=await r.json();el.querySelector('span').textContent=r.ok?`${d.solicitud.tipo} · ${d.solicitud.estado}`:(d.error||'Sin información');}catch{el.querySelector('span').textContent='Sin conexión'}}}
+
+  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
+  $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js',{scope:'/app/'}).catch(()=>{});
+  fetch('/app/api/config').then(r=>r.json()).then(d=>{if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
+})();
+</script>
+</body>
+</html>
