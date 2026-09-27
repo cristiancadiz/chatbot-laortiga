@@ -1,8 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="title desc">
   <title id="title">Llama a Jaime</title>
-  <desc id="desc">Logotipo tipográfico con Llama a en azul y Jaime en naranja.</desc>
-  <g text-anchor="middle" font-family="DejaVu Sans, Arial, Helvetica, sans-serif" font-weight="700">
-    <text x="600" y="278" font-size="250" letter-spacing="-10" fill="#073B66">Llama a</text>
-    <text x="600" y="618" font-size="335" letter-spacing="-13" fill="#FF684A">Jaime</text>
+  <desc id="desc">Logotipo tipográfico recto con Llama a en azul, Jaime en naranja y línea inferior.</desc>
+  <g text-anchor="middle" font-family="Arial, Helvetica, DejaVu Sans, sans-serif" font-weight="800">
+    <text x="600" y="255" font-size="225" letter-spacing="-5" fill="#073B66">Llama a</text>
+    <text x="600" y="555" font-size="300" letter-spacing="-8" fill="#FF684A">Jaime</text>
   </g>
+  <rect x="230" y="625" width="740" height="22" fill="#073B66"/>
+  <rect x="970" y="625" width="95" height="22" fill="#FF684A"/>
 </svg>
