@@ -104,6 +104,20 @@ def _valid_image_signature(content, mime_type):
     return False
 
 
+def _location_values(latitude, longitude, accuracy=None):
+    try:
+        latitude = round(float(latitude), 6)
+        longitude = round(float(longitude), 6)
+        accuracy = round(float(accuracy), 2) if accuracy not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None
+    if accuracy is not None and not (0 <= accuracy <= 100000):
+        accuracy = None
+    return latitude, longitude, accuracy
+
+
 def _list_clean(value, item_limit=120, max_items=50):
     if isinstance(value, str):
         value = value.split(",")
@@ -496,6 +510,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "chat": True,
             "quotes": True,
             "photos": True,
+            "location": True,
         })
 
     @app.post(f"{api_base}/chat")
@@ -563,6 +578,11 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         details = _clean(body.get("detalles"), 2000)
         schedule = _clean(body.get("fecha_preferida"), 120)
         materials = _list_clean(body.get("materiales"), item_limit=120, max_items=30)
+        location = None
+        if body.get("latitud") not in (None, "") or body.get("longitud") not in (None, ""):
+            location = _location_values(body.get("latitud"), body.get("longitud"), body.get("precision_m"))
+            if not location:
+                return _json(app, {"ok": False, "error": "La ubicación compartida no es válida."}, 400)
 
         if service_type not in SERVICE_TYPES:
             return _json(app, {"ok": False, "error": "Selecciona una categoría de servicio."}, 400)
@@ -600,6 +620,13 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "estado": "publicada",
             "canal": "app",
         }
+        if location:
+            payload.update({
+                "cliente_latitud": location[0],
+                "cliente_longitud": location[1],
+                "cliente_precision_m": location[2],
+                "cliente_ubicacion_at": datetime.now(timezone.utc).isoformat(),
+            })
         try:
             response = requests.post(
                 f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
@@ -730,6 +757,64 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         except requests.RequestException as exc:
             app.logger.exception("REQUEST PHOTOS ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude guardar las fotografías."}, 502)
+
+    @app.post(f"{api_base}/solicitudes/<public_id>/ubicacion")
+    def mobile_share_location(public_id):
+        if not _allow("share-location", limit=60):
+            return _json(app, {"ok": False, "error": "Alcanzaste el límite temporal de actualizaciones."}, 429)
+        body = request.get_json(silent=True) or {}
+        actor = _clean(body.get("actor"), 20).lower()
+        location = _location_values(body.get("latitud"), body.get("longitud"), body.get("precision_m"))
+        if not location:
+            return _json(app, {"ok": False, "error": "No pude validar la ubicación."}, 400)
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            if actor == "cliente":
+                request_row = _client_auth(public_id, body.get("token"))
+                if not request_row:
+                    return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
+                response = requests.patch(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
+                    headers=_db_headers("return=minimal"),
+                    params={"id": f"eq.{request_row['id']}"},
+                    json={
+                        "cliente_latitud": location[0],
+                        "cliente_longitud": location[1],
+                        "cliente_precision_m": location[2],
+                        "cliente_ubicacion_at": now,
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                response.raise_for_status()
+                return _json(app, {"ok": True, "ubicacion": {"latitud": location[0], "longitud": location[1], "precision_m": location[2], "updated_at": now}})
+
+            if actor == "prestador":
+                provider = _provider_auth(body.get("codigo"), body.get("token"))
+                request_row = _request_by_code(public_id) if provider else None
+                if not request_row or str(request_row.get("prestador_id") or "") != str(provider.get("id") or ""):
+                    return _json(app, {"ok": False, "error": "No tienes esta solicitud asignada."}, 401)
+                response = requests.post(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_ubicaciones_prestador",
+                    headers=_db_headers("return=representation,resolution=merge-duplicates"),
+                    params={"on_conflict": "solicitud_id,prestador_id"},
+                    json={
+                        "empresa_id": settings["empresa_id"],
+                        "solicitud_id": request_row["id"],
+                        "prestador_id": provider["id"],
+                        "latitud": location[0],
+                        "longitud": location[1],
+                        "precision_m": location[2],
+                        "updated_at": now,
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                response.raise_for_status()
+                return _json(app, {"ok": True, "ubicacion": {"latitud": location[0], "longitud": location[1], "precision_m": location[2], "updated_at": now}})
+
+            return _json(app, {"ok": False, "error": "Tipo de usuario inválido."}, 400)
+        except requests.RequestException as exc:
+            app.logger.exception("SHARE LOCATION ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude guardar la ubicación."}, 502)
 
     @app.post(f"{api_base}/prestadores")
     def mobile_create_provider():
@@ -1049,6 +1134,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 quote = quote_rows[0] if quote_rows else None
 
             provider_name = None
+            provider_location = None
             if provider_id:
                 provider_response = requests.get(
                     f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
@@ -1059,6 +1145,29 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 provider_response.raise_for_status()
                 provider_rows = provider_response.json() if provider_response.content else []
                 provider_name = provider_rows[0].get("nombre") if provider_rows else None
+                location_response = requests.get(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_ubicaciones_prestador",
+                    headers=_db_headers(),
+                    params={
+                        "select": "latitud,longitud,precision_m,updated_at",
+                        "solicitud_id": f"eq.{request_row['id']}",
+                        "prestador_id": f"eq.{provider_id}",
+                        "limit": "1",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                location_response.raise_for_status()
+                location_rows = location_response.json() if location_response.content else []
+                provider_location = location_rows[0] if location_rows else None
+
+            client_location = None
+            if request_row.get("cliente_latitud") is not None and request_row.get("cliente_longitud") is not None:
+                client_location = {
+                    "latitud": request_row.get("cliente_latitud"),
+                    "longitud": request_row.get("cliente_longitud"),
+                    "precision_m": request_row.get("cliente_precision_m"),
+                    "updated_at": request_row.get("cliente_ubicacion_at"),
+                }
 
             safe_request = {key: request_row.get(key) for key in (
                 "public_id", "tipo", "comuna", "detalles", "fecha_preferida", "estado"
@@ -1071,6 +1180,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 "mensajes": messages_response.json() if messages_response.content and provider_id else [],
                 "cotizacion": quote,
                 "fotos": _safe_photos(request_row["id"]),
+                "ubicaciones": {"cliente": client_location, "prestador": provider_location},
             })
         except requests.RequestException as exc:
             app.logger.exception("CONVERSATION ERROR: %r", exc)
