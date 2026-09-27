@@ -7,6 +7,7 @@ dependencias necesarias al registrarse desde app.py.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -62,6 +63,17 @@ PHOTO_MIME_TYPES = {
     "image/png": "png",
     "image/webp": "webp",
 }
+
+TERMS_VERSION = "2026-09-27-v1"
+REPORT_CATEGORIES = {"seguridad", "estafa", "trato", "cobro", "servicio", "contenido", "otro"}
+RISKY_SERVICE_PATTERNS = (
+    (r"\b(fuga|escape)\s+de\s+gas\b", "Una fuga de gas requiere atención de emergencia, no una publicación en la app."),
+    (r"\b(arma|armas|explosivo|explosivos|municion|municiones)\b", "La app no admite servicios relacionados con armas o explosivos."),
+    (r"\b(droga|drogas|cocaina|marihuana|trafico)\b", "La app no admite solicitudes relacionadas con actividades ilegales."),
+    (r"\b(servicio sexual|servicios sexuales|escort)\b", "La app no admite servicios sexuales."),
+    (r"\b(cirugia|inyeccion|procedimiento medico|tratamiento medico)\b", "La app no admite procedimientos médicos."),
+    (r"\b(alta tension|asbesto|amianto)\b", "Ese trabajo requiere especialistas y protocolos que este MVP todavía no verifica."),
+)
 
 
 def _json(app, payload, status=200):
@@ -119,6 +131,53 @@ def _valid_email(value):
 def _valid_phone(value):
     digits = re.sub(r"\D", "", str(value or ""))
     return 8 <= len(digits) <= 15
+
+
+def _normalize_phone(value):
+    digits = re.sub(r"\D", "", str(value or ""))
+    if len(digits) == 9 and digits.startswith("9"):
+        return "56" + digits
+    if len(digits) == 11 and digits.startswith("56"):
+        return digits
+    return digits[:15]
+
+
+def _normalize_rut(value):
+    compact = re.sub(r"[^0-9kK]", "", str(value or "")).upper()
+    if len(compact) < 8 or len(compact) > 9 or not compact[:-1].isdigit():
+        return ""
+    return f"{int(compact[:-1])}-{compact[-1]}"
+
+
+def _valid_rut(value):
+    normalized = _normalize_rut(value)
+    if not normalized:
+        return False
+    body, verifier = normalized.split("-", 1)
+    total = 0
+    factor = 2
+    for digit in reversed(body):
+        total += int(digit) * factor
+        factor = 2 if factor == 7 else factor + 1
+    expected_number = 11 - (total % 11)
+    expected = "0" if expected_number == 11 else "K" if expected_number == 10 else str(expected_number)
+    return hmac.compare_digest(expected, verifier)
+
+
+def _valid_pin(value):
+    return bool(re.fullmatch(r"\d{6}", str(value or "")))
+
+
+def _pin_hash(pin, salt):
+    return hashlib.pbkdf2_hmac("sha256", str(pin).encode("utf-8"), bytes.fromhex(salt), 210000).hex()
+
+
+def _risky_service_reason(*values):
+    text = _norm(" ".join(str(value or "") for value in values))
+    for pattern, reason in RISKY_SERVICE_PATTERNS:
+        if re.search(pattern, text):
+            return reason
+    return ""
 
 
 def _valid_image_signature(content, mime_type):
@@ -191,6 +250,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 "public_id": f"eq.{code}",
                 "access_token_hash": f"eq.{hashlib.sha256(token.encode('utf-8')).hexdigest()}",
                 "activo": "eq.true",
+                "estado_cuenta": "eq.activa",
                 "limit": "1",
             },
             timeout=settings["supabase_timeout"],
@@ -198,6 +258,24 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         response.raise_for_status()
         rows = response.json() if response.content else []
         return rows[0] if rows else None
+
+    def _audit(event, actor_type=None, actor_id=None, request_id=None, metadata=None):
+        try:
+            requests.post(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_auditoria_seguridad",
+                headers=_db_headers("return=minimal"),
+                json={
+                    "empresa_id": settings["empresa_id"],
+                    "evento": _clean(event, 80),
+                    "actor_tipo": _clean(actor_type, 30) or None,
+                    "actor_id": actor_id or None,
+                    "solicitud_id": request_id or None,
+                    "metadata": metadata if isinstance(metadata, dict) else {},
+                },
+                timeout=settings["supabase_timeout"],
+            ).raise_for_status()
+        except Exception as exc:
+            app.logger.warning("SECURITY AUDIT ERROR event=%s: %r", event, exc)
 
     def _request_by_code(public_id):
         public_id = _clean(public_id, 40).upper()
@@ -382,6 +460,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         specialties = {_norm(x).replace(" ", "_") for x in (provider.get("especialidades") or [])}
         request_commune = _norm(request_row.get("comuna"))
         request_materials = {_norm(x) for x in (request_row.get("materiales") or []) if _norm(x)}
+        provider_phone = _normalize_phone(provider.get("telefono_normalizado") or provider.get("telefono"))
+        request_phone = _normalize_phone(request_row.get("telefono_normalizado") or request_row.get("telefono"))
+        if provider_phone and request_phone and provider_phone == request_phone:
+            return False
         if _norm(request_row.get("tipo")) not in roles:
             return False
         if request_commune and request_commune not in communes:
@@ -415,9 +497,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
                 headers=_db_headers(),
                 params={
-                    "select": "id,roles,comunas,materiales,especialidades,vehiculo",
+                    "select": "id,roles,comunas,materiales,especialidades,vehiculo,telefono,telefono_normalizado,estado_cuenta",
                     "empresa_id": f"eq.{settings['empresa_id']}",
                     "activo": "eq.true",
+                    "estado_cuenta": "eq.activa",
                     "disponible": "eq.true",
                     "limit": "500",
                 },
@@ -450,7 +533,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
                 headers=_db_headers(),
                 params={
-                    "select": "id,public_id,tipo,subtipo,comuna,materiales,estado,created_at",
+                    "select": "id,public_id,tipo,subtipo,comuna,materiales,telefono,telefono_normalizado,estado,created_at",
                     "empresa_id": f"eq.{settings['empresa_id']}",
                     "estado": "in.(publicada,revisando)",
                     "created_at": f"gte.{cutoff}",
@@ -541,6 +624,13 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "quotes": True,
             "photos": True,
             "location": True,
+            "security": {
+                "provider_login": True,
+                "self_assignment_blocked": True,
+                "complaints": True,
+                "terms_version": TERMS_VERSION,
+                "location_mode": "voluntary_private_point_in_time",
+            },
         })
 
     @app.post(f"{api_base}/chat")
@@ -613,6 +703,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         details = _clean(body.get("detalles"), 2000)
         schedule = _clean(body.get("fecha_preferida"), 120)
         materials = _list_clean(body.get("materiales"), item_limit=120, max_items=30)
+        accepts_terms = body.get("acepta_terminos") is True
+        accepts_privacy = body.get("acepta_privacidad") is True
         location = None
         if body.get("latitud") not in (None, "") or body.get("longitud") not in (None, ""):
             location = _location_values(body.get("latitud"), body.get("longitud"), body.get("precision_m"))
@@ -633,6 +725,11 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {"ok": False, "error": "Para un flete debes indicar el destino."}, 400)
         if service_type == "reciclaje" and not materials:
             return _json(app, {"ok": False, "error": "Selecciona al menos un material."}, 400)
+        if not accepts_terms or not accepts_privacy:
+            return _json(app, {"ok": False, "error": "Debes aceptar los términos y el tratamiento privado de tus datos."}, 400)
+        risky_reason = _risky_service_reason(details, destination, subtype)
+        if risky_reason:
+            return _json(app, {"ok": False, "error": risky_reason}, 400)
 
         headers = supabase_headers()
         if not headers:
@@ -648,6 +745,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "subtipo": subtype if service_type == "belleza" else None,
             "nombre": name,
             "telefono": phone,
+            "telefono_normalizado": _normalize_phone(phone),
             "email": email or None,
             "comuna": commune,
             "direccion_origen": origin,
@@ -657,6 +755,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "fecha_preferida": schedule or None,
             "estado": "publicada",
             "canal": "app",
+            "acepta_terminos": True,
+            "acepta_privacidad": True,
+            "consentimiento_at": datetime.now(timezone.utc).isoformat(),
+            "terminos_version": TERMS_VERSION,
         }
         if location:
             payload.update({
@@ -680,6 +782,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             rows = response.json() if response.content else []
             created = rows[0] if rows else {**payload, "id": None}
             if created.get("id"):
+                Thread(target=_audit, args=("solicitud_creada", "cliente", None, created["id"], {"tipo": service_type}), daemon=True).start()
                 Thread(target=_dispatch_request, args=(created,), daemon=True).start()
             return _json(app, {
                 "ok": True,
@@ -863,6 +966,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         name = _clean(body.get("nombre"), 120)
         phone = _clean(body.get("telefono"), 40)
         email = _clean(body.get("email"), 180).lower()
+        rut = _normalize_rut(body.get("rut"))
+        pin = str(body.get("pin") or "")
+        accepts_terms = body.get("acepta_terminos") is True
+        accepts_privacy = body.get("acepta_privacidad") is True
         roles = [_norm(x) for x in _list_clean(body.get("roles"), 30, 8)]
         roles = list(dict.fromkeys(x for x in roles if x in SERVICE_TYPES))
         communes = _list_clean(body.get("comunas"), 120, 80)
@@ -884,6 +991,12 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {"ok": False, "error": "Completa nombre, teléfono, tipo de servicio y comunas."}, 400)
         if not _valid_email(email):
             return _json(app, {"ok": False, "error": "Ingresa un correo válido."}, 400)
+        if not _valid_rut(rut):
+            return _json(app, {"ok": False, "error": "Ingresa un RUT chileno válido."}, 400)
+        if not _valid_pin(pin):
+            return _json(app, {"ok": False, "error": "Crea una clave de acceso de exactamente 6 números."}, 400)
+        if not accepts_terms or not accepts_privacy:
+            return _json(app, {"ok": False, "error": "Debes aceptar los términos y la política de privacidad."}, 400)
         if "reciclaje" in roles and not materials:
             return _json(app, {"ok": False, "error": "Selecciona los materiales que recibes."}, 400)
         if "belleza" in roles and not specialties:
@@ -893,13 +1006,18 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
 
         code = f"PR-{datetime.now(timezone.utc):%y%m%d}-{uuid.uuid4().hex[:8].upper()}"
         token = uuid.uuid4().hex
+        pin_salt = os.urandom(16).hex()
         payload = {
             "public_id": code,
             "access_token_hash": hashlib.sha256(token.encode("utf-8")).hexdigest(),
             "empresa_id": settings["empresa_id"],
             "nombre": name,
             "telefono": phone,
+            "telefono_normalizado": _normalize_phone(phone),
             "email": email or None,
+            "rut_normalizado": rut,
+            "pin_salt": pin_salt,
+            "pin_hash": _pin_hash(pin, pin_salt),
             "roles": roles,
             "comunas": communes,
             "materiales": materials,
@@ -908,8 +1026,29 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "radio_km": radius,
             "disponible": True,
             "activo": True,
+            "estado_cuenta": "activa",
+            "estado_verificacion": "pendiente",
+            "acepta_terminos": True,
+            "acepta_privacidad": True,
+            "consentimiento_at": datetime.now(timezone.utc).isoformat(),
+            "terminos_version": TERMS_VERSION,
         }
         try:
+            duplicate_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers(),
+                params={
+                    "select": "id",
+                    "empresa_id": f"eq.{settings['empresa_id']}",
+                    "rut_normalizado": f"eq.{rut}",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            duplicate_response.raise_for_status()
+            duplicate_rows = duplicate_response.json() if duplicate_response.content else []
+            if duplicate_rows:
+                return _json(app, {"ok": False, "error": "Ya existe una cuenta con este RUT. Usa la opción Ingresar."}, 409)
             response = requests.post(
                 f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
                 headers=_db_headers("return=representation"),
@@ -922,14 +1061,76 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             rows = response.json() if response.content else []
             created_provider = rows[0] if rows else None
             if created_provider:
+                Thread(target=_audit, args=("prestador_registrado", "prestador", created_provider["id"], None, {"verificacion": "pendiente"}), daemon=True).start()
                 Thread(target=_match_provider, args=(created_provider,), daemon=True).start()
             return _json(app, {
                 "ok": True,
-                "prestador": {"codigo": code, "token": token, "nombre": name, "roles": roles, "especialidades": specialties, "disponible": True},
+                "prestador": {"codigo": code, "token": token, "nombre": name, "roles": roles, "especialidades": specialties, "disponible": True, "estado_verificacion": "pendiente"},
             }, 201)
         except requests.RequestException as exc:
             app.logger.exception("PROVIDER NETWORK ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude conectar con la base de datos."}, 502)
+
+    @app.post(f"{api_base}/prestadores/login")
+    def mobile_provider_login():
+        if not _allow("provider-login", limit=10):
+            return _json(app, {"ok": False, "error": "Demasiados intentos. Espera antes de volver a ingresar."}, 429)
+        body = request.get_json(silent=True) or {}
+        rut = _normalize_rut(body.get("rut"))
+        pin = str(body.get("pin") or "")
+        if not _valid_rut(rut) or not _valid_pin(pin):
+            return _json(app, {"ok": False, "error": "RUT o clave incorrectos."}, 401)
+        try:
+            response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers(),
+                params={
+                    "select": "*",
+                    "empresa_id": f"eq.{settings['empresa_id']}",
+                    "rut_normalizado": f"eq.{rut}",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            rows = response.json() if response.content else []
+            provider = rows[0] if rows else None
+            salt = str((provider or {}).get("pin_salt") or "")
+            stored_hash = str((provider or {}).get("pin_hash") or "")
+            if not provider or not salt or not stored_hash or not hmac.compare_digest(_pin_hash(pin, salt), stored_hash):
+                return _json(app, {"ok": False, "error": "RUT o clave incorrectos."}, 401)
+            if not provider.get("activo") or provider.get("estado_cuenta") != "activa":
+                return _json(app, {"ok": False, "error": "Esta cuenta está suspendida o cerrada. Contacta a soporte."}, 403)
+
+            token = uuid.uuid4().hex
+            login_at = datetime.now(timezone.utc).isoformat()
+            update_response = requests.patch(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers("return=minimal"),
+                params={"id": f"eq.{provider['id']}"},
+                json={
+                    "access_token_hash": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                    "ultimo_login_at": login_at,
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            update_response.raise_for_status()
+            Thread(target=_audit, args=("prestador_login", "prestador", provider["id"]), daemon=True).start()
+            return _json(app, {
+                "ok": True,
+                "prestador": {
+                    "codigo": provider["public_id"],
+                    "token": token,
+                    "nombre": provider.get("nombre"),
+                    "roles": provider.get("roles") or [],
+                    "especialidades": provider.get("especialidades") or [],
+                    "disponible": bool(provider.get("disponible")),
+                    "estado_verificacion": provider.get("estado_verificacion") or "pendiente",
+                },
+            })
+        except (ValueError, requests.RequestException) as exc:
+            app.logger.exception("PROVIDER LOGIN ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude iniciar la sesión."}, 502)
 
     @app.route(f"{api_base}/prestadores/me", methods=["GET", "PATCH"])
     def mobile_provider_me():
@@ -943,7 +1144,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             if request.method == "GET":
                 safe = {key: provider.get(key) for key in (
                     "public_id", "nombre", "email", "roles", "comunas", "materiales", "especialidades",
-                    "vehiculo", "radio_km", "disponible", "created_at"
+                    "vehiculo", "radio_km", "disponible", "estado_cuenta", "estado_verificacion", "created_at"
                 )}
                 return _json(app, {"ok": True, "prestador": safe})
 
@@ -1239,6 +1440,48 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         except requests.RequestException as exc:
             app.logger.exception("CONVERSATION ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude abrir la conversación."}, 502)
+
+    @app.post(f"{api_base}/solicitudes/<public_id>/reclamos")
+    def mobile_create_complaint(public_id):
+        if not _allow("complaint", limit=5, window_seconds=86400):
+            return _json(app, {"ok": False, "error": "Alcanzaste el límite diario de reportes."}, 429)
+        body = request.get_json(silent=True) or {}
+        category = _clean(body.get("categoria"), 30).lower()
+        description = _clean(body.get("descripcion"), 2000)
+        try:
+            actor, request_row, provider = _conversation_access(public_id, body)
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso inválido para reportar esta solicitud."}, 401)
+            provider_id = request_row.get("prestador_id")
+            if not provider_id:
+                return _json(app, {"ok": False, "error": "Todavía no existe un prestador asignado para reportar."}, 409)
+            if category not in REPORT_CATEGORIES:
+                return _json(app, {"ok": False, "error": "Selecciona un motivo válido."}, 400)
+            if len(description) < 10:
+                return _json(app, {"ok": False, "error": "Describe el problema con al menos 10 caracteres."}, 400)
+            response = requests.post(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_reclamos",
+                headers=_db_headers("return=representation"),
+                json={
+                    "empresa_id": settings["empresa_id"],
+                    "solicitud_id": request_row["id"],
+                    "prestador_id": provider_id,
+                    "reportante_tipo": actor,
+                    "categoria": category,
+                    "descripcion": description,
+                    "estado": "abierto",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            rows = response.json() if response.content else []
+            complaint = rows[0] if rows else {"estado": "abierto"}
+            actor_id = provider.get("id") if provider else None
+            Thread(target=_audit, args=("reclamo_creado", actor, actor_id, request_row["id"], {"categoria": category}), daemon=True).start()
+            return _json(app, {"ok": True, "reclamo": {"id": complaint.get("id"), "estado": complaint.get("estado", "abierto")}}, 201)
+        except requests.RequestException as exc:
+            app.logger.exception("COMPLAINT ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude registrar el reporte."}, 502)
 
     @app.post(f"{api_base}/solicitudes/<public_id>/cotizaciones")
     def mobile_create_quote(public_id):
