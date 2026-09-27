@@ -41,6 +41,15 @@ SERVICE_LABELS = {
     "otro": "Otros servicios",
 }
 
+PHOTO_BUCKET = "llama-jaime-solicitudes"
+PHOTO_MAX_FILES = 5
+PHOTO_MAX_BYTES = 8 * 1024 * 1024
+PHOTO_MIME_TYPES = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
+
 
 def _json(app, payload, status=200):
     response = app.json.response(payload)
@@ -83,6 +92,16 @@ def _valid_email(value):
 def _valid_phone(value):
     digits = re.sub(r"\D", "", str(value or ""))
     return 8 <= len(digits) <= 15
+
+
+def _valid_image_signature(content, mime_type):
+    if mime_type == "image/jpeg":
+        return content.startswith(b"\xff\xd8\xff")
+    if mime_type == "image/png":
+        return content.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime_type == "image/webp":
+        return len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP"
+    return False
 
 
 def _list_clean(value, item_limit=120, max_items=50):
@@ -161,6 +180,47 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         expected = str(request_row.get("access_token_hash") or "")
         actual = hashlib.sha256(token.encode("utf-8")).hexdigest()
         return request_row if expected and expected == actual else None
+
+    def _photo_rows(request_id):
+        response = requests.get(
+            f"{settings['supabase_url']}/rest/v1/nexi_app_fotos_solicitud",
+            headers=_db_headers(),
+            params={
+                "select": "id,object_path,mime_type,created_at",
+                "solicitud_id": f"eq.{request_id}",
+                "order": "created_at.asc",
+                "limit": str(PHOTO_MAX_FILES),
+            },
+            timeout=settings["supabase_timeout"],
+        )
+        response.raise_for_status()
+        return response.json() if response.content else []
+
+    def _signed_photo_url(object_path, expires_in=3600):
+        response = requests.post(
+            f"{settings['supabase_url']}/storage/v1/object/sign/{PHOTO_BUCKET}/{object_path}",
+            headers=_db_headers(),
+            json={"expiresIn": expires_in},
+            timeout=settings["supabase_timeout"],
+        )
+        response.raise_for_status()
+        data = response.json() if response.content else {}
+        signed = data.get("signedURL") or data.get("signedUrl") or ""
+        if signed.startswith("http"):
+            return signed
+        if signed.startswith("/storage/v1/"):
+            return f"{settings['supabase_url']}{signed}"
+        if signed:
+            return f"{settings['supabase_url']}/storage/v1{signed if signed.startswith('/') else '/' + signed}"
+        return ""
+
+    def _safe_photos(request_id):
+        output = []
+        for row in _photo_rows(request_id):
+            url = _signed_photo_url(row.get("object_path"))
+            if url:
+                output.append({"id": row.get("id"), "url": url, "mime_type": row.get("mime_type")})
+        return output
 
     def _send_custom_push(table, filter_key, filter_value, title, body, url, tag):
         if not settings.get("vapid_public_key") or not settings.get("vapid_private_key"):
@@ -435,6 +495,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "push": bool(settings.get("vapid_public_key") and settings.get("vapid_private_key")),
             "chat": True,
             "quotes": True,
+            "photos": True,
         })
 
     @app.post(f"{api_base}/chat")
@@ -599,6 +660,77 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             app.logger.exception("MOBILE STATUS ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude consultar la solicitud."}, 502)
 
+    @app.post(f"{api_base}/solicitudes/<public_id>/fotos")
+    def mobile_upload_request_photos(public_id):
+        if not _allow("request-photos", limit=20):
+            return _json(app, {"ok": False, "error": "Alcanzaste el límite temporal de fotografías."}, 429)
+        if request.content_length and request.content_length > (PHOTO_MAX_FILES * PHOTO_MAX_BYTES + 1024 * 1024):
+            return _json(app, {"ok": False, "error": "La carga de fotografías es demasiado grande."}, 413)
+        try:
+            request_row = _client_auth(public_id, request.form.get("token"))
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
+            incoming = request.files.getlist("fotos")
+            if not incoming:
+                return _json(app, {"ok": False, "error": "Selecciona al menos una fotografía."}, 400)
+            existing = _photo_rows(request_row["id"])
+            available = PHOTO_MAX_FILES - len(existing)
+            if available <= 0 or len(incoming) > available:
+                return _json(app, {"ok": False, "error": f"Puedes guardar hasta {PHOTO_MAX_FILES} fotografías por solicitud."}, 400)
+
+            prepared = []
+            for photo in incoming:
+                mime_type = _clean(photo.mimetype, 80).lower()
+                extension = PHOTO_MIME_TYPES.get(mime_type)
+                if not extension:
+                    return _json(app, {"ok": False, "error": "Usa fotografías JPG, PNG o WebP."}, 400)
+                content = photo.read(PHOTO_MAX_BYTES + 1)
+                if not content or len(content) > PHOTO_MAX_BYTES:
+                    return _json(app, {"ok": False, "error": "Cada fotografía debe pesar menos de 8 MB."}, 400)
+                if not _valid_image_signature(content, mime_type):
+                    return _json(app, {"ok": False, "error": "Uno de los archivos no es una imagen válida."}, 400)
+                prepared.append((mime_type, extension, content))
+
+            uploaded = []
+            for mime_type, extension, content in prepared:
+                object_path = f"{settings['empresa_id']}/{request_row['id']}/{uuid.uuid4().hex}.{extension}"
+                storage_headers = {
+                    **_db_headers(),
+                    "Content-Type": mime_type,
+                    "x-upsert": "false",
+                }
+                storage_response = requests.post(
+                    f"{settings['supabase_url']}/storage/v1/object/{PHOTO_BUCKET}/{object_path}",
+                    headers=storage_headers,
+                    data=content,
+                    timeout=max(30, settings["supabase_timeout"]),
+                )
+                storage_response.raise_for_status()
+                metadata_response = requests.post(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_fotos_solicitud",
+                    headers=_db_headers("return=representation"),
+                    json={
+                        "empresa_id": settings["empresa_id"],
+                        "solicitud_id": request_row["id"],
+                        "object_path": object_path,
+                        "mime_type": mime_type,
+                        "size_bytes": len(content),
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                metadata_response.raise_for_status()
+                rows = metadata_response.json() if metadata_response.content else []
+                url = _signed_photo_url(object_path)
+                uploaded.append({
+                    "id": rows[0].get("id") if rows else None,
+                    "url": url,
+                    "mime_type": mime_type,
+                })
+            return _json(app, {"ok": True, "fotos": uploaded}, 201)
+        except requests.RequestException as exc:
+            app.logger.exception("REQUEST PHOTOS ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude guardar las fotografías."}, 502)
+
     @app.post(f"{api_base}/prestadores")
     def mobile_create_provider():
         if not _allow("provider-register", limit=5):
@@ -756,6 +888,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     item.pop("nombre", None)
                     item.pop("direccion_origen", None)
                     item.pop("direccion_destino", None)
+                else:
+                    item["fotos"] = _safe_photos(item["id"])
                 output.append({"match_id": match["id"], "match_estado": match["estado"], "solicitud": item})
             return _json(app, {"ok": True, "disponible": provider.get("disponible"), "oportunidades": output})
         except requests.RequestException as exc:
@@ -936,6 +1070,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 "prestador": {"nombre": provider_name or "Prestador"} if provider_id else None,
                 "mensajes": messages_response.json() if messages_response.content and provider_id else [],
                 "cotizacion": quote,
+                "fotos": _safe_photos(request_row["id"]),
             })
         except requests.RequestException as exc:
             app.logger.exception("CONVERSATION ERROR: %r", exc)
