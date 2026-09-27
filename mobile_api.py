@@ -2584,7 +2584,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
                 headers=_db_headers(),
                 params={
-                    "select": "id,nombre,roles,comunas,especialidades,radio_km,estado_verificacion,verificado_at,created_at",
+                    "select": "id,nombre,roles,comunas,especialidades,radio_km,estado_verificacion,verificado_at,created_at,foto_perfil_path",
                     "id": f"eq.{provider_id}",
                     "empresa_id": f"eq.{settings['empresa_id']}",
                     "activo": "eq.true",
@@ -2599,6 +2599,24 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 return _json(app, {"ok": False, "error": "Prestador no disponible."}, 404)
 
             provider = rows[0]
+
+            # La foto vive en un bucket privado. Solo entregamos al cliente
+            # autenticado una URL firmada temporal; nunca exponemos el path.
+            profile_photo_url = None
+            profile_photo_path = provider.get("foto_perfil_path")
+            if profile_photo_path:
+                photo_response = requests.post(
+                    f"{settings['supabase_url']}/storage/v1/object/sign/{PROFILE_BUCKET}/{profile_photo_path}",
+                    headers=_db_headers(),
+                    json={"expiresIn": 900},
+                    timeout=settings["supabase_timeout"],
+                )
+                photo_response.raise_for_status()
+                photo_payload = photo_response.json() if photo_response.content else {}
+                signed = photo_payload.get("signedURL") or photo_payload.get("signedUrl")
+                if signed:
+                    profile_photo_url = signed if signed.startswith("http") else f"{settings['supabase_url']}/storage/v1{signed}"
+
             # Nunca exponer RUT, teléfono, correo, documentos, tokens ni datos administrativos.
             reputation = {"promedio": 0, "evaluaciones": 0, "cinco_estrellas": 0}
             reputation_response = requests.post(
@@ -2628,6 +2646,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 "verificado": provider.get("estado_verificacion") == "verificado",
                 "verificado_at": provider.get("verificado_at"),
                 "miembro_desde": provider.get("created_at"),
+                "foto_url": profile_photo_url,
                 "reputacion": reputation,
             }
             return _json(app, {"ok": True, "prestador": profile})
