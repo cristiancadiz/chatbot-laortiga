@@ -2470,6 +2470,118 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {"ok": False, "error": "No pude cargar la ficha del prestador."}, 502)
 
 
+    @app.get(f"{api_base}/solicitudes/<public_id>/evaluacion")
+    def mobile_get_provider_review(public_id):
+        """Consulta si el cliente ya evaluó al prestador asignado."""
+        access_token = _clean(request.args.get("token"), 120)
+        try:
+            request_row = _client_auth(public_id, access_token)
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
+            provider_id = request_row.get("prestador_id")
+            if not provider_id:
+                return _json(app, {"ok": True, "evaluacion": None, "puede_evaluar": False})
+
+            response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_evaluaciones_prestador",
+                headers=_db_headers(),
+                params={
+                    "select": "id,calificacion,comentario,created_at",
+                    "empresa_id": f"eq.{settings['empresa_id']}",
+                    "solicitud_id": f"eq.{request_row['id']}",
+                    "prestador_id": f"eq.{provider_id}",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            rows = response.json() if response.content else []
+            return _json(app, {
+                "ok": True,
+                "evaluacion": rows[0] if rows else None,
+                "puede_evaluar": not bool(rows),
+            })
+        except requests.RequestException as exc:
+            app.logger.exception("GET PROVIDER REVIEW ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude consultar la evaluación."}, 502)
+
+
+    @app.post(f"{api_base}/solicitudes/<public_id>/evaluacion")
+    def mobile_create_provider_review(public_id):
+        """Crea una única evaluación del prestador realmente asignado a la solicitud."""
+        if not _allow("provider-review", 30, 3600):
+            return _json(app, {"ok": False, "error": "Demasiados intentos. Intenta más tarde."}, 429)
+
+        body = request.get_json(silent=True) or {}
+        access_token = _clean(body.get("token"), 120)
+        comment = _clean(body.get("comentario"), 1000) or None
+        try:
+            rating = int(body.get("calificacion"))
+        except (TypeError, ValueError):
+            rating = 0
+        if rating < 1 or rating > 5:
+            return _json(app, {"ok": False, "error": "La calificación debe ser entre 1 y 5 estrellas."}, 400)
+
+        try:
+            request_row = _client_auth(public_id, access_token)
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
+
+            provider_id = request_row.get("prestador_id")
+            if not provider_id:
+                return _json(app, {"ok": False, "error": "Esta solicitud todavía no tiene un prestador asignado."}, 409)
+
+            # Evita evaluar a un prestador distinto: el ID siempre sale de la solicitud autenticada.
+            existing = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_evaluaciones_prestador",
+                headers=_db_headers(),
+                params={
+                    "select": "id",
+                    "solicitud_id": f"eq.{request_row['id']}",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            existing.raise_for_status()
+            if existing.json():
+                return _json(app, {"ok": False, "error": "Esta solicitud ya fue evaluada."}, 409)
+
+            response = requests.post(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_evaluaciones_prestador",
+                headers=_db_headers("return=representation"),
+                json={
+                    "empresa_id": settings["empresa_id"],
+                    "solicitud_id": request_row["id"],
+                    "prestador_id": provider_id,
+                    "calificacion": rating,
+                    "comentario": comment,
+                    "visible": True,
+                    "moderada": False,
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            rows = response.json() if response.content else []
+            evaluation = rows[0] if rows else {
+                "calificacion": rating,
+                "comentario": comment,
+            }
+            _audit(
+                "evaluacion_prestador_creada",
+                actor_tipo="cliente",
+                actor_id=request_row.get("id"),
+                solicitud_id=request_row.get("id"),
+                metadata={"prestador_id": provider_id, "calificacion": rating},
+            )
+            return _json(app, {"ok": True, "evaluacion": evaluation}, 201)
+        except requests.RequestException as exc:
+            # La restricción UNIQUE(solicitud_id) también protege contra envíos simultáneos.
+            if getattr(exc, "response", None) is not None and exc.response.status_code == 409:
+                return _json(app, {"ok": False, "error": "Esta solicitud ya fue evaluada."}, 409)
+            app.logger.exception("CREATE PROVIDER REVIEW ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude guardar la evaluación."}, 502)
+
+
     @app.post(f"{api_base}/solicitudes/<public_id>/push/subscribe")
     def mobile_client_push_subscribe(public_id):
         body = request.get_json(silent=True) or {}
