@@ -1,3 +1,162 @@
+
+Cargando mensajes anteriores…
+etnregfamelo como texto
+Claro. Este es el nuevo app.py V6 APP CLEAN completo como texto. Es el mismo que generé recién; no estoy reconstruyendo otra versión.
+
+"""
+
+        "empresa_id":
+            LLAMA_A_JAIME_EMPRESA_ID,
+
+        "supabase_url":
+            SUPABASE_URL,
+
+        "supabase_timeout":
+            SUPABASE_TIMEOUT,
+
+        "ai_model":
+            OPENAI_MODEL,
+
+        "ai_enabled":
+            bool(
+                openai_client
+            ),
+
+        "vapid_public_key":
+            WEB_PUSH_VAPID_PUBLIC_KEY,
+
+        "vapid_private_key":
+            WEB_PUSH_VAPID_PRIVATE_KEY,
+
+        "vapid_contact":
+            WEB_PUSH_CONTACT,
+
+    },
+
+    supabase_headers=
+        supabase_headers,
+
+    ai_generate=
+        generar_texto_ia,
+
+    # V6:
+    # Ya no existe despacho legado
+    # por WhatsApp / La Ortiga.
+    legacy_dispatch=None,
+
+)
+
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
+@app.get("/")
+def health():
+
+    return {
+
+        "ok":
+            True,
+
+        "app":
+            "Llama a Jaime Servicios",
+
+        "version":
+            APP_VERSION,
+
+        "architecture":
+            "app-only",
+
+        "database":
+            "Supabase",
+
+        "ai":
+            bool(
+                openai_client
+            ),
+
+
+Este es el archivo N.º 1: app.py.
+
+El siguiente es el importante y bastante más grande: mobile_api.py V5.4 de 1.664 líneas, que contiene la lógica real de Llama a Jaime. 
+
+Ahí podemos hacer lo mismo que pediste: entregártelo como texto y después optimizarlo/ordenarlo sin perder funcionalidades.
+
+ik
+Perfecto 👍
+
+entegame todos lo stexto como descarfbrsagle texto.
+
+Listo, Cris. Te dejé todos los archivos de la V6 como texto .txt:
+
+Y aquí están todos juntos en un ZIP:
+
+Descargar todos los TXT — Llama a Jaime V6
+
+El principal quedó en 223 líneas y mobile_api en 1.664 líneas. El siguiente paso puede ser optimizar esas 1.664 líneas para seguir reduciendo y ordenando el proyecto. 
+
+
+LLAMA_A_JAIME_V6_app.txt
+Documento
+
+LLAMA_A_JAIME_V6_mobile_api.txt
+Documento
+
+LLAMA_A_JAIME_V6_env_example.txt
+Documento
+
+LLAMA_A_JAIME_V6_INSTRUCCIONES.txt
+Documento
+Mostrar menos
+oke sto ajustan  las imagenes de las categorias?
+No. Estos archivos V6 no ajustan ni cambian las imágenes de las categorías.
+
+La V6 que te entregué modifica principalmente el backend (app.py + mobile_api.py). Las imágenes y la presentación visual de categorías están en el frontend, principalmente en:
+
+mobile_app/index.html
+
+y las imágenes en algo como:
+
+mobile_app/assets/categories/
+
+Por lo tanto, tus imágenes actuales deberían mantenerse tal como están siempre que conserves la carpeta mobile_app que ya tienes.
+
+Si lo que quieres es que las imágenes de categorías se adapten mejor al celular —mismo tamaño, sin deformarse, mejor recorte y responsive—, tenemos que modificar el index.html, no estos dos archivos.
+
+neceistip que se ajsute las cateogtria apra que calcen bien
+Sí. Para que las imágenes de las categorías calcen bien dentro de cada tarjeta sin deformarse, hay que ajustar el CSS del mobile_app/index.html.
+
+Envíame tu index.html actual —idealmente el último que estás usando— y te lo devuelvo completo como TXT descargable, manteniendo todo lo demás igual y corrigiendo específicamente:
+
+mismo tamaño visual para todas las categorías;
+imágenes centradas;
+sin estirarlas ni deformarlas;
+recorte automático cuando corresponda;
+tarjetas alineadas;
+adaptación correcta a distintos celulares;
+sin alterar las categorías ni la lógica de la aplicación.
+
+Texto pegado(3).txt
+Documento
+.
+
+Listo, Cris. Ajusté tu index.html para que las imágenes de las categorías calcen de forma uniforme:
+
+Todas las tarjetas mantienen la misma altura.
+Las imágenes conservan proporción y no se deforman.
+El encuadre queda centrado.
+Se adapta a pantallas pequeñas.
+“Otros servicios” sigue ocupando el ancho completo, pero ahora mantiene la misma altura visual.
+No modifiqué la lógica JavaScript ni las categorías.
+Este TXT reemplaza el contenido de tu mobile_app/index.html. 
+
+
+LLAMA_A_JAIME_index_CATEGORIAS_AJUSTADAS.txt
+Documento
+
+
+
 <!doctype html>
 <html lang="es">
 <head>
@@ -29,15 +188,18 @@
     .conversation-modal{position:fixed;inset:0;z-index:60;margin:auto;width:min(640px,100%);background:var(--cream);display:flex;flex-direction:column}.conversation-modal[hidden]{display:none}.conversation-head{display:flex;align-items:center;gap:12px;padding:14px 18px;background:white;border-bottom:1px solid var(--line)}.conversation-head button{width:38px;height:38px;border:0;border-radius:12px;background:#edf3f6;color:var(--forest);font-size:20px}.conversation-head h2{margin:0;font-size:18px}.conversation-head span{display:block;color:var(--muted);font-size:11px}.conversation-body{display:flex;flex:1;min-height:0;flex-direction:column;padding:12px 18px calc(12px + env(safe-area-inset-bottom))}.conversation-messages{flex:1;overflow:auto;padding:5px 0}.conversation-message{max-width:84%;margin:8px 0;padding:10px 12px;border-radius:16px;background:white;border:1px solid var(--line);white-space:pre-wrap}.conversation-message.mine{margin-left:auto;background:#073b66;color:white;border-color:#073b66}.conversation-message.system{max-width:100%;text-align:center;background:#edf7f7;color:#315463;font-size:12px}.quote-box{padding:12px;margin-bottom:8px;border-radius:16px;background:#fff2dc;border:1px solid #ffd18a}.quote-box h3{margin:0 0 4px}.quote-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.quote-actions button{border:0;border-radius:12px;padding:10px;font-weight:800}.quote-accept{background:#08a6a6;color:white}.quote-reject{background:#f3e5e2;color:#923b34}.quote-form{display:grid;grid-template-columns:120px 1fr;gap:8px;margin:8px 0}.quote-form input{min-width:0;border:1px solid var(--line);border-radius:12px;padding:10px}.quote-form button{grid-column:1/-1;border:0;border-radius:12px;padding:10px;background:#08a6a6;color:white;font-weight:800}.conversation-compose{display:flex;gap:8px}.conversation-compose input{flex:1;min-width:0;border:1px solid var(--line);border-radius:14px;padding:12px}.conversation-compose button{width:auto;padding:0 16px;border:0;border-radius:14px;background:#ff9f1c;color:#073b66;font-weight:900}.client-notify{border:0;background:transparent;color:#073b66;font-weight:800;padding:8px 0;text-align:left}
     .photo-picker{display:block;border:1px dashed #91a9b7;border-radius:16px;padding:14px;background:#f7fbfc;text-align:center;color:var(--forest);font-weight:800}.photo-picker input{position:absolute;width:1px;height:1px;opacity:0}.photo-picker small{display:block;color:var(--muted);font-weight:500;margin-top:3px}.photo-preview,.photo-gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:9px}.photo-item{position:relative;aspect-ratio:1;border-radius:13px;overflow:hidden;background:#dce6ea}.photo-item img{width:100%;height:100%;object-fit:cover}.photo-item button{position:absolute;right:4px;top:4px;width:27px;height:27px;border:0;border-radius:50%;background:rgba(9,35,52,.8);color:white;font-weight:900}.photo-gallery{margin:0 0 8px}.photo-gallery a{display:block;aspect-ratio:1;border-radius:13px;overflow:hidden;background:#dce6ea}.photo-gallery img{width:100%;height:100%;object-fit:cover}.opportunity .photo-gallery{grid-template-columns:repeat(3,1fr)}
     .location-btn{width:100%;border:1px solid #9ab6c6;border-radius:14px;padding:11px 13px;background:#edf6fa;color:var(--forest);font-weight:800;text-align:left}.location-btn:disabled{opacity:.6}.location-status{display:block;margin-top:6px;color:var(--muted);font-size:12px}.location-panel{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}.location-card{padding:10px;border:1px solid var(--line);border-radius:14px;background:white;font-size:12px}.location-card strong{display:block;margin-bottom:3px}.location-card a{color:#087f87;font-weight:800;text-decoration:none}.location-card span{display:block;color:var(--muted);margin-top:3px}.share-location{grid-column:1/-1;border:0;border-radius:13px;padding:10px;background:#e1f2f2;color:var(--forest);font-weight:800}
-    .quick{gap:12px}
-    .service-card{position:relative;isolation:isolate;display:flex;align-items:flex-end;min-height:176px;aspect-ratio:4/3;overflow:hidden;border:0;border-radius:22px;padding:16px;background-image:linear-gradient(180deg,rgba(4,24,39,.02) 30%,rgba(4,24,39,.88) 100%),var(--service-image);background-position:center;background-size:cover;color:white;box-shadow:0 10px 28px rgba(7,59,102,.16);transition:transform .18s ease,box-shadow .18s ease}
-    .service-card:after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(180deg,transparent 45%,rgba(3,24,39,.18) 100%)}
+    .quick{gap:12px;grid-auto-rows:1fr}
+    .service-card{position:relative;isolation:isolate;display:flex;align-items:flex-end;width:100%;min-width:0;height:180px;min-height:180px;aspect-ratio:auto;overflow:hidden;border:0;border-radius:22px;padding:16px;background-color:#dce6ea;background-image:linear-gradient(180deg,rgba(4,24,39,.03) 28%,rgba(4,24,39,.90) 100%),var(--service-image);background-repeat:no-repeat;background-position:center center;background-size:cover;color:white;box-shadow:0 10px 28px rgba(7,59,102,.16);transition:transform .18s ease,box-shadow .18s ease}
+    .service-card:after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(180deg,transparent 42%,rgba(3,24,39,.22) 100%)}
     .service-card:hover{transform:translateY(-2px);box-shadow:0 14px 32px rgba(7,59,102,.22)}
     .service-card:focus-visible{outline:3px solid var(--leaf);outline-offset:3px}
-    .service-copy{position:relative;z-index:1;display:block;width:100%;text-shadow:0 1px 8px rgba(0,0,0,.45)}
+    .service-copy{position:relative;z-index:1;display:block;width:100%;min-width:0;text-shadow:0 1px 8px rgba(0,0,0,.45)}
     .service-card .service-copy strong{display:block;margin:0 0 2px;color:white;font-size:18px;line-height:1.15}
     .service-card .service-copy span{display:block;color:rgba(255,255,255,.9);font-size:12px;line-height:1.3}
-    .quick .service-card:last-child:nth-child(odd){grid-column:1/-1;min-height:148px;aspect-ratio:2/1;background-position:center 42%}.conditional-field[hidden]{display:none}
+    .quick .service-card:last-child:nth-child(odd){grid-column:1/-1;height:180px;min-height:180px;aspect-ratio:auto;background-position:center center}
+    @media(max-width:420px){.quick{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.service-card,.quick .service-card:last-child:nth-child(odd){height:164px;min-height:164px}.quick .service-card:last-child:nth-child(odd){grid-column:1/-1}}
+    @media(max-width:340px){.service-card,.quick .service-card:last-child:nth-child(odd){height:150px;min-height:150px;padding:13px}.service-card .service-copy strong{font-size:16px}.service-card .service-copy span{font-size:11px}}
+    .conditional-field[hidden]{display:none}
     .chat-request-cta{display:block;width:100%;margin-top:12px;border:0;border-radius:13px;padding:12px 14px;background:var(--leaf);color:var(--forest);font-weight:900;text-align:center;box-shadow:0 6px 16px rgba(7,59,102,.12)}
     .legal-box{margin:12px 0;border:1px solid var(--line);border-radius:14px;padding:11px 13px;background:#f7fafb;color:var(--muted);font-size:12px}.legal-box summary{cursor:pointer;color:var(--forest);font-weight:900}.legal-box p{margin:8px 0 0}.consent{display:flex;align-items:flex-start;gap:9px;margin:10px 0;font-size:12px;color:#415564}.consent input{width:18px;height:18px;margin-top:1px;flex:0 0 auto}.secondary{width:100%;border:1px solid #9ab6c6;border-radius:14px;padding:11px 13px;background:white;color:var(--forest);font-weight:800}.access-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}.security-status{display:block;margin-top:3px;color:#8a6313;font-size:11px;font-weight:800}.report-toggle{width:100%;margin-top:10px;border:0;background:transparent;color:#a6382f;text-decoration:underline;font-weight:800}.report-form{margin-top:9px;padding:12px;border:1px solid #e5c7c3;border-radius:14px;background:#fff8f7}.report-form[hidden]{display:none}.report-form select,.report-form textarea{width:100%;margin-bottom:8px;border:1px solid var(--line);border-radius:11px;padding:10px}.report-form textarea{min-height:76px;resize:vertical}.report-form button{width:100%;border:0;border-radius:11px;padding:10px;background:#a6382f;color:white;font-weight:900}
     @media(max-width:380px){.nav button{font-size:9px}.nav button b{font-size:18px}}
