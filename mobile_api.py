@@ -2213,6 +2213,125 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             app.logger.exception("ADMIN PROVIDER DETAIL ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude cargar la ficha del prestador."}, 502)
 
+
+    @app.get(f"{api_base}/admin/prestadores/<provider_id>/documentos")
+    def mobile_admin_provider_documents(provider_id):
+        admin, error_response = _admin_required()
+        if error_response:
+            return error_response
+        try:
+            provider_uuid = str(uuid.UUID(provider_id))
+        except (ValueError, TypeError):
+            return _json(app, {"ok": False, "error": "Prestador inválido."}, 400)
+        try:
+            provider_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers(),
+                params={"select":"id","id":f"eq.{provider_uuid}","empresa_id":f"eq.{admin['empresa_id']}","limit":"1"},
+                timeout=settings["supabase_timeout"],
+            )
+            provider_response.raise_for_status()
+            if not (provider_response.json() if provider_response.content else []):
+                return _json(app, {"ok": False, "error": "Prestador no encontrado."}, 404)
+            response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_documentos_prestador",
+                headers=_db_headers(),
+                params={
+                    "select":"id,tipo_documento,nombre_documento,archivo_path,archivo_nombre,archivo_mime,archivo_bytes,estado_revision,fecha_emision,fecha_vencimiento,observacion_prestador,observacion_admin,revisado_por,revisado_at,created_at,updated_at",
+                    "empresa_id":f"eq.{admin['empresa_id']}",
+                    "prestador_id":f"eq.{provider_uuid}",
+                    "order":"created_at.desc",
+                    "limit":"200",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            docs=response.json() if response.content else []
+            # Nunca se devuelve archivo_path al navegador.
+            for doc in docs:
+                doc.pop("archivo_path", None)
+            return _json(app, {"ok":True,"documentos":docs})
+        except requests.RequestException as exc:
+            app.logger.exception("ADMIN PROVIDER DOCUMENTS ERROR: %r", exc)
+            return _json(app, {"ok":False,"error":"No pude cargar los documentos."},502)
+
+    @app.get(f"{api_base}/admin/documentos/<document_id>/ver")
+    def mobile_admin_view_document(document_id):
+        admin, error_response = _admin_required()
+        if error_response:
+            return error_response
+        try:
+            document_uuid=str(uuid.UUID(document_id))
+        except (ValueError,TypeError):
+            return _json(app,{"ok":False,"error":"Documento inválido."},400)
+        try:
+            response=requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_documentos_prestador",
+                headers=_db_headers(),
+                params={"select":"id,archivo_path,archivo_nombre,archivo_mime","id":f"eq.{document_uuid}","empresa_id":f"eq.{admin['empresa_id']}","limit":"1"},
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            rows=response.json() if response.content else []
+            if not rows:
+                return _json(app,{"ok":False,"error":"Documento no encontrado."},404)
+            doc=rows[0]
+            sign=requests.post(
+                f"{settings['supabase_url']}/storage/v1/object/sign/{DOCUMENT_BUCKET}/{doc['archivo_path']}",
+                headers=_db_headers(),
+                json={"expiresIn":300},
+                timeout=settings["supabase_timeout"],
+            )
+            sign.raise_for_status()
+            data=sign.json() if sign.content else {}
+            signed=data.get("signedURL") or data.get("signedUrl") or ""
+            if signed.startswith("/storage/v1/"):
+                signed=f"{settings['supabase_url']}{signed}"
+            elif signed and not signed.startswith("http"):
+                signed=f"{settings['supabase_url']}/storage/v1{signed if signed.startswith('/') else '/' + signed}"
+            if not signed:
+                return _json(app,{"ok":False,"error":"No pude generar el acceso temporal."},502)
+            return _json(app,{"ok":True,"url":signed,"expires_in":300,"nombre":doc.get("archivo_nombre"),"mime":doc.get("archivo_mime")})
+        except requests.RequestException as exc:
+            app.logger.exception("ADMIN DOCUMENT VIEW ERROR: %r",exc)
+            return _json(app,{"ok":False,"error":"No pude abrir el documento."},502)
+
+    @app.post(f"{api_base}/admin/documentos/<document_id>/revision")
+    def mobile_admin_review_document(document_id):
+        admin, error_response = _admin_required()
+        if error_response:
+            return error_response
+        if not _allow("admin-document-review",180,3600):
+            return _json(app,{"ok":False,"error":"Demasiadas revisiones. Intenta más tarde."},429)
+        try:
+            document_uuid=str(uuid.UUID(document_id))
+        except (ValueError,TypeError):
+            return _json(app,{"ok":False,"error":"Documento inválido."},400)
+        body=request.get_json(silent=True) or {}
+        state=_clean(body.get("estado"),20).lower()
+        observation=_clean(body.get("observacion"),2000) or None
+        if state not in {"pendiente","en_revision","aprobado","rechazado"}:
+            return _json(app,{"ok":False,"error":"Estado de revisión inválido."},400)
+        if state=="rechazado" and not observation:
+            return _json(app,{"ok":False,"error":"Indica el motivo del rechazo para que el prestador pueda corregirlo."},400)
+        try:
+            response=requests.post(
+                f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_admin_revisar_documento",
+                headers=_db_headers(),
+                json={"p_admin_auth_user_id":admin["auth_user_id"],"p_documento_id":document_uuid,"p_estado":state,"p_observacion":observation},
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            result=response.json() if response.content else {}
+            if isinstance(result,list):
+                result=result[0] if result else {}
+            if not result.get("ok"):
+                return _json(app,{"ok":False,"error":result.get("error") or "No pude revisar el documento."},409)
+            return _json(app,{"ok":True,"resultado":result})
+        except requests.RequestException as exc:
+            app.logger.exception("ADMIN DOCUMENT REVIEW ERROR: %r",exc)
+            return _json(app,{"ok":False,"error":"No pude guardar la revisión."},502)
+
     @app.post(f"{api_base}/admin/prestadores/<provider_id>/accion")
     def mobile_admin_provider_action(provider_id):
         admin, error_response = _admin_required()
