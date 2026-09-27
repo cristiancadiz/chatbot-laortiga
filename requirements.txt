@@ -13,3 +13,4 @@ pytz
 resend
 psycopg2-binary
 twilio
+pywebpush==2.5.0
