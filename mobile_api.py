@@ -139,6 +139,82 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         rows = response.json() if response.content else []
         return rows[0] if rows else None
 
+    def _request_by_code(public_id):
+        public_id = _clean(public_id, 40).upper()
+        if not re.fullmatch(r"NX-\d{6}-[A-F0-9]{8}", public_id):
+            return None
+        response = requests.get(
+            f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
+            headers=_db_headers(),
+            params={"select": "*", "public_id": f"eq.{public_id}", "limit": "1"},
+            timeout=settings["supabase_timeout"],
+        )
+        response.raise_for_status()
+        rows = response.json() if response.content else []
+        return rows[0] if rows else None
+
+    def _client_auth(public_id, token):
+        token = _clean(token, 100)
+        request_row = _request_by_code(public_id)
+        if not request_row or len(token) < 20:
+            return None
+        expected = str(request_row.get("access_token_hash") or "")
+        actual = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        return request_row if expected and expected == actual else None
+
+    def _send_custom_push(table, filter_key, filter_value, title, body, url, tag):
+        if not settings.get("vapid_public_key") or not settings.get("vapid_private_key"):
+            return 0
+        try:
+            from pywebpush import WebPushException, webpush
+        except ImportError:
+            app.logger.warning("PUSH DESACTIVADO: falta pywebpush")
+            return 0
+        response = requests.get(
+            f"{settings['supabase_url']}/rest/v1/{table}",
+            headers=_db_headers(),
+            params={
+                "select": "id,endpoint,p256dh,auth",
+                filter_key: f"eq.{filter_value}",
+                "activa": "eq.true",
+                "limit": "10",
+            },
+            timeout=settings["supabase_timeout"],
+        )
+        response.raise_for_status()
+        payload = json.dumps({
+            "title": title,
+            "body": body,
+            "url": url,
+            "tag": tag,
+        }, ensure_ascii=False)
+        sent = 0
+        for subscription in (response.json() if response.content else []):
+            try:
+                webpush(
+                    subscription_info={
+                        "endpoint": subscription["endpoint"],
+                        "keys": {"p256dh": subscription["p256dh"], "auth": subscription["auth"]},
+                    },
+                    data=payload,
+                    vapid_private_key=settings["vapid_private_key"],
+                    vapid_claims={"sub": settings["vapid_contact"]},
+                    ttl=3600,
+                )
+                sent += 1
+            except WebPushException as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                app.logger.warning("CUSTOM PUSH ERROR table=%s status=%s", table, status)
+                if status in {404, 410}:
+                    requests.patch(
+                        f"{settings['supabase_url']}/rest/v1/{table}",
+                        headers=_db_headers("return=minimal"),
+                        params={"id": f"eq.{subscription['id']}"},
+                        json={"activa": False},
+                        timeout=settings["supabase_timeout"],
+                    )
+        return sent
+
     def _send_push(provider_id, request_row):
         if not settings.get("vapid_public_key") or not settings.get("vapid_private_key"):
             return 0
@@ -294,6 +370,34 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             except Exception as exc:
                 app.logger.exception("MOBILE LEGACY DISPATCH ERROR: %r", exc)
 
+    def _notify_pending_matches(request_row):
+        """Vuelve a avisar a los prestadores disponibles tras un rechazo de precio."""
+        try:
+            response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_matches",
+                headers=_db_headers(),
+                params={
+                    "select": "prestador_id",
+                    "solicitud_id": f"eq.{request_row['id']}",
+                    "estado": "eq.pendiente",
+                    "limit": "500",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            for match in (response.json() if response.content else []):
+                _send_custom_push(
+                    "nexi_app_push_suscripciones",
+                    "prestador_id",
+                    match["prestador_id"],
+                    "Oportunidad nuevamente disponible",
+                    f"{SERVICE_LABELS.get(request_row.get('tipo'), 'Servicio')} en {request_row.get('comuna') or 'tu zona'}.",
+                    "/app/?view=provider",
+                    f"reabierta-{request_row['id']}",
+                )
+        except Exception as exc:
+            app.logger.exception("REMATCH PUSH ERROR: %r", exc)
+
     @app.get("/app")
     @app.get("/app/")
     def mobile_index():
@@ -329,6 +433,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "ai": bool(settings["ai_enabled"]),
             "dispatch": True,
             "push": bool(settings.get("vapid_public_key") and settings.get("vapid_private_key")),
+            "chat": True,
+            "quotes": True,
         })
 
     @app.post(f"{api_base}/chat")
@@ -718,4 +824,299 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {"ok": True})
         except requests.RequestException as exc:
             app.logger.exception("PUSH SUBSCRIBE ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude activar las notificaciones."}, 502)
+
+    def _conversation_access(public_id, values):
+        actor = _clean(values.get("actor"), 20).lower()
+        if actor == "cliente":
+            request_row = _client_auth(public_id, values.get("token"))
+            return actor, request_row, None
+        if actor == "prestador":
+            provider = _provider_auth(values.get("codigo"), values.get("token"))
+            request_row = _request_by_code(public_id) if provider else None
+            if not request_row or str(request_row.get("prestador_id") or "") != str(provider.get("id") or ""):
+                return actor, None, None
+            return actor, request_row, provider
+        return actor, None, None
+
+    @app.route(f"{api_base}/solicitudes/<public_id>/conversacion", methods=["GET", "POST"])
+    def mobile_conversation(public_id):
+        body = request.get_json(silent=True) or {}
+        values = request.args if request.method == "GET" else body
+        try:
+            actor, request_row, provider = _conversation_access(public_id, values)
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso a la conversación inválido."}, 401)
+            provider_id = request_row.get("prestador_id")
+            if request.method == "POST":
+                content = _clean(body.get("mensaje"), 2000)
+                if not provider_id:
+                    return _json(app, {"ok": False, "error": "Aún no hay un prestador asignado."}, 409)
+                if not content:
+                    return _json(app, {"ok": False, "error": "Escribe un mensaje."}, 400)
+                response = requests.post(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_mensajes_servicio",
+                    headers=_db_headers("return=representation"),
+                    json={
+                        "empresa_id": settings["empresa_id"],
+                        "solicitud_id": request_row["id"],
+                        "prestador_id": provider_id,
+                        "remitente_tipo": actor,
+                        "contenido": content,
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                response.raise_for_status()
+                rows = response.json() if response.content else []
+                if actor == "cliente":
+                    _send_custom_push(
+                        "nexi_app_push_suscripciones", "prestador_id", provider_id,
+                        "Nuevo mensaje del cliente", content[:120],
+                        "/app/?view=provider", f"mensaje-{request_row['id']}",
+                    )
+                else:
+                    _send_custom_push(
+                        "nexi_app_push_clientes", "solicitud_id", request_row["id"],
+                        "Jaime tiene un nuevo mensaje", content[:120],
+                        "/app/?view=status", f"mensaje-{request_row['id']}",
+                    )
+                return _json(app, {"ok": True, "mensaje": rows[0] if rows else {"contenido": content}}, 201)
+
+            messages_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_mensajes_servicio",
+                headers=_db_headers(),
+                params={
+                    "select": "id,remitente_tipo,contenido,cotizacion_id,created_at",
+                    "solicitud_id": f"eq.{request_row['id']}",
+                    "prestador_id": f"eq.{provider_id}",
+                    "order": "created_at.asc",
+                    "limit": "200",
+                } if provider_id else {"select": "id", "limit": "0"},
+                timeout=settings["supabase_timeout"],
+            )
+            messages_response.raise_for_status()
+            quote = None
+            if provider_id:
+                quote_response = requests.get(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio",
+                    headers=_db_headers(),
+                    params={
+                        "select": "id,monto_clp,detalle,estado,created_at",
+                        "solicitud_id": f"eq.{request_row['id']}",
+                        "prestador_id": f"eq.{provider_id}",
+                        "estado": "in.(pendiente,aceptada)",
+                        "order": "created_at.desc",
+                        "limit": "1",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                quote_response.raise_for_status()
+                quote_rows = quote_response.json() if quote_response.content else []
+                quote = quote_rows[0] if quote_rows else None
+
+            provider_name = None
+            if provider_id:
+                provider_response = requests.get(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                    headers=_db_headers(),
+                    params={"select": "nombre", "id": f"eq.{provider_id}", "limit": "1"},
+                    timeout=settings["supabase_timeout"],
+                )
+                provider_response.raise_for_status()
+                provider_rows = provider_response.json() if provider_response.content else []
+                provider_name = provider_rows[0].get("nombre") if provider_rows else None
+
+            safe_request = {key: request_row.get(key) for key in (
+                "public_id", "tipo", "comuna", "detalles", "fecha_preferida", "estado"
+            )}
+            return _json(app, {
+                "ok": True,
+                "actor": actor,
+                "solicitud": safe_request,
+                "prestador": {"nombre": provider_name or "Prestador"} if provider_id else None,
+                "mensajes": messages_response.json() if messages_response.content and provider_id else [],
+                "cotizacion": quote,
+            })
+        except requests.RequestException as exc:
+            app.logger.exception("CONVERSATION ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude abrir la conversación."}, 502)
+
+    @app.post(f"{api_base}/solicitudes/<public_id>/cotizaciones")
+    def mobile_create_quote(public_id):
+        body = request.get_json(silent=True) or {}
+        try:
+            provider = _provider_auth(body.get("codigo"), body.get("token"))
+            request_row = _request_by_code(public_id) if provider else None
+            if not request_row or str(request_row.get("prestador_id") or "") != str(provider.get("id") or ""):
+                return _json(app, {"ok": False, "error": "No tienes esta solicitud asignada."}, 401)
+            digits = re.sub(r"\D", "", str(body.get("monto_clp") or ""))
+            amount = int(digits) if digits else 0
+            detail = _clean(body.get("detalle"), 500)
+            if amount < 1000 or amount > 100000000:
+                return _json(app, {"ok": False, "error": "Ingresa un precio válido en pesos chilenos."}, 400)
+            accepted_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio",
+                headers=_db_headers(),
+                params={
+                    "select": "id",
+                    "solicitud_id": f"eq.{request_row['id']}",
+                    "estado": "eq.aceptada",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            accepted_response.raise_for_status()
+            if accepted_response.content and accepted_response.json():
+                return _json(app, {"ok": False, "error": "El precio de este servicio ya fue confirmado."}, 409)
+            requests.patch(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio",
+                headers=_db_headers("return=minimal"),
+                params={"solicitud_id": f"eq.{request_row['id']}", "estado": "eq.pendiente"},
+                json={"estado": "reemplazada"},
+                timeout=settings["supabase_timeout"],
+            ).raise_for_status()
+            quote_response = requests.post(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio",
+                headers=_db_headers("return=representation"),
+                json={
+                    "empresa_id": settings["empresa_id"],
+                    "solicitud_id": request_row["id"],
+                    "prestador_id": provider["id"],
+                    "monto_clp": amount,
+                    "detalle": detail or None,
+                    "estado": "pendiente",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            quote_response.raise_for_status()
+            quote_rows = quote_response.json() if quote_response.content else []
+            quote = quote_rows[0] if quote_rows else None
+            message_text = f"Cotización enviada: ${amount:,.0f} CLP".replace(",", ".")
+            if detail:
+                message_text += f" · {detail}"
+            requests.post(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_mensajes_servicio",
+                headers=_db_headers("return=minimal"),
+                json={
+                    "empresa_id": settings["empresa_id"],
+                    "solicitud_id": request_row["id"],
+                    "prestador_id": provider["id"],
+                    "remitente_tipo": "sistema",
+                    "contenido": message_text,
+                    "cotizacion_id": quote.get("id") if quote else None,
+                },
+                timeout=settings["supabase_timeout"],
+            ).raise_for_status()
+            _send_custom_push(
+                "nexi_app_push_clientes", "solicitud_id", request_row["id"],
+                "Recibiste una cotización", message_text,
+                "/app/?view=status", f"cotizacion-{request_row['id']}",
+            )
+            return _json(app, {"ok": True, "cotizacion": quote}, 201)
+        except requests.RequestException as exc:
+            app.logger.exception("QUOTE CREATE ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude enviar la cotización."}, 502)
+
+    @app.post(f"{api_base}/solicitudes/<public_id>/cotizaciones/<quote_id>/responder")
+    def mobile_answer_quote(public_id, quote_id):
+        body = request.get_json(silent=True) or {}
+        action = _clean(body.get("accion"), 20).lower()
+        try:
+            request_row = _client_auth(public_id, body.get("token"))
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
+            if action not in {"aceptar", "rechazar"}:
+                return _json(app, {"ok": False, "error": "Respuesta inválida."}, 400)
+            quote_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio",
+                headers=_db_headers(),
+                params={
+                    "select": "id,prestador_id,monto_clp",
+                    "id": f"eq.{_clean(quote_id, 80)}",
+                    "solicitud_id": f"eq.{request_row['id']}",
+                    "estado": "eq.pendiente",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            quote_response.raise_for_status()
+            quote_rows = quote_response.json() if quote_response.content else []
+            if not quote_rows:
+                return _json(app, {"ok": False, "error": "La cotización ya no está disponible."}, 409)
+            quote = quote_rows[0]
+            rpc_response = requests.post(
+                f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_responder_cotizacion",
+                headers=_db_headers(),
+                json={
+                    "p_solicitud_id": request_row["id"],
+                    "p_cotizacion_id": quote["id"],
+                    "p_accion": action,
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            rpc_response.raise_for_status()
+            result = rpc_response.json() if rpc_response.content else {}
+            if isinstance(result, list):
+                result = result[0] if result else {}
+            if not result.get("ok"):
+                return _json(app, {"ok": False, "error": result.get("error") or "No pude responder."}, 409)
+            system_text = "El cliente aceptó la cotización." if action == "aceptar" else "El cliente rechazó la cotización y la solicitud volvió a estar disponible."
+            requests.post(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_mensajes_servicio",
+                headers=_db_headers("return=minimal"),
+                json={
+                    "empresa_id": settings["empresa_id"],
+                    "solicitud_id": request_row["id"],
+                    "prestador_id": quote["prestador_id"],
+                    "remitente_tipo": "sistema",
+                    "contenido": system_text,
+                    "cotizacion_id": quote["id"],
+                },
+                timeout=settings["supabase_timeout"],
+            ).raise_for_status()
+            _send_custom_push(
+                "nexi_app_push_suscripciones", "prestador_id", quote["prestador_id"],
+                "Respuesta a tu cotización", system_text,
+                "/app/?view=provider", f"precio-{request_row['id']}",
+            )
+            if action == "rechazar":
+                Thread(target=_notify_pending_matches, args=(request_row,), daemon=True).start()
+            return _json(app, {"ok": True, "resultado": result})
+        except requests.RequestException as exc:
+            app.logger.exception("QUOTE ANSWER ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude responder la cotización."}, 502)
+
+    @app.post(f"{api_base}/solicitudes/<public_id>/push/subscribe")
+    def mobile_client_push_subscribe(public_id):
+        body = request.get_json(silent=True) or {}
+        subscription = body.get("subscription") if isinstance(body.get("subscription"), dict) else {}
+        keys = subscription.get("keys") if isinstance(subscription.get("keys"), dict) else {}
+        endpoint = _clean(subscription.get("endpoint"), 2000)
+        p256dh = _clean(keys.get("p256dh"), 500)
+        auth = _clean(keys.get("auth"), 500)
+        try:
+            request_row = _client_auth(public_id, body.get("token"))
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
+            if not endpoint.startswith("https://") or not p256dh or not auth:
+                return _json(app, {"ok": False, "error": "Suscripción push inválida."}, 400)
+            response = requests.post(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_push_clientes",
+                headers=_db_headers("return=representation,resolution=merge-duplicates"),
+                params={"on_conflict": "solicitud_id,endpoint"},
+                json={
+                    "empresa_id": settings["empresa_id"],
+                    "solicitud_id": request_row["id"],
+                    "endpoint": endpoint,
+                    "p256dh": p256dh,
+                    "auth": auth,
+                    "user_agent": _clean(request.headers.get("User-Agent"), 500),
+                    "activa": True,
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            return _json(app, {"ok": True})
+        except requests.RequestException as exc:
+            app.logger.exception("CLIENT PUSH SUBSCRIBE ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude activar las notificaciones."}, 502)
