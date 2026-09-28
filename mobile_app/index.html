@@ -329,7 +329,37 @@
   $('#requestLocationBtn').addEventListener('click',async()=>{const button=$('#requestLocationBtn'),status=$('#requestLocationStatus');button.disabled=true;status.textContent='Obteniendo ubicación…';try{pendingLocation=await currentPosition();button.textContent='✓ Ubicación agregada';status.textContent=`Precisión aproximada: ${Math.round(pendingLocation.precision_m||0)} metros. Puedes actualizarla pulsando nuevamente.`}catch(error){status.textContent=error.message}finally{button.disabled=false}});
 
   function plainAssistantText(content){return String(content||'').replace(/\*\*(.*?)\*\*/gs,'$1').replace(/__(.*?)__/gs,'$1').replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,'$1$2').replace(/`([^`\n]+)`/g,'$1').replace(/^\s{0,3}#{1,6}\s*/gm,'').replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'$1 ($2)').trim()}
-  function addMessage(content, role){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'&&/crear solicitud/i.test(display)){const button=document.createElement('button');button.type='button';button.className='chat-request-cta';button.textContent='Crear solicitud';button.addEventListener('click',()=>go('request'));el.append(button)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; }
+  function addMessage(content, role){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'&&/crear solicitud/i.test(display)){const button=document.createElement('button');button.type='button';button.className='chat-request-cta';button.textContent='Revisar y enviar solicitud';button.addEventListener('click',()=>prepareAIRequest(button));el.append(button)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; }
+
+  async function prepareAIRequest(button){
+    const original=button.textContent;button.disabled=true;button.innerHTML='<span class="spinner"></span> Preparando';
+    try{
+      const r=await fetch('/app/api/chat/preparar-solicitud',{method:'POST',headers,body:JSON.stringify({service,history})});
+      const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude preparar la solicitud');
+      if(Array.isArray(d.faltantes)&&d.faltantes.length){addMessage(`Antes de enviarla me falta: ${d.faltantes.join(', ')}. Escríbeme esos datos y luego vuelve a pulsar “Revisar y enviar solicitud”.`,'assistant');return}
+      renderAIRequestConfirmation(d.solicitud||{});
+    }catch(err){addMessage(err.message||'No pude preparar la solicitud.','assistant')}finally{button.disabled=false;button.textContent=original}
+  }
+
+  function renderAIRequestConfirmation(draft){
+    const box=document.createElement('div');box.className='message bot';
+    const title=document.createElement('strong');title.textContent='Solicitud lista para enviar';box.append(title);
+    const summary=document.createElement('div');summary.style.marginTop='10px';summary.style.whiteSpace='pre-line';summary.textContent=`${SERVICE_META[draft.tipo]?.label||'Servicio'}\n${draft.detalles||''}\n${draft.comuna||''}${draft.fecha_preferida?` · ${draft.fecha_preferida}`:''}`;box.append(summary);
+    const legal=document.createElement('label');legal.className='consent';legal.style.marginTop='12px';legal.innerHTML='<input type="checkbox"><span>Acepto los términos de uso y autorizo el tratamiento privado de mis datos para gestionar esta solicitud.</span>';box.append(legal);
+    const send=document.createElement('button');send.type='button';send.className='chat-request-cta';send.textContent='Enviar solicitud';send.addEventListener('click',()=>publishAIRequest(draft,legal.querySelector('input'),send));box.append(send);
+    $('#chatBox').append(box);$('#chatBox').scrollTop=$('#chatBox').scrollHeight;
+  }
+
+  async function publishAIRequest(draft,consent,button){
+    if(!consent.checked){alert('Debes aceptar los términos y el tratamiento de datos para enviar la solicitud.');return}
+    const payload={...draft,acepta_terminos:true,acepta_privacidad:true};button.disabled=true;button.innerHTML='<span class="spinner"></span> Enviando';
+    try{
+      const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');
+      const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));latestCreatedRequest=d.solicitud;
+      $('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent='Tu solicitud fue creada con los datos que entregaste a Jaime.';$('#requestCard').style.display='none';$('#trackingCard').style.display='block';$('#providerChoice').style.display='block';$('#providerBrowser').style.display='none';$('#providerCandidates').innerHTML='';
+      go('request');
+    }catch(err){alert(err.message);button.disabled=false;button.textContent='Enviar solicitud'}
+  }
   history.forEach(m=>addMessage(m.content,m.role));
   async function ask(message){ addMessage(message,'user'); const prior=history.slice(-8); history.push({role:'user',content:message}); $('#chatInput').disabled=true; const waiting=document.createElement('div'); waiting.className='message bot'; waiting.innerHTML='<span class="spinner"></span> Pensando…'; $('#chatBox').append(waiting); $('#chatBox').scrollTop=$('#chatBox').scrollHeight;
     try{ const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message,service,history:prior})}); const d=await r.json(); waiting.remove(); if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant'); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
