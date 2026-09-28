@@ -226,7 +226,7 @@
         </div>
         <span class="payment-status-badge" id="paymentStatusBadge">Pendiente</span>
         <div class="payment-client-action" id="paymentClientAction" hidden>
-          <button type="button" class="primary" id="mercadoPagoBtn">Pagar con Mercado Pago</button>
+          <button type="button" class="primary" id="mercadoPagoBtn" onclick="startMercadoPagoCheckout()">Pagar con Mercado Pago</button>
           <div class="notice" id="mercadoPagoNotice"></div>
         </div>
         <div class="payment-breakdown" id="paymentBreakdown" hidden>
@@ -454,27 +454,35 @@ if(hasProvider&&sol.servicio_finalizado_at){
   }
 }if(!hasProvider){box.innerHTML='<div class="empty">Jaime todavía está buscando un prestador compatible. Vuelve a revisar en unos minutos.</div>';$('#conversationForm').hidden=true;$('#quoteForm').hidden=true;$('#quoteBox').hidden=true;$('#reportForm').hidden=true;$('#finishServiceCard').hidden=true;$('#paymentStatusCard').hidden=true;$('#paymentBreakdown').hidden=true;$('#paymentClientAction').hidden=true;return}$('#conversationTitle').textContent=c.actor==='cliente'?(d.prestador.nombre||'Prestador'):'Cliente y cotización';$('#conversationForm').hidden=false;box.innerHTML='';for(const m of d.mensajes){const el=document.createElement('div'),mine=(c.actor==='cliente'&&m.remitente_tipo==='cliente')||(c.actor==='prestador'&&m.remitente_tipo==='prestador');el.className='conversation-message '+(m.remitente_tipo==='sistema'?'system':mine?'mine':'');el.textContent=m.contenido;box.append(el)}if(!d.mensajes.length)box.innerHTML='<div class="empty">La conversación está lista. Envía el primer mensaje.</div>';box.scrollTop=box.scrollHeight;renderQuote(d.cotizacion)}catch(err){if(!silent)$('#conversationMessages').innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
 
-  $('#mercadoPagoBtn').addEventListener('click',async()=>{
+async function startMercadoPagoCheckout(){
   const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;
-  if(!c||c.actor!=='cliente'||!c.public_id||!c.token)return;
+  if(!btn||!note)return;
+  if(!c||c.actor!=='cliente'||!c.public_id||!c.token){
+    note.textContent='No pude identificar la sesión del cliente. Cierra y vuelve a abrir la solicitud.';
+    return;
+  }
   const original=btn.textContent;
-  btn.disabled=true;btn.textContent='Preparando pago…';note.textContent='';
+  btn.disabled=true;btn.textContent='Preparando pago…';note.textContent='Conectando con Mercado Pago…';
   try{
     const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago`,{
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
       body:JSON.stringify({token:c.token})
     });
-    const d=await r.json().catch(()=>({}));
-    if(!r.ok||!d.ok)throw new Error(d.error||'No pude iniciar el pago.');
+    const raw=await r.text();
+    let d={};
+    try{d=raw?JSON.parse(raw):{}}catch(_){
+      throw new Error(`El servidor respondió ${r.status} con HTML/texto en vez de JSON.`);
+    }
+    if(!r.ok||!d.ok)throw new Error(d.error||`No pude iniciar el pago (HTTP ${r.status}).`);
     if(!d.checkout_url)throw new Error('Mercado Pago no devolvió el enlace de pago.');
     note.textContent='Abriendo Mercado Pago…';
-    window.location.href=d.checkout_url;
+    window.location.assign(d.checkout_url);
   }catch(err){
-    note.textContent=err.message||'No pude iniciar el pago.';
+    note.textContent=err?.message||'No pude iniciar el pago.';
     btn.disabled=false;btn.textContent=original;
   }
-});
+}
 
 $('#finishServiceBtn').addEventListener('click',async()=>{
     const c=conversationContext,btn=$('#finishServiceBtn'),note=$('#finishServiceNotice');if(!c)return;
