@@ -3581,6 +3581,89 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             app.logger.exception("ADMIN CONVERSATION DETAIL ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude abrir la conversación."}, 502)
 
+    @app.patch(f"{api_base}/admin/prestadores/<provider_id>")
+    def mobile_admin_provider_edit(provider_id):
+        admin, error_response = _admin_required()
+        if error_response:
+            return error_response
+        if admin.get("rol") == "moderador":
+            return _json(app, {"ok": False, "error": "Tu rol no permite editar fichas de prestadores."}, 403)
+        try:
+            provider_uuid = str(uuid.UUID(provider_id))
+        except (ValueError, TypeError):
+            return _json(app, {"ok": False, "error": "Prestador inválido."}, 400)
+
+        body = request.get_json(silent=True) or {}
+        allowed = {"nombre", "email", "telefono", "roles", "especialidades", "comunas", "materiales", "vehiculo", "radio_km", "disponible", "activo"}
+        update = {k: body[k] for k in allowed if k in body}
+        if not update:
+            return _json(app, {"ok": False, "error": "No hay cambios para guardar."}, 400)
+
+        if "nombre" in update:
+            update["nombre"] = str(update["nombre"] or "").strip()
+            if not update["nombre"]:
+                return _json(app, {"ok": False, "error": "El nombre es obligatorio."}, 400)
+        if "email" in update:
+            update["email"] = str(update["email"] or "").strip().lower() or None
+        if "telefono" in update:
+            update["telefono"] = str(update["telefono"] or "").strip()
+            update["telefono_normalizado"] = _normalize_phone(update["telefono"])
+        for key in ("roles", "especialidades", "comunas", "materiales"):
+            if key in update:
+                if not isinstance(update[key], list):
+                    return _json(app, {"ok": False, "error": f"{key} debe ser una lista."}, 400)
+                update[key] = [str(x).strip() for x in update[key] if str(x).strip()]
+        if "radio_km" in update:
+            try:
+                update["radio_km"] = max(1, min(100, int(update["radio_km"])))
+            except (ValueError, TypeError):
+                return _json(app, {"ok": False, "error": "Radio inválido."}, 400)
+        for key in ("disponible", "activo"):
+            if key in update:
+                update[key] = bool(update[key])
+
+        # Campos sensibles deliberadamente fuera de allowed: RUT, PIN/clave,
+        # tokens/access tokens y credenciales de Mercado Pago.
+        try:
+            current_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers(),
+                params={"select": "id,nombre,email,telefono,roles,especialidades,comunas,materiales,vehiculo,radio_km,disponible,activo", "id": f"eq.{provider_uuid}", "empresa_id": f"eq.{admin['empresa_id']}", "limit": "1"},
+                timeout=settings["supabase_timeout"],
+            )
+            current_response.raise_for_status()
+            current_rows = current_response.json() if current_response.content else []
+            if not current_rows:
+                return _json(app, {"ok": False, "error": "Prestador no encontrado."}, 404)
+            previous = current_rows[0]
+
+            response = requests.patch(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers("return=representation"),
+                params={"id": f"eq.{provider_uuid}", "empresa_id": f"eq.{admin['empresa_id']}"},
+                json=update,
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            rows = response.json() if response.content else []
+            if not rows:
+                return _json(app, {"ok": False, "error": "No pude guardar los cambios."}, 502)
+
+            try:
+                requests.post(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_revision_prestadores",
+                    headers=_db_headers("return=minimal"),
+                    json={"empresa_id": admin["empresa_id"], "prestador_id": provider_uuid, "administrador_id": admin.get("id"), "accion": "editar_ficha", "estado_anterior": previous.get("nombre"), "estado_nuevo": update.get("nombre", previous.get("nombre")), "observacion": "Ficha editada desde administración", "metadata": {"campos": sorted(update.keys())}},
+                    timeout=settings["supabase_timeout"],
+                )
+            except Exception:
+                app.logger.warning("No se pudo registrar historial de edición de prestador", exc_info=True)
+
+            return _json(app, {"ok": True, "prestador": _safe_provider_admin(rows[0])})
+        except requests.RequestException as exc:
+            app.logger.exception("ADMIN PROVIDER EDIT ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude guardar la ficha del prestador."}, 502)
+
     @app.get(f"{api_base}/admin/prestadores/<provider_id>/documentos")
     def mobile_admin_provider_documents(provider_id):
         admin, error_response = _admin_required()
