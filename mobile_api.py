@@ -3146,6 +3146,226 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {"ok": False, "error": "No pude cargar la ficha del prestador."}, 502)
 
 
+    @app.get(f"{api_base}/admin/conversaciones")
+    def mobile_admin_conversations():
+        """Bandeja administrativa de conversaciones. Solo lectura."""
+        admin, error_response = _admin_required()
+        if error_response:
+            return error_response
+
+        search = _clean(request.args.get("q"), 120).lower()
+        state = _clean(request.args.get("estado"), 30).lower()
+        category = _clean(request.args.get("categoria"), 30).lower()
+        try:
+            limit = max(1, min(int(request.args.get("limit", 100)), 200))
+        except (TypeError, ValueError):
+            limit = 100
+
+        try:
+            req_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
+                headers=_db_headers(),
+                params={
+                    "select": "*",
+                    "empresa_id": f"eq.{admin['empresa_id']}",
+                    "order": "created_at.desc",
+                    "limit": "200",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            req_response.raise_for_status()
+            rows = req_response.json() if req_response.content else []
+
+            # El filtrado administrativo se hace aquí para permitir búsqueda
+            # conjunta por código, cliente, teléfono, comuna y detalle.
+            if state:
+                rows = [x for x in rows if str(x.get("estado") or "").lower() == state]
+            if category:
+                rows = [x for x in rows if str(x.get("tipo") or "").lower() == category]
+            if search:
+                def _matches(x):
+                    haystack = " ".join(str(x.get(k) or "") for k in (
+                        "public_id", "nombre", "telefono", "email", "comuna",
+                        "tipo", "subtipo", "detalles", "estado"
+                    )).lower()
+                    return search in haystack
+                rows = [x for x in rows if _matches(x)]
+            rows = rows[:limit]
+
+            provider_ids = sorted({str(x.get("prestador_id")) for x in rows if x.get("prestador_id")})
+            providers = {}
+            if provider_ids:
+                pres_response = requests.get(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                    headers=_db_headers(),
+                    params={
+                        "select": "id,public_id,nombre,telefono,email",
+                        "empresa_id": f"eq.{admin['empresa_id']}",
+                        "id": "in.(" + ",".join(provider_ids) + ")",
+                        "limit": "200",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                pres_response.raise_for_status()
+                providers = {str(x.get("id")): x for x in (pres_response.json() if pres_response.content else [])}
+
+            request_ids = [str(x.get("id")) for x in rows if x.get("id")]
+            messages_by_request = {}
+            if request_ids:
+                msg_response = requests.get(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_mensajes_servicio",
+                    headers=_db_headers(),
+                    params={
+                        "select": "id,solicitud_id,remitente_tipo,contenido,created_at",
+                        "empresa_id": f"eq.{admin['empresa_id']}",
+                        "solicitud_id": "in.(" + ",".join(request_ids) + ")",
+                        "order": "created_at.asc",
+                        "limit": "5000",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                msg_response.raise_for_status()
+                for msg in (msg_response.json() if msg_response.content else []):
+                    messages_by_request.setdefault(str(msg.get("solicitud_id")), []).append(msg)
+
+            output = []
+            for row in rows:
+                msgs = messages_by_request.get(str(row.get("id")), [])
+                last = msgs[-1] if msgs else None
+                provider = providers.get(str(row.get("prestador_id"))) if row.get("prestador_id") else None
+                output.append({
+                    "id": row.get("id"),
+                    "public_id": row.get("public_id"),
+                    "tipo": row.get("tipo"),
+                    "subtipo": row.get("subtipo"),
+                    "estado": row.get("estado"),
+                    "comuna": row.get("comuna"),
+                    "cliente_nombre": row.get("nombre"),
+                    "cliente_telefono": row.get("telefono"),
+                    "cliente_email": row.get("email"),
+                    "prestador": provider,
+                    "prestador_id": row.get("prestador_id"),
+                    "fecha_preferida": row.get("fecha_preferida"),
+                    "created_at": row.get("created_at"),
+                    "updated_at": row.get("updated_at"),
+                    "pago_estado": row.get("pago_estado"),
+                    "precio_servicio": row.get("precio_servicio") or row.get("pago_monto_total"),
+                    "cantidad_mensajes": len(msgs),
+                    "ultimo_mensaje": ({
+                        "remitente_tipo": last.get("remitente_tipo"),
+                        "contenido": last.get("contenido"),
+                        "created_at": last.get("created_at"),
+                    } if last else None),
+                })
+
+            return _json(app, {"ok": True, "conversaciones": output, "cantidad": len(output)})
+        except requests.RequestException as exc:
+            app.logger.exception("ADMIN CONVERSATIONS ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude cargar las conversaciones."}, 502)
+
+    @app.get(f"{api_base}/admin/conversaciones/<request_id>")
+    def mobile_admin_conversation_detail(request_id):
+        """Trazabilidad completa de una conversación para soporte. Solo lectura."""
+        admin, error_response = _admin_required()
+        if error_response:
+            return error_response
+        try:
+            request_uuid = str(uuid.UUID(request_id))
+        except (ValueError, TypeError):
+            return _json(app, {"ok": False, "error": "Conversación inválida."}, 400)
+
+        try:
+            req_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
+                headers=_db_headers(),
+                params={
+                    "select": "*",
+                    "id": f"eq.{request_uuid}",
+                    "empresa_id": f"eq.{admin['empresa_id']}",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            req_response.raise_for_status()
+            requests_rows = req_response.json() if req_response.content else []
+            if not requests_rows:
+                return _json(app, {"ok": False, "error": "Conversación no encontrada."}, 404)
+            req = dict(requests_rows[0])
+            req.pop("access_token_hash", None)
+
+            provider = None
+            provider_id = req.get("prestador_id")
+            if provider_id:
+                pres_response = requests.get(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                    headers=_db_headers(),
+                    params={
+                        "select": "id,public_id,nombre,telefono,email,roles,especialidades,estado_cuenta,estado_verificacion,disponible",
+                        "id": f"eq.{provider_id}",
+                        "empresa_id": f"eq.{admin['empresa_id']}",
+                        "limit": "1",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                pres_response.raise_for_status()
+                pres_rows = pres_response.json() if pres_response.content else []
+                provider = pres_rows[0] if pres_rows else None
+
+            msg_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_mensajes_servicio",
+                headers=_db_headers(),
+                params={
+                    "select": "id,remitente_tipo,contenido,cotizacion_id,created_at",
+                    "empresa_id": f"eq.{admin['empresa_id']}",
+                    "solicitud_id": f"eq.{request_uuid}",
+                    "order": "created_at.asc",
+                    "limit": "1000",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            msg_response.raise_for_status()
+
+            quote_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio",
+                headers=_db_headers(),
+                params={
+                    "select": "id,monto_clp,detalle,estado,created_at,updated_at",
+                    "empresa_id": f"eq.{admin['empresa_id']}",
+                    "solicitud_id": f"eq.{request_uuid}",
+                    "order": "created_at.asc",
+                    "limit": "200",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            quote_response.raise_for_status()
+
+            claim_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_reclamos",
+                headers=_db_headers(),
+                params={
+                    "select": "id,reportante_tipo,categoria,descripcion,estado,resolucion,created_at,updated_at",
+                    "empresa_id": f"eq.{admin['empresa_id']}",
+                    "solicitud_id": f"eq.{request_uuid}",
+                    "order": "created_at.asc",
+                    "limit": "200",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            claim_response.raise_for_status()
+
+            return _json(app, {
+                "ok": True,
+                "solicitud": req,
+                "prestador": provider,
+                "mensajes": msg_response.json() if msg_response.content else [],
+                "cotizaciones": quote_response.json() if quote_response.content else [],
+                "reclamos": claim_response.json() if claim_response.content else [],
+                "fotos": _safe_photos(request_uuid),
+            })
+        except requests.RequestException as exc:
+            app.logger.exception("ADMIN CONVERSATION DETAIL ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude abrir la conversación."}, 502)
+
     @app.get(f"{api_base}/admin/prestadores/<provider_id>/documentos")
     def mobile_admin_provider_documents(provider_id):
         admin, error_response = _admin_required()
