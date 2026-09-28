@@ -121,8 +121,8 @@
     #provider .page-head{padding-bottom:10px}
     #provider .page-head p{margin-bottom:0}
     #provider .provider-summary{margin-bottom:8px}
-    .provider-quick-actions{display:flex;align-items:center;gap:8px;margin:0 0 8px}
-    .provider-quick-actions .provider-mini-action{width:auto!important;margin:0!important;padding:7px 11px!important;border-radius:999px!important;font-size:12px!important;line-height:1.1!important;min-height:34px!important}
+    .provider-quick-actions{display:flex;align-items:center;gap:6px;margin:0 0 8px;flex-wrap:nowrap}
+    .provider-quick-actions .provider-mini-action{width:auto!important;margin:0!important;padding:7px 9px!important;border-radius:999px!important;font-size:11px!important;line-height:1.1!important;min-height:34px!important;white-space:nowrap}
     .provider-quick-actions .notify-btn{flex:0 1 auto}
     .provider-quick-actions .provider-exit{margin-left:auto!important;border:1px solid var(--line)!important;background:#fff!important}
     #provider .profile-photo-card{display:flex;align-items:center;gap:10px;margin:0 0 8px;padding:9px 11px;border-radius:14px}
@@ -287,6 +287,7 @@
       <div class="provider-quick-actions" id="providerQuickActions">
         <button class="notify-btn provider-mini-action" id="notifyBtn" hidden>🔔 Notificaciones</button>
         <button class="secondary provider-mini-action" id="providerPhotoQuick" type="button" hidden>📷 Foto</button>
+        <button class="secondary provider-mini-action" id="providerDocsQuick" type="button" hidden>📄 Documentación</button>
         <button class="secondary provider-mini-action provider-exit" id="providerLogout" type="button" hidden>Salir</button>
       </div>
       <div class="access-switch" id="providerAccessSwitch"><button class="toggle active" type="button" data-provider-access="register">Crear cuenta</button><button class="toggle" type="button" data-provider-access="login">Ingresar</button></div>
@@ -826,7 +827,20 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     catch(err){n.className='notice error';n.textContent=err.message;n.style.display='block'}finally{btn.disabled=false}
   });
 
-  async function loadProvider(){
+  
+  const providerDocsQuick=$('#providerDocsQuick');
+  if(providerDocsQuick){
+    providerDocsQuick.addEventListener('click',()=>{
+      const card=$('#providerDocumentsCard');
+      if(card){
+        card.hidden=false;
+        setProviderDocsOpen(true);
+        card.scrollIntoView({behavior:'smooth',block:'start'});
+      }
+    });
+  }
+
+async function loadProvider(){
     let auth=providerAuth();
     if(!auth){
       resetProviderPrivateUI();
@@ -925,6 +939,24 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
   fetch('/app/api/config').then(r=>r.json()).then(d=>{if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
   const initialView=new URLSearchParams(location.search).get('view');if(['provider','status'].includes(initialView))go(initialView);
 })();
+
+  // V7.27: acceso rápido a Documentación junto a Notificaciones y Foto.
+  const _providerDocsCardSync=$('#providerDocumentsCard');
+  const _providerDocsQuickSync=$('#providerDocsQuick');
+  function syncProviderDocsQuick(){
+    if(_providerDocsQuickSync && _providerDocsCardSync){
+      _providerDocsQuickSync.hidden = _providerDocsCardSync.hidden;
+    }
+  }
+  if(_providerDocsCardSync && _providerDocsQuickSync){
+    new MutationObserver(syncProviderDocsQuick).observe(_providerDocsCardSync,{attributes:true,attributeFilter:['hidden']});
+    syncProviderDocsQuick();
+    _providerDocsQuickSync.addEventListener('click',()=>{
+      _providerDocsCardSync.hidden=false;
+      if(typeof setProviderDocsOpen==='function') setProviderDocsOpen(true);
+      _providerDocsCardSync.scrollIntoView({behavior:'smooth',block:'start'});
+    });
+  }
 </script>
 </body>
 </html>
