@@ -1,4 +1,4 @@
-""API y archivos públicos de la PWA Llama a Jaime Servicios.
+"""API y archivos públicos de la PWA Llama a Jaime Servicios.
 
 El módulo no conoce credenciales ni importa el núcleo histórico. Recibe las
 dependencias necesarias al registrarse desde app.py.
