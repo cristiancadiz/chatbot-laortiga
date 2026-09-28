@@ -970,12 +970,25 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
 
   
   $('#providerMPQuick').addEventListener('click',async()=>{
-    const auth=providerAuth();if(!auth)return;
+    let auth=providerAuth();if(!auth)return;
+    const btn=$('#providerMPQuick'),original=btn.textContent;
+
     if(auth.mercadopago_conectado){
-      alert('Tu cuenta de Mercado Pago ya está conectada a Llama a Jaime.');
+      if(!confirm('¿Desconectar tu cuenta de Mercado Pago de Llama a Jaime?\n\nNo se eliminará tu cuenta ni tu historial de Mercado Pago. Si tienes pagos activos pendientes de liquidación, la desconexión será bloqueada.'))return;
+      btn.disabled=true;btn.textContent='Desconectando…';
+      try{
+        const r=await fetch('/app/api/prestadores/mercadopago/desconectar',{method:'POST',headers,body:JSON.stringify({codigo:auth.codigo,token:auth.token})});
+        const d=await r.json().catch(()=>({}));
+        if(!r.ok)throw new Error(d.error||'No pude desconectar Mercado Pago');
+        auth={...auth,mercadopago_conectado:false,mp_user_id:null};
+        localStorage.providerAuth=JSON.stringify(auth);
+        btn.textContent='💳 Conectar MP';
+        alert(d.message||'Mercado Pago fue desconectado de Llama a Jaime.');
+      }catch(err){alert(err.message);btn.textContent=original}
+      finally{btn.disabled=false}
       return;
     }
-    const btn=$('#providerMPQuick'),original=btn.textContent;
+
     btn.disabled=true;btn.textContent='Conectando…';
     try{
       const r=await fetch('/app/api/prestadores/mercadopago/conectar',{method:'POST',headers,body:JSON.stringify({codigo:auth.codigo,token:auth.token})});
@@ -1088,7 +1101,7 @@ async function loadProvider(){
     $('#providerPhotoQuick').textContent='📷 Foto';
     $('#providerDocsQuick').hidden=false;
     $('#providerMPQuick').hidden=false;
-    $('#providerMPQuick').textContent=auth.mercadopago_conectado?'💳 MP conectado':'💳 Conectar MP';
+    $('#providerMPQuick').textContent=auth.mercadopago_conectado?'💳 MP conectado · Desconectar':'💳 Conectar MP';
     $('#providerLogout').hidden=false;
     $('#providerDocumentsCard').hidden=true;
     await loadProviderPhoto();
