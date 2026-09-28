@@ -34,6 +34,30 @@
 
     .quote-form[hidden],.payment-status-card[hidden],.payment-client-action[hidden],
     .payment-breakdown[hidden],.finish-service-card[hidden]{display:none!important}
+
+    /* V7.17 · conversación móvil compacta */
+    .conversation-actions-toggle{display:none}
+    @media(max-width:640px){
+      .conversation-modal{height:100dvh;max-height:100dvh}
+      .conversation-head{padding:8px 10px;gap:8px;flex:0 0 auto}
+      .conversation-head button{width:34px;height:34px;border-radius:10px}
+      .conversation-head h2{font-size:16px;line-height:1.1}
+      .conversation-head span{font-size:10px}
+      .conversation-body{padding:0;min-height:0;position:relative}
+      .conversation-actions-toggle{display:flex;align-items:center;justify-content:center;gap:6px;margin:6px 10px 4px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:white;color:var(--forest);font-weight:900;flex:0 0 auto}
+      .conversation-tools{display:none;position:absolute;left:10px;right:10px;bottom:66px;z-index:8;max-height:62dvh;overflow:auto;padding:10px;border:1px solid var(--line);border-radius:18px;background:var(--cream);box-shadow:0 14px 36px rgba(18,61,43,.22)}
+      .conversation-tools.open{display:block}
+      .conversation-tools>.provider-public-card,.conversation-tools>.review-card,.conversation-tools>.location-panel,.conversation-tools>.photo-gallery,.conversation-tools>.quote-box,.conversation-tools>.payment-status-card,.conversation-tools>.finish-service-card,.conversation-tools>.report-toggle,.conversation-tools>.report-form,.conversation-tools>.quote-form,.conversation-tools>.client-notify{margin-top:0;margin-bottom:8px}
+      .provider-public-card{padding:9px}
+      .provider-public-avatar{width:42px;height:42px;min-width:42px}
+      .provider-public-meta,.provider-public-reputation,.provider-public-jobs,.provider-public-tags{font-size:11px}
+      .conversation-messages{padding:6px 10px 78px;min-height:0}
+      .conversation-message{margin:6px 0;padding:9px 11px}
+      .conversation-compose{position:absolute;left:8px;right:8px;bottom:max(8px,env(safe-area-inset-bottom));z-index:10;padding:6px;background:white;border:1px solid var(--line);border-radius:18px;box-shadow:0 8px 24px rgba(18,61,43,.16)}
+      .conversation-compose input{padding:11px;border:0;background:transparent}
+      .conversation-compose button{padding:0 14px;border-radius:12px}
+    }
+
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -210,6 +234,8 @@
   <section class="conversation-modal" id="conversationModal" hidden>
     <div class="conversation-head"><button id="closeConversation" aria-label="Cerrar">‹</button><div><h2 id="conversationTitle">Conversación</h2><span id="conversationSubtitle">Llama a Jaime</span></div></div>
     <div class="conversation-body">
+      <button type="button" class="conversation-actions-toggle" id="conversationActionsToggle" aria-expanded="false">＋ Acciones</button>
+      <div class="conversation-tools" id="conversationTools">
       <button class="client-notify" id="clientNotifyBtn" hidden>🔔 Recibir avisos de mensajes y precios</button><div class="provider-public-card" id="providerPublicCard" hidden>
   <div class="provider-public-avatar" id="providerPublicAvatar"><span id="providerPublicAvatarInitial">J</span><img id="providerPublicAvatarImage" alt="Foto del prestador" hidden></div>
   <div class="provider-public-copy">
@@ -260,6 +286,7 @@
       <button class="report-toggle" id="reportToggle" type="button">Reportar un problema de seguridad</button>
       <form class="report-form" id="reportForm" hidden><select id="reportCategory" required><option value="">Selecciona un motivo</option><option value="seguridad">Seguridad</option><option value="estafa">Posible estafa</option><option value="trato">Trato inapropiado</option><option value="cobro">Problema con el cobro</option><option value="servicio">Problema con el servicio</option><option value="contenido">Contenido inapropiado</option><option value="otro">Otro</option></select><textarea id="reportDescription" required minlength="10" maxlength="2000" placeholder="Describe lo ocurrido. No incluyas claves ni datos bancarios."></textarea><button type="submit">Enviar reporte privado</button><div class="notice" id="reportNotice"></div></form>
       <form class="quote-form" id="quoteForm" hidden><input id="quoteAmount" inputmode="numeric" placeholder="$ Precio CLP" required><input id="quoteDetail" maxlength="500" placeholder="Qué incluye (opcional)"><button>Enviar cotización al cliente</button></form>
+      </div>
       <div class="conversation-messages" id="conversationMessages"></div>
       <form class="conversation-compose" id="conversationForm"><input id="conversationInput" maxlength="2000" placeholder="Escribe un mensaje…" autocomplete="off"><button>Enviar</button></form>
     </div>
@@ -269,6 +296,8 @@
 <script>
 (() => {
   const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+  const conversationActionsToggle=$('#conversationActionsToggle'),conversationTools=$('#conversationTools');
+  if(conversationActionsToggle&&conversationTools){conversationActionsToggle.addEventListener('click',()=>{const open=conversationTools.classList.toggle('open');conversationActionsToggle.setAttribute('aria-expanded',open?'true':'false');conversationActionsToggle.textContent=open?'× Cerrar acciones':'＋ Acciones';});}
   const session = localStorage.appSession || (localStorage.appSession = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
   const headers = {"Content-Type":"application/json","X-App-Session":session};
   const SERVICE_META = {
