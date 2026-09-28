@@ -484,6 +484,8 @@ async function startMercadoPagoCheckout(){
   }
 }
 
+window.startMercadoPagoCheckout = startMercadoPagoCheckout;
+
 $('#finishServiceBtn').addEventListener('click',async()=>{
     const c=conversationContext,btn=$('#finishServiceBtn'),note=$('#finishServiceNotice');if(!c)return;
     const isProvider=c.actor==='prestador';
