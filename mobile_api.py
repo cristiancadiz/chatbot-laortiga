@@ -1,4 +1,4 @@
-"""API y archivos públicos de la PWA Llama a Jaime Servicios.
+""API y archivos públicos de la PWA Llama a Jaime Servicios.
 
 El módulo no conoce credenciales ni importa el núcleo histórico. Recibe las
 dependencias necesarias al registrarse desde app.py.
@@ -260,6 +260,83 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         if not headers:
             raise RuntimeError("Supabase no está configurado")
         return {**headers, **({"Prefer": prefer} if prefer else {})}
+
+    def _mp_access_token():
+        return str(os.getenv("MERCADOPAGO_ACCESS_TOKEN") or "").strip()
+
+    def _mp_webhook_secret():
+        return str(os.getenv("MERCADOPAGO_WEBHOOK_SECRET") or "").strip()
+
+    def _mp_notification_url():
+        configured = str(os.getenv("MERCADOPAGO_NOTIFICATION_URL") or "").strip()
+        if configured:
+            return configured
+        base = str(os.getenv("LLAMA_JAIME_PUBLIC_URL") or "").strip().rstrip("/")
+        return f"{base}/app/api/mercadopago/webhook" if base else ""
+
+    def _mp_headers():
+        token = _mp_access_token()
+        if not token:
+            raise RuntimeError("Falta MERCADOPAGO_ACCESS_TOKEN")
+        return {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    def _mp_validate_signature(data_id):
+        """Valida x-signature usando el mismo esquema de la integración anterior."""
+        secret = _mp_webhook_secret()
+        if not secret:
+            app.logger.error("MERCADO PAGO: falta MERCADOPAGO_WEBHOOK_SECRET")
+            return False
+
+        x_signature = str(request.headers.get("x-signature") or "")
+        x_request_id = str(request.headers.get("x-request-id") or "")
+        parts = {}
+        for piece in x_signature.split(","):
+            if "=" in piece:
+                key, value = piece.strip().split("=", 1)
+                parts[key] = value
+
+        ts = parts.get("ts")
+        v1 = parts.get("v1")
+        if not ts or not v1:
+            return False
+
+        manifest = ""
+        if data_id:
+            manifest += f"id:{str(data_id).lower()};"
+        if x_request_id:
+            manifest += f"request-id:{x_request_id};"
+        manifest += f"ts:{ts};"
+
+        expected = hmac.new(
+            secret.encode("utf-8"),
+            manifest.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(expected, v1)
+
+    def _mp_payment(payment_id):
+        response = requests.get(
+            f"https://api.mercadopago.com/v1/payments/{payment_id}",
+            headers=_mp_headers(),
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json() if response.content else {}
+
+    def _mp_real_fee(payment):
+        """Suma únicamente cargos identificados por MP como mercadopago_fee."""
+        total = 0.0
+        for fee in (payment.get("fee_details") or []):
+            if str(fee.get("type") or "").lower() == "mercadopago_fee":
+                try:
+                    total += float(fee.get("amount") or 0)
+                except (TypeError, ValueError):
+                    pass
+        return max(0, int(round(total)))
 
     def _admin_auth():
         """Valida el JWT de Supabase Auth y confirma que pertenezca a un admin activo."""
@@ -1965,6 +2042,262 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         except requests.RequestException as exc:
             app.logger.exception("CONVERSATION ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude abrir la conversación."}, 502)
+
+    @app.post(f"{api_base}/solicitudes/<public_id>/pago/mercadopago")
+    def mobile_create_mercadopago_checkout(public_id):
+        """Crea Checkout Pro solo para el cliente dueño de la solicitud."""
+        if not _allow("mercadopago-checkout", limit=10, window_seconds=3600):
+            return _json(app, {"ok": False, "error": "Intenta nuevamente en unos minutos."}, 429)
+
+        body = request.get_json(silent=True) or {}
+        token = body.get("token")
+        try:
+            request_row = _client_auth(public_id, token)
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso inválido para pagar esta solicitud."}, 401)
+
+            if not request_row.get("prestador_id"):
+                return _json(app, {"ok": False, "error": "La solicitud todavía no tiene un prestador asignado."}, 409)
+
+            price = int(request_row.get("precio_servicio") or 0)
+            if price <= 0:
+                return _json(app, {"ok": False, "error": "Primero debes aceptar una cotización válida."}, 409)
+
+            payment_state = str(request_row.get("pago_estado") or "pendiente").lower()
+            if payment_state in {"pagado", "liberado"}:
+                return _json(app, {"ok": False, "error": "Este servicio ya tiene un pago confirmado."}, 409)
+            if payment_state == "reembolsado":
+                return _json(app, {"ok": False, "error": "Este pago fue reembolsado y requiere revisión."}, 409)
+            if payment_state == "disputado":
+                return _json(app, {"ok": False, "error": "Este pago está en disputa."}, 409)
+
+            notification_url = _mp_notification_url()
+            if not notification_url:
+                return _json(app, {
+                    "ok": False,
+                    "error": "Falta configurar MERCADOPAGO_NOTIFICATION_URL o LLAMA_JAIME_PUBLIC_URL."
+                }, 503)
+
+            base_url = str(os.getenv("LLAMA_JAIME_PUBLIC_URL") or "").strip().rstrip("/")
+            if not base_url:
+                base_url = request.url_root.rstrip("/")
+
+            external_reference = f"LJ-{request_row['public_id']}"
+            payload = {
+                "items": [{
+                    "id": request_row["public_id"],
+                    "title": "Servicio Llama a Jaime",
+                    "description": "Pago de servicio coordinado mediante Llama a Jaime",
+                    "currency_id": "CLP",
+                    "quantity": 1,
+                    "unit_price": price,
+                }],
+                "external_reference": external_reference,
+                "notification_url": notification_url,
+                "back_urls": {
+                    "success": f"{base_url}/app/?view=status&pago=success&solicitud={request_row['public_id']}",
+                    "pending": f"{base_url}/app/?view=status&pago=pending&solicitud={request_row['public_id']}",
+                    "failure": f"{base_url}/app/?view=status&pago=failure&solicitud={request_row['public_id']}",
+                },
+                "auto_return": "approved",
+                "binary_mode": False,
+                "metadata": {
+                    "solicitud_public_id": request_row["public_id"],
+                    "solicitud_id": request_row["id"],
+                    "empresa_id": request_row["empresa_id"],
+                },
+                "statement_descriptor": "LLAMA A JAIME",
+            }
+
+            response = requests.post(
+                "https://api.mercadopago.com/checkout/preferences",
+                headers=_mp_headers(),
+                json=payload,
+                timeout=20,
+            )
+            response.raise_for_status()
+            preference = response.json() if response.content else {}
+            checkout_url = preference.get("init_point") or preference.get("sandbox_init_point")
+            preference_id = str(preference.get("id") or "")
+            if not checkout_url or not preference_id:
+                return _json(app, {"ok": False, "error": "Mercado Pago no devolvió un checkout válido."}, 502)
+
+            # Guardamos la referencia de la preferencia. Aún NO marcamos el pago como pagado.
+            patch = requests.patch(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
+                headers=_db_headers("return=minimal"),
+                params={"id": f"eq.{request_row['id']}"},
+                json={
+                    "pago_proveedor": "mercadopago",
+                    "pago_referencia_externa": preference_id,
+                    "pago_actualizado_at": datetime.now(timezone.utc).isoformat(),
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            patch.raise_for_status()
+
+            Thread(
+                target=_audit,
+                args=("mercadopago_checkout_creado", "cliente", None, request_row["id"], {
+                    "preference_id": preference_id,
+                    "monto": price,
+                    "moneda": "CLP",
+                }),
+                daemon=True,
+            ).start()
+
+            return _json(app, {
+                "ok": True,
+                "checkout_url": checkout_url,
+                "preference_id": preference_id,
+                "monto": price,
+                "moneda": "CLP",
+            })
+
+        except RuntimeError as exc:
+            app.logger.error("MERCADO PAGO CONFIG ERROR: %s", exc)
+            return _json(app, {"ok": False, "error": str(exc)}, 503)
+        except requests.RequestException as exc:
+            app.logger.exception("MERCADO PAGO CHECKOUT ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude iniciar el pago con Mercado Pago."}, 502)
+
+    @app.route(f"{api_base}/mercadopago/webhook", methods=["POST", "GET"])
+    def mobile_mercadopago_webhook():
+        """Confirma el pago consultándolo directamente en Mercado Pago."""
+        try:
+            data = request.get_json(silent=True) or {}
+            payment_id = str(
+                ((data.get("data") or {}).get("id"))
+                or request.args.get("data.id")
+                or request.args.get("id")
+                or ""
+            ).strip()
+            event_type = str(
+                data.get("type")
+                or request.args.get("type")
+                or request.args.get("topic")
+                or ""
+            ).lower()
+
+            # Eventos que no son payment se reconocen pero no se procesan.
+            if event_type and event_type not in {"payment"}:
+                return _json(app, {"ok": True, "ignored": True})
+
+            if not payment_id:
+                return _json(app, {"ok": True, "ignored": True})
+
+            if not _mp_validate_signature(payment_id):
+                app.logger.warning("MERCADO PAGO WEBHOOK: firma inválida payment_id=%s", payment_id)
+                return _json(app, {"ok": False, "error": "Firma inválida."}, 401)
+
+            payment = _mp_payment(payment_id)
+            status = str(payment.get("status") or "").lower()
+            external_reference = str(payment.get("external_reference") or "")
+            if not external_reference.startswith("LJ-NX-"):
+                return _json(app, {"ok": True, "ignored": True})
+
+            public_id = external_reference[3:]
+            request_row = _request_by_code(public_id)
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Solicitud no encontrada."}, 404)
+
+            expected_amount = int(request_row.get("precio_servicio") or 0)
+            try:
+                paid_amount = int(round(float(payment.get("transaction_amount") or 0)))
+            except (TypeError, ValueError):
+                paid_amount = 0
+
+            if expected_amount <= 0 or paid_amount != expected_amount:
+                Thread(
+                    target=_audit,
+                    args=("mercadopago_monto_invalido", "sistema", None, request_row["id"], {
+                        "payment_id": payment_id,
+                        "esperado": expected_amount,
+                        "recibido": paid_amount,
+                    }),
+                    daemon=True,
+                ).start()
+                return _json(app, {"ok": False, "error": "Monto de pago no coincide."}, 409)
+
+            if status == "approved":
+                real_fee = _mp_real_fee(payment)
+
+                # Recalcula el neto del prestador usando el costo REAL informado por MP.
+                breakdown_response = requests.post(
+                    f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_calcular_desglose_pago",
+                    headers=_db_headers(),
+                    json={
+                        "p_solicitud_id": request_row["id"],
+                        "p_precio_servicio": expected_amount,
+                        "p_comision_mercado_pago": real_fee,
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                breakdown_response.raise_for_status()
+                breakdown = breakdown_response.json() if breakdown_response.content else {}
+                if isinstance(breakdown, list):
+                    breakdown = breakdown[0] if breakdown else {}
+                if not isinstance(breakdown, dict) or not breakdown.get("ok"):
+                    raise RuntimeError((breakdown or {}).get("error") or "No pude recalcular el desglose.")
+
+                payment_state_response = requests.post(
+                    f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_actualizar_estado_pago",
+                    headers=_db_headers(),
+                    json={
+                        "p_solicitud_id": request_row["id"],
+                        "p_estado": "pagado",
+                        "p_monto_total": expected_amount,
+                        "p_proveedor": "mercadopago",
+                        "p_referencia_externa": payment_id,
+                        "p_actor_tipo": "sistema",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                payment_state_response.raise_for_status()
+                payment_state = payment_state_response.json() if payment_state_response.content else {}
+                if isinstance(payment_state, list):
+                    payment_state = payment_state[0] if payment_state else {}
+                if not isinstance(payment_state, dict) or not payment_state.get("ok"):
+                    raise RuntimeError((payment_state or {}).get("error") or "No pude registrar el pago.")
+
+                Thread(
+                    target=_audit,
+                    args=("mercadopago_pago_confirmado", "sistema", None, request_row["id"], {
+                        "payment_id": payment_id,
+                        "monto": expected_amount,
+                        "comision_mercado_pago": real_fee,
+                    }),
+                    daemon=True,
+                ).start()
+                return _json(app, {"ok": True, "status": "approved"})
+
+            if status in {"refunded", "charged_back"}:
+                target_state = "reembolsado" if status == "refunded" else "disputado"
+                state_response = requests.post(
+                    f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_actualizar_estado_pago",
+                    headers=_db_headers(),
+                    json={
+                        "p_solicitud_id": request_row["id"],
+                        "p_estado": target_state,
+                        "p_monto_total": expected_amount,
+                        "p_proveedor": "mercadopago",
+                        "p_referencia_externa": payment_id,
+                        "p_actor_tipo": "sistema",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                state_response.raise_for_status()
+                return _json(app, {"ok": True, "status": status})
+
+            # pending / in_process / rejected / cancelled: no acreditamos dinero.
+            return _json(app, {"ok": True, "status": status or "unknown"})
+
+        except RuntimeError as exc:
+            app.logger.exception("MERCADO PAGO WEBHOOK LOGIC ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude procesar la confirmación del pago."}, 500)
+        except requests.RequestException as exc:
+            app.logger.exception("MERCADO PAGO WEBHOOK HTTP ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude verificar el pago."}, 502)
 
     @app.get(f"{api_base}/solicitudes/<public_id>/pago")
     def mobile_payment_status(public_id):
