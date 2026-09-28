@@ -78,6 +78,14 @@
 .provider-job-filter.active{background:var(--forest);border-color:var(--forest);color:#fff}
 .provider-job-filter .count{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;padding:0 5px;margin-left:4px;border-radius:999px;background:rgba(18,61,43,.09);font-size:10px}
 .provider-job-filter.active .count{background:rgba(255,255,255,.18)}
+
+    /* V7.37 · Cotización integrada en conversación */
+    .quote-box{margin:10px 0 14px;padding:14px;border:1px solid #cbd9cf;border-radius:18px;background:#fbfdf9;box-shadow:0 5px 16px rgba(18,61,43,.06)}
+    .quote-box h3{margin:0 0 7px;font-size:16px}.quote-box .quote-description{margin:0 0 10px;color:#44534a;white-space:pre-wrap}
+    .quote-economy{display:grid;gap:5px;margin:10px 0;padding:10px 12px;border-radius:13px;background:#f2f6ed;font-size:12px}
+    .quote-economy div{display:flex;justify-content:space-between;gap:12px}.quote-economy .net{padding-top:6px;border-top:1px solid #d7e0d5;font-weight:900}
+    .quote-mp-note{display:block;margin-top:8px;color:#69756e;font-size:11px;line-height:1.35}
+
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -434,7 +442,7 @@
       </div>
       <button class="report-toggle" id="reportToggle" type="button">Reportar un problema de seguridad</button>
       <form class="report-form" id="reportForm" hidden><select id="reportCategory" required><option value="">Selecciona un motivo</option><option value="seguridad">Seguridad</option><option value="estafa">Posible estafa</option><option value="trato">Trato inapropiado</option><option value="cobro">Problema con el cobro</option><option value="servicio">Problema con el servicio</option><option value="contenido">Contenido inapropiado</option><option value="otro">Otro</option></select><textarea id="reportDescription" required minlength="10" maxlength="2000" placeholder="Describe lo ocurrido. No incluyas claves ni datos bancarios."></textarea><button type="submit">Enviar reporte privado</button><div class="notice" id="reportNotice"></div></form>
-      <form class="quote-form" id="quoteForm" hidden><input id="quoteAmount" inputmode="numeric" placeholder="$ Precio CLP" required><input id="quoteDetail" maxlength="500" placeholder="Qué incluye (opcional)"><button>Enviar cotización al cliente</button></form>
+      <form class="quote-form" id="quoteForm" hidden><input id="quoteAmount" inputmode="numeric" placeholder="$ Precio CLP" required><input id="quoteDetail" maxlength="500" placeholder="Descripción de la cotización: qué incluye, alcance, materiales, etc."><button>Enviar cotización al cliente</button></form>
       </div>
       <div class="conversation-messages" id="conversationMessages"></div>
       <form class="conversation-compose" id="conversationForm"><input id="conversationInput" maxlength="2000" placeholder="Escribe un mensaje…" autocomplete="off"><button>Enviar</button></form>
@@ -675,9 +683,18 @@ if(hasProvider){
     $('#paymentServicePrice').textContent=money(servicePrice);
     $('#paymentPlatformFee').textContent='− '+money(sol.comision_llama_jaime_neta);
     $('#paymentPlatformVat').textContent='− '+money(sol.iva_comision_llama_jaime);
-    $('#paymentGatewayFee').textContent='− '+money(sol.comision_mercado_pago);
-    $('#paymentProviderNet').textContent=money(sol.neto_prestador);
-    $('#paymentGatewayNote').hidden=Number(sol.comision_mercado_pago||0)>0;
+    const realMpFee=Number(sol.comision_mercado_pago||0);
+    const mpFee=realMpFee>0?realMpFee:Math.round(servicePrice*0.038);
+    const platformFee=Number(sol.comision_llama_jaime_neta||Math.round(servicePrice*0.12));
+    const platformVat=Number(sol.iva_comision_llama_jaime||Math.round(platformFee*0.19));
+    const providerNet=realMpFee>0?Number(sol.neto_prestador||0):Math.max(0,servicePrice-platformFee-platformVat-mpFee);
+    $('#paymentGatewayFee').textContent='− '+money(mpFee)+(realMpFee>0?'':' aprox.');
+    $('#paymentProviderNet').textContent=money(providerNet)+(realMpFee>0?'':' aprox.');
+    const mpNote=$('#paymentGatewayNote');
+    mpNote.hidden=false;
+    mpNote.textContent=realMpFee>0
+      ?'Costo Mercado Pago actualizado con el valor informado para esta transacción.'
+      :'Costo Mercado Pago estimado en 3,8% para esta referencia. Es aproximado y puede cambiar según el medio de pago, plazo de liberación y tarifas aplicables. El monto definitivo se actualiza al confirmarse el pago.';
   }
 }
 const finishCard=$('#finishServiceCard'),finishBtn=$('#finishServiceBtn'),finishNote=$('#finishServiceNotice');
@@ -772,11 +789,27 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
 
   $('#shareConversationLocation').addEventListener('click',async()=>{const c=conversationContext,button=$('#shareConversationLocation');if(!c)return;const original=button.textContent;button.disabled=true;button.textContent='Obteniendo ubicación…';try{const location=await currentPosition(),body=c.actor==='cliente'?{actor:'cliente',token:c.token,...location}:{actor:'prestador',codigo:c.codigo,token:c.token,...location};const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/ubicacion`,{method:'POST',headers,body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude compartir la ubicación');await loadConversation()}catch(error){alert(error.message)}finally{button.disabled=false;button.textContent=original}});
 
-  function renderQuote(quote){const c=conversationContext,box=$('#quoteBox'),form=$('#quoteForm'),paymentNote='';box.hidden=!quote;form.hidden=!(c&&c.actor==='prestador'&&(!quote||quote.estado==='pendiente'));if(!quote){box.innerHTML='';return}const price=new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(quote.monto_clp);if(quote.estado==='aceptada'){box.innerHTML=`<h3>✓ Precio confirmado: ${escapeHtml(price)}</h3><div>${escapeHtml(quote.detalle||'Servicio acordado')}</div>${paymentNote}`;form.hidden=true;return}if(c.actor==='cliente'){box.innerHTML=`<h3>Cotización: ${escapeHtml(price)}</h3><div>${escapeHtml(quote.detalle||'Sin detalle adicional')}</div>${paymentNote}<div class="quote-actions"><button class="quote-accept" data-quote-action="aceptar">Aceptar precio</button><button class="quote-reject" data-quote-action="rechazar">Rechazar</button></div>`;$$('[data-quote-action]').forEach(b=>b.addEventListener('click',()=>answerQuote(quote.id,b.dataset.quoteAction,b)))}else{box.innerHTML=`<h3>Precio enviado: ${escapeHtml(price)}</h3><div>Esperando respuesta del cliente.</div>${paymentNote}`}}
-
-  $('#conversationForm').addEventListener('submit',async e=>{e.preventDefault();const c=conversationContext,input=$('#conversationInput'),message=input.value.trim();if(!c||!message)return;const body=c.actor==='cliente'?{actor:'cliente',token:c.token,mensaje:message}:{actor:'prestador',codigo:c.codigo,token:c.token,mensaje:message};input.disabled=true;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/conversacion`,{method:'POST',headers,body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude enviar');input.value='';await loadConversation()}catch(err){alert(err.message)}finally{input.disabled=false;input.focus()}});
-
-  $('#quoteForm').addEventListener('submit',async e=>{e.preventDefault();const c=conversationContext,amount=$('#quoteAmount').value,detail=$('#quoteDetail').value;if(!c||c.actor!=='prestador')return;const button=e.submitter;button.disabled=true;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/cotizaciones`,{method:'POST',headers,body:JSON.stringify({codigo:c.codigo,token:c.token,monto_clp:amount,detalle:detail})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude enviar el precio');$('#quoteAmount').value='';$('#quoteDetail').value='';await loadConversation()}catch(err){alert(err.message)}finally{button.disabled=false}});
+  function renderQuote(quote){
+    const c=conversationContext,box=$('#quoteBox'),form=$('#quoteForm');
+    box.hidden=!quote;
+    form.hidden=!(c&&c.actor==='prestador'&&(!quote||quote.estado==='pendiente'));
+    if(!quote){box.innerHTML='';return}
+    const amount=Number(quote.monto_clp||0);
+    const money=v=>new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(Number(v||0));
+    const price=money(amount);
+    const platform=Math.round(amount*0.12);
+    const vat=Math.round(platform*0.19);
+    const mpEstimate=Math.round(amount*0.038);
+    const estimatedNet=Math.max(0,amount-platform-vat-mpEstimate);
+    const description=escapeHtml(quote.detalle||'Servicio cotizado sin descripción adicional');
+    const economy=c&&c.actor==='prestador'?`<div class="quote-economy"><div><span>Valor del servicio</span><strong>${escapeHtml(price)}</strong></div><div><span>Comisión Llama a Jaime (12%)</span><strong>− ${escapeHtml(money(platform))}</strong></div><div><span>IVA sobre comisión (19%)</span><strong>− ${escapeHtml(money(vat))}</strong></div><div><span>Mercado Pago (aprox. 3,8%)</span><strong>− ${escapeHtml(money(mpEstimate))}</strong></div><div class="net"><span>Recibirías aprox.</span><strong>${escapeHtml(money(estimatedNet))}</strong></div><small class="quote-mp-note">El costo de Mercado Pago es aproximado y puede cambiar según el medio de pago, plazo de liberación y tarifas aplicables. Después del pago se mostrará el costo real informado por Mercado Pago.</small></div>`:'';
+    const title=quote.estado==='aceptada'?`✓ Cotización aceptada · ${escapeHtml(price)}`:`Cotización · ${escapeHtml(price)}`;
+    const actions=(c&&c.actor==='cliente'&&quote.estado==='pendiente')?`<div class="quote-actions"><button class="quote-accept" data-quote-action="aceptar">Aceptar cotización</button><button class="quote-reject" data-quote-action="rechazar">Rechazar</button></div>`:'';
+    const status=(c&&c.actor==='prestador'&&quote.estado==='pendiente')?'<small>Esperando respuesta del cliente.</small>':'';
+    box.innerHTML=`<h3>${title}</h3><div class="quote-description"><strong>Descripción:</strong><br>${description}</div>${economy}${status}${actions}`;
+    if(quote.estado==='aceptada')form.hidden=true;
+    $$('[data-quote-action]').forEach(b=>b.addEventListener('click',()=>answerQuote(quote.id,b.dataset.quoteAction,b)));
+  }
 
   async function answerQuote(quoteId,action,button){const c=conversationContext;if(!c||c.actor!=='cliente')return;if(action==='rechazar'&&!confirm('¿Rechazar este precio y volver a buscar otro prestador?'))return;button.disabled=true;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/cotizaciones/${encodeURIComponent(quoteId)}/responder`,{method:'POST',headers,body:JSON.stringify({token:c.token,accion:action})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude responder');if(action==='rechazar'){closeConversation();go('status');await loadSaved()}else await loadConversation()}catch(err){alert(err.message);button.disabled=false}}
 
