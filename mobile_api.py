@@ -55,6 +55,17 @@ BEAUTY_TYPES = {
     "otro_belleza",
 }
 
+
+PROVIDER_SPECIALTY_TYPES = {
+    "electricidad", "gasfiteria", "carpinteria", "pintura", "cerrajeria", "muebles_armado", "instalaciones", "reparaciones_hogar",
+    "limpieza_hogar", "limpieza_profunda", "limpieza_oficinas", "limpieza_post_obra", "limpieza_vidrios", "tapices_alfombras",
+    "flete_pequeno", "mudanza", "retiro_entrega", "carga_descarga", "transporte_muebles",
+    "mantencion_jardin", "poda", "corte_pasto", "riego", "paisajismo", "retiro_residuos_verdes",
+    "barberia", "peluqueria", "manicure_pedicure", "maquillaje", "depilacion", "masaje_relajacion", "peinado_eventos", "otro_belleza",
+    "retiro_reciclaje", "clasificacion_reciclaje", "retiro_voluminosos",
+    "mantencion_general", "apoyo_eventos", "servicios_varios",
+}
+
 PHOTO_BUCKET = "llama-jaime-solicitudes"
 DOCUMENT_BUCKET = "documentos-prestadores"
 PROFILE_BUCKET = "prestadores-perfil"
@@ -1235,7 +1246,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             _norm(x).replace(" ", "_")
             for x in _list_clean(body.get("especialidades"), 60, 20)
         ]
-        specialties = list(dict.fromkeys(x for x in specialties if x in BEAUTY_TYPES))
+        specialties = list(dict.fromkeys(x for x in specialties if x in PROVIDER_SPECIALTY_TYPES))
         vehicle = _clean(body.get("vehiculo"), 120)
         try:
             radius = float(body.get("radio_km")) if body.get("radio_km") not in (None, "") else None
@@ -1256,8 +1267,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {"ok": False, "error": "Debes aceptar los términos y la política de privacidad."}, 400)
         if "reciclaje" in roles and not materials:
             return _json(app, {"ok": False, "error": "Selecciona los materiales que recibes."}, 400)
-        if "belleza" in roles and not specialties:
-            return _json(app, {"ok": False, "error": "Selecciona al menos una especialidad de belleza."}, 400)
+        if not specialties:
+            return _json(app, {"ok": False, "error": "Selecciona al menos una especialidad para tus servicios."}, 400)
         if "flete" in roles and not vehicle:
             return _json(app, {"ok": False, "error": "Indica el vehículo que utilizas para fletes."}, 400)
 
@@ -1419,7 +1430,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     item for item in (
                         _norm(x).replace(" ", "_")
                         for x in _list_clean(body.get("especialidades"), 60, 20)
-                    ) if item in BEAUTY_TYPES
+                    ) if item in PROVIDER_SPECIALTY_TYPES
                 ]
             if "vehiculo" in body:
                 update["vehiculo"] = _clean(body.get("vehiculo"), 120) or None
