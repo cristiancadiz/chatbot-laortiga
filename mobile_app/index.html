@@ -70,6 +70,14 @@
   .provider-quick-actions{gap:4px}
   .provider-quick-actions .provider-mini-action{font-size:9px;padding:5px 6px}
 }
+
+/* V7.36 · filtros de oportunidades del prestador */
+.provider-job-filters{display:flex;gap:7px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.provider-job-filters::-webkit-scrollbar{display:none}
+.provider-job-filter{flex:0 0 auto;border:1px solid var(--line);background:#fff;color:var(--text);border-radius:999px;padding:8px 11px;font:inherit;font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap}
+.provider-job-filter.active{background:var(--forest);border-color:var(--forest);color:#fff}
+.provider-job-filter .count{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;padding:0 5px;margin-left:4px;border-radius:999px;background:rgba(18,61,43,.09);font-size:10px}
+.provider-job-filter.active .count{background:rgba(255,255,255,.18)}
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -354,6 +362,16 @@
 </section>
 <div id="providerDashboard" hidden><div class="section-title"><h2>Oportunidades</h2><button class="chip" id="refreshOpportunities">Actualizar</button></div>
 
+<div class="provider-job-filters" id="providerJobFilters" aria-label="Filtrar oportunidades">
+<button class="provider-job-filter active" type="button" data-provider-filter="todos">Todos <span class="count" data-filter-count="todos">0</span></button>
+<button class="provider-job-filter" type="button" data-provider-filter="pendientes">Pendientes <span class="count" data-filter-count="pendientes">0</span></button>
+<button class="provider-job-filter" type="button" data-provider-filter="conversacion">En conversación <span class="count" data-filter-count="conversacion">0</span></button>
+<button class="provider-job-filter" type="button" data-provider-filter="cotizados">Cotizados <span class="count" data-filter-count="cotizados">0</span></button>
+<button class="provider-job-filter" type="button" data-provider-filter="asignados">Asignados <span class="count" data-filter-count="asignados">0</span></button>
+<button class="provider-job-filter" type="button" data-provider-filter="pagados">Pagados <span class="count" data-filter-count="pagados">0</span></button>
+<button class="provider-job-filter" type="button" data-provider-filter="completados">Completados <span class="count" data-filter-count="completados">0</span></button>
+<button class="provider-job-filter" type="button" data-provider-filter="cancelados">Cancelados <span class="count" data-filter-count="cancelados">0</span></button>
+</div>
 <div class="opportunities" id="opportunities"></div></div>
     </section>
 
@@ -831,7 +849,45 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     else{note.textContent='';note.style.display='none'}
   }
 
-  $('#providerLogout').addEventListener('click',()=>showProviderLoggedOut());
+  async function logoutProviderForAccountSwitch(){
+    const button=$('#providerLogout');
+    if(button){button.disabled=true;button.textContent='Saliendo…'}
+    try{
+      // Elimina la suscripción push de ESTE navegador. Así el próximo prestador
+      // que inicie sesión en el mismo celular no hereda avisos de la cuenta anterior.
+      if('serviceWorker' in navigator && 'PushManager' in window){
+        try{
+          const registration=await navigator.serviceWorker.ready;
+          const subscription=await registration.pushManager.getSubscription();
+          if(subscription)await subscription.unsubscribe();
+        }catch(_pushErr){}
+      }
+
+      // Borra únicamente la sesión local del prestador. No elimina la cuenta,
+      // solicitudes, conversaciones, documentos ni conexión de Mercado Pago.
+      localStorage.removeItem('providerAuth');
+
+      // Limpia formularios para permitir ingresar inmediatamente otra cuenta.
+      $('#providerLoginForm')?.reset();
+      $('#providerForm')?.reset();
+      $('#providerForgotForm')?.reset();
+      $('#providerResetForm')?.reset();
+      const loginNote=$('#providerLoginNotice');
+      if(loginNote){loginNote.textContent='Sesión cerrada. Puedes ingresar con otra cuenta.';loginNote.className='notice success';loginNote.style.display='block'}
+
+      resetProviderPrivateUI();
+      $('#providerAccessSwitch').hidden=false;
+      showProviderAccess('login');
+      $('#providerLoginRut')?.focus();
+    }finally{
+      if(button){button.disabled=false;button.textContent='Salir'}
+    }
+  }
+
+  $('#providerLogout').addEventListener('click',async()=>{
+    if(!confirm('¿Cerrar esta sesión para ingresar con otra cuenta?'))return;
+    await logoutProviderForAccountSwitch();
+  });
 
 
   const PROVIDER_DOC_TYPES=[['cedula_frontal','🪪','Cédula frontal',false],['cedula_reverso','🪪','Cédula reverso',false],['antecedentes','📄','Certificado de antecedentes',false],['cv','📋','Currículum Vitae',false],['titulo','🎓','Título profesional o técnico',true],['certificado','📜','Certificados y cursos',true],['licencia_conducir','🚗','Licencia de conducir',false],['otro','📎','Otro documento',true]];
@@ -1008,7 +1064,65 @@ async function loadProvider(){
     await loadOpportunities();
   }
 
-  async function loadOpportunities(){const auth=providerAuth(),box=$('#opportunities');if(!auth)return;box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando oportunidades…</div>';try{const url=`/app/api/oportunidades?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`;const r=await fetch(url,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude consultar');$('#availabilityBtn').textContent=d.habilitado===false?'Desconectado':(d.disponible?'Activado':'Desconectado');$('#availabilityBtn').classList.toggle('off',!d.disponible||d.habilitado===false);if(d.habilitado===false){box.innerHTML=`<div class="empty">${escapeHtml(d.mensaje||'Tu cuenta aún no está habilitada para recibir trabajos.')}</div>`;return}if(!d.oportunidades.length){box.innerHTML='<div class="empty">No hay oportunidades compatibles por ahora.</div>';return}box.innerHTML='';for(const item of d.oportunidades){const s=item.solicitud,el=document.createElement('article'),meta=SERVICE_META[s.tipo]||SERVICE_META.otro,subtype=s.tipo==='belleza'?(BEAUTY_META[s.subtipo]||'Belleza y bienestar'):s.tipo==='salud'?(HEALTH_META[s.subtipo]||'Salud'):'';el.className='opportunity '+(item.match_estado==='tomada'?'taken':'');const material=(s.materiales||[]).join(', '),summary=subtype?`${subtype} · ${s.detalles||'Sin detalle'}`:(material||s.detalles||'Sin detalle');el.innerHTML=`<h3>${escapeHtml(meta.label)} · ${escapeHtml(s.comuna||'')}</h3><p>${escapeHtml(summary)}</p><p>${escapeHtml(s.fecha_preferida||'Horario a coordinar')}</p>${item.match_estado==='tomada'?`<p><strong>Contacto:</strong> ${escapeHtml(s.nombre||'')} · ${escapeHtml(s.telefono||'')}</p><p><strong>Dirección:</strong> ${escapeHtml(s.direccion_origen||'')}</p>${s.direccion_destino?`<p><strong>Destino:</strong> ${escapeHtml(s.direccion_destino)}</p>`:''}<button class="primary" data-provider-chat="${escapeHtml(s.public_id)}">Conversar</button>`:`<button class="primary" data-take="${item.match_id}">Tomar solicitud</button>`}`;if(item.match_estado==='tomada'&&Array.isArray(s.fotos)&&s.fotos.length){const gallery=document.createElement('div');gallery.className='photo-gallery';renderPhotoGallery(s.fotos,gallery);el.insertBefore(gallery,el.querySelector('[data-provider-chat]'))}box.append(el)}$$('[data-take]').forEach(b=>b.addEventListener('click',()=>takeOpportunity(b.dataset.take,b)));$$('[data-provider-chat]').forEach(b=>b.addEventListener('click',()=>openConversation('prestador',{public_id:b.dataset.providerChat,codigo:auth.codigo,token:auth.token})));}catch(err){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
+  let providerOpportunityRows=[];
+  let providerOpportunityFilter='todos';
+
+  function providerOpportunityBucket(item){
+    const s=item?.solicitud||{};
+    const estado=String(s.estado||item?.estado||'').toLowerCase();
+    const pago=String(s.pago_estado||item?.pago_estado||'').toLowerCase();
+    const match=String(item?.match_estado||'').toLowerCase();
+    const cotizacion=s.cotizacion||item?.cotizacion||s.ultima_cotizacion||item?.ultima_cotizacion;
+    if(['cancelada','cancelado'].includes(estado))return 'cancelados';
+    if(['completada','completado','finalizada','finalizado'].includes(estado))return 'completados';
+    if(['pagado','liberado','autorizado'].includes(pago))return 'pagados';
+    if(['asignada','asignado','en_camino'].includes(estado))return 'asignados';
+    if(cotizacion||s.precio_cotizado||item?.precio_cotizado||['cotizada','cotizado'].includes(estado))return 'cotizados';
+    if(match==='tomada'||['revisando','en_conversacion','conversando'].includes(estado))return 'conversacion';
+    return 'pendientes';
+  }
+
+  function updateProviderFilterCounts(rows){
+    const counts={todos:rows.length,pendientes:0,conversacion:0,cotizados:0,asignados:0,pagados:0,completados:0,cancelados:0};
+    rows.forEach(item=>{const key=providerOpportunityBucket(item);if(key in counts)counts[key]++});
+    Object.entries(counts).forEach(([key,value])=>{const el=document.querySelector(`[data-filter-count="${key}"]`);if(el)el.textContent=String(value)});
+  }
+
+  function renderProviderOpportunities(){
+    const auth=providerAuth(),box=$('#opportunities');if(!auth||!box)return;
+    const rows=providerOpportunityFilter==='todos'?providerOpportunityRows:providerOpportunityRows.filter(item=>providerOpportunityBucket(item)===providerOpportunityFilter);
+    $$('.provider-job-filter').forEach(btn=>btn.classList.toggle('active',btn.dataset.providerFilter===providerOpportunityFilter));
+    if(!rows.length){box.innerHTML='<div class="empty">No hay trabajos en este estado.</div>';return}
+    box.innerHTML='';
+    for(const item of rows){
+      const s=item.solicitud,el=document.createElement('article'),meta=SERVICE_META[s.tipo]||SERVICE_META.otro,subtype=s.tipo==='belleza'?(BEAUTY_META[s.subtipo]||'Belleza y bienestar'):s.tipo==='salud'?(HEALTH_META[s.subtipo]||'Salud'):'';
+      el.className='opportunity '+(item.match_estado==='tomada'?'taken':'');
+      const material=(s.materiales||[]).join(', '),summary=subtype?`${subtype} · ${s.detalles||'Sin detalle'}`:(material||s.detalles||'Sin detalle');
+      el.innerHTML=`<h3>${escapeHtml(meta.label)} · ${escapeHtml(s.comuna||'')}</h3><p>${escapeHtml(summary)}</p><p>${escapeHtml(s.fecha_preferida||'Horario a coordinar')}</p>${item.match_estado==='tomada'?`<p><strong>Contacto:</strong> ${escapeHtml(s.nombre||'')} · ${escapeHtml(s.telefono||'')}</p><p><strong>Dirección:</strong> ${escapeHtml(s.direccion_origen||'')}</p>${s.direccion_destino?`<p><strong>Destino:</strong> ${escapeHtml(s.direccion_destino)}</p>`:''}<button class="primary" data-provider-chat="${escapeHtml(s.public_id)}">Conversar</button>`:`<button class="primary" data-take="${item.match_id}">Tomar solicitud</button>`}`;
+      if(item.match_estado==='tomada'&&Array.isArray(s.fotos)&&s.fotos.length){const gallery=document.createElement('div');gallery.className='photo-gallery';renderPhotoGallery(s.fotos,gallery);el.insertBefore(gallery,el.querySelector('[data-provider-chat]'))}
+      box.append(el);
+    }
+    $$('[data-take]').forEach(b=>b.addEventListener('click',()=>takeOpportunity(b.dataset.take,b)));
+    $$('[data-provider-chat]').forEach(b=>b.addEventListener('click',()=>openConversation('prestador',{public_id:b.dataset.providerChat,codigo:auth.codigo,token:auth.token})));
+  }
+
+  async function loadOpportunities(){
+    const auth=providerAuth(),box=$('#opportunities');if(!auth)return;
+    box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando oportunidades…</div>';
+    try{
+      const url=`/app/api/oportunidades?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`;
+      const r=await fetch(url,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude consultar');
+      $('#availabilityBtn').textContent=d.habilitado===false?'Desconectado':(d.disponible?'Activado':'Desconectado');
+      $('#availabilityBtn').classList.toggle('off',!d.disponible||d.habilitado===false);
+      if(d.habilitado===false){providerOpportunityRows=[];updateProviderFilterCounts([]);box.innerHTML=`<div class="empty">${escapeHtml(d.mensaje||'Tu cuenta aún no está habilitada para recibir trabajos.')}</div>`;return}
+      providerOpportunityRows=Array.isArray(d.oportunidades)?d.oportunidades:[];
+      updateProviderFilterCounts(providerOpportunityRows);
+      if(!providerOpportunityRows.length){box.innerHTML='<div class="empty">No hay oportunidades compatibles por ahora.</div>';return}
+      renderProviderOpportunities();
+    }catch(err){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}
+  }
+
+  $$('.provider-job-filter').forEach(btn=>btn.addEventListener('click',()=>{providerOpportunityFilter=btn.dataset.providerFilter||'todos';renderProviderOpportunities()}));
 
   function escapeHtml(value){const div=document.createElement('div');div.textContent=String(value||'');return div.innerHTML}
   async function takeOpportunity(matchId,button){const auth=providerAuth();if(!auth)return;button.disabled=true;button.textContent='Tomando…';try{const r=await fetch(`/app/api/oportunidades/${encodeURIComponent(matchId)}/tomar`,{method:'POST',headers,body:JSON.stringify({codigo:auth.codigo,token:auth.token})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No se pudo tomar');await loadOpportunities();}catch(err){alert(err.message);button.disabled=false;button.textContent='Tomar solicitud'}}
