@@ -2760,10 +2760,16 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             )
             response.raise_for_status()
             rows = response.json() if response.content else []
+            is_finished = bool(request_row.get("servicio_finalizado_at"))
             return _json(app, {
                 "ok": True,
                 "evaluacion": rows[0] if rows else None,
-                "puede_evaluar": not bool(rows),
+                "puede_evaluar": is_finished and not bool(rows),
+                "servicio_finalizado": is_finished,
+                "motivo_no_disponible": (
+                    None if (is_finished or rows)
+                    else "Podrás evaluar al prestador cuando el servicio esté finalizado."
+                ),
             })
         except requests.RequestException as exc:
             app.logger.exception("GET PROVIDER REVIEW ERROR: %r", exc)
@@ -2794,6 +2800,12 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             provider_id = request_row.get("prestador_id")
             if not provider_id:
                 return _json(app, {"ok": False, "error": "Esta solicitud todavía no tiene un prestador asignado."}, 409)
+
+            if not request_row.get("servicio_finalizado_at"):
+                return _json(app, {
+                    "ok": False,
+                    "error": "Solo puedes evaluar al prestador después de finalizar el servicio."
+                }, 409)
 
             # Evita evaluar a un prestador distinto: el ID siempre sale de la solicitud autenticada.
             existing = requests.get(
