@@ -219,6 +219,7 @@
       <div class="provider-summary" id="providerSummary"><div class="row"><div><h3 id="providerName">Prestador</h3><span id="providerCode"></span><span class="security-status" id="providerSecurityStatus">Identidad pendiente de revisión</span></div><button class="availability" id="availabilityBtn">Disponible</button></div></div>
       <div class="provider-quick-actions" id="providerQuickActions">
         <button class="notify-btn provider-mini-action" id="notifyBtn" hidden>🔔 Notificaciones</button>
+        <button class="secondary provider-mini-action" id="providerPhotoQuick" type="button" hidden>📷 Foto</button>
         <button class="secondary provider-mini-action provider-exit" id="providerLogout" type="button" hidden>Salir</button>
       </div>
       <div class="access-switch" id="providerAccessSwitch"><button class="toggle active" type="button" data-provider-access="register">Crear cuenta</button><button class="toggle" type="button" data-provider-access="login">Ingresar</button></div>
@@ -689,6 +690,8 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     $('#providerDashboard').hidden=true;
     $('#notifyBtn').hidden=true;
     $('#providerLogout').hidden=true;
+    $('#providerPhotoQuick').hidden=true;
+    $('#providerPhotoQuick').textContent='📷 Foto';
     $('#providerDocumentsCard').hidden=true;
     $('#providerPhotoCard').hidden=true;
     $('#providerDocuments').innerHTML='';
@@ -727,10 +730,19 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     try{
       const r=await fetch(`/app/api/prestadores/foto-perfil?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`,{headers,cache:'no-store'}),d=await r.json();
       if(!r.ok)throw new Error(d.error||'No pude consultar tu foto');
-      if(d.foto&&d.foto.url){img.src=d.foto.url;img.hidden=false;initial.hidden=true;del.hidden=false;$('#providerPhotoChoose').textContent='📷 Editar foto'}
+      if(d.foto&&d.foto.url){img.src=d.foto.url;img.hidden=false;initial.hidden=true;del.hidden=false;$('#providerPhotoChoose').textContent='📷 Cambiar foto'}
       else{img.removeAttribute('src');img.hidden=true;initial.hidden=false;del.hidden=true;$('#providerPhotoChoose').textContent='📷 Agregar foto'}
     }catch(err){const n=$('#providerPhotoNotice');n.className='notice error';n.textContent=err.message;n.style.display='block'}
   }
+  $('#providerPhotoQuick').addEventListener('click',()=>{
+    const card=$('#providerPhotoCard');
+    if(!card)return;
+    const opening=card.hidden;
+    card.hidden=!opening;
+    $('#providerPhotoQuick').textContent=opening?'✕ Cerrar foto':'📷 Foto';
+    if(opening)card.scrollIntoView({behavior:'smooth',block:'nearest'});
+  });
+
   $('#providerPhotoChoose').addEventListener('click',()=>$('#providerPhotoInput').click());
   $('#providerPhotoInput').addEventListener('change',async e=>{
     const file=e.target.files&&e.target.files[0],auth=providerAuth(),n=$('#providerPhotoNotice'),btn=$('#providerPhotoChoose');if(!file||!auth)return;
@@ -820,9 +832,12 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     }
 
     $('#notifyBtn').hidden=false;
+    $('#providerPhotoQuick').hidden=false;
+    $('#providerPhotoQuick').textContent='📷 Foto';
     $('#providerLogout').hidden=false;
     $('#providerDocumentsCard').hidden=false;
     await loadProviderPhoto();
+    $('#providerPhotoCard').hidden=true;
     await loadProviderDocuments();
     await loadOpportunities();
   }
