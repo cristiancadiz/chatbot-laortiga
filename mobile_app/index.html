@@ -31,6 +31,9 @@
     .payment-client-action{flex:0 0 100%;border-top:1px solid var(--line);padding-top:10px}
     .payment-client-action button{width:100%}
     .payment-client-action .notice{margin-top:7px}
+
+    .quote-form[hidden],.payment-status-card[hidden],.payment-client-action[hidden],
+    .payment-breakdown[hidden],.finish-service-card[hidden]{display:none!important}
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -367,7 +370,13 @@
   function closeConversation(){clearInterval(conversationTimer);conversationTimer=null;conversationContext=null;$('#reportForm').hidden=true;$('#conversationModal').hidden=true}
   $('#closeConversation').addEventListener('click',closeConversation);
 
-  async function loadConversation(silent=false){const c=conversationContext;if(!c)return;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/conversacion?${conversationQuery()}`,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude abrir la conversación');const box=$('#conversationMessages'),hasProvider=!!d.prestador;if(!silent)box.innerHTML='';renderPhotoGallery(d.fotos,$('#conversationPhotos'));renderLocations(d.ubicaciones);$('#reportToggle').hidden=!hasProvider;const sol=d.solicitud||{},paymentCard=$('#paymentStatusCard'),paymentBadge=$('#paymentStatusBadge'),paymentDetail=$('#paymentStatusDetail');
+  async function loadConversation(silent=false){const c=conversationContext;if(!c)return;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/conversacion?${conversationQuery()}`,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude abrir la conversación');
+if(d.actor==='cliente'||d.actor==='prestador'){
+  c.actor=d.actor;
+  $('#clientNotifyBtn').hidden=c.actor!=='cliente';
+  $('#shareConversationLocation').textContent=c.actor==='cliente'?'📍 Compartir ubicación con el prestador':'📍 Compartir ubicación con el cliente';
+}
+const box=$('#conversationMessages'),hasProvider=!!d.prestador;if(!silent)box.innerHTML='';renderPhotoGallery(d.fotos,$('#conversationPhotos'));renderLocations(d.ubicaciones);$('#reportToggle').hidden=!hasProvider;const sol=d.solicitud||{},paymentCard=$('#paymentStatusCard'),paymentBadge=$('#paymentStatusBadge'),paymentDetail=$('#paymentStatusDetail');
 const paymentState=String(sol.pago_estado||'pendiente').toLowerCase();
 const paymentLabels={pendiente:'Pendiente',autorizado:'Autorizado',pagado:'Pagado',liberado:'Liberado',reembolsado:'Reembolsado',disputado:'Disputado'};
 const paymentDetails={
@@ -496,7 +505,7 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
 
   $('#shareConversationLocation').addEventListener('click',async()=>{const c=conversationContext,button=$('#shareConversationLocation');if(!c)return;const original=button.textContent;button.disabled=true;button.textContent='Obteniendo ubicación…';try{const location=await currentPosition(),body=c.actor==='cliente'?{actor:'cliente',token:c.token,...location}:{actor:'prestador',codigo:c.codigo,token:c.token,...location};const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/ubicacion`,{method:'POST',headers,body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude compartir la ubicación');await loadConversation()}catch(error){alert(error.message)}finally{button.disabled=false;button.textContent=original}});
 
-  function renderQuote(quote){const c=conversationContext,box=$('#quoteBox'),form=$('#quoteForm'),paymentNote='<div class="muted-note">Por ahora, el pago se coordina directamente con el prestador. La app no cobra ni retiene dinero.</div>';box.hidden=!quote;form.hidden=!(c&&c.actor==='prestador'&&(!quote||quote.estado==='pendiente'));if(!quote){box.innerHTML='';return}const price=new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(quote.monto_clp);if(quote.estado==='aceptada'){box.innerHTML=`<h3>✓ Precio confirmado: ${escapeHtml(price)}</h3><div>${escapeHtml(quote.detalle||'Servicio acordado')}</div>${paymentNote}`;form.hidden=true;return}if(c.actor==='cliente'){box.innerHTML=`<h3>Cotización: ${escapeHtml(price)}</h3><div>${escapeHtml(quote.detalle||'Sin detalle adicional')}</div>${paymentNote}<div class="quote-actions"><button class="quote-accept" data-quote-action="aceptar">Aceptar precio</button><button class="quote-reject" data-quote-action="rechazar">Rechazar</button></div>`;$$('[data-quote-action]').forEach(b=>b.addEventListener('click',()=>answerQuote(quote.id,b.dataset.quoteAction,b)))}else{box.innerHTML=`<h3>Precio enviado: ${escapeHtml(price)}</h3><div>Esperando respuesta del cliente.</div>${paymentNote}`}}
+  function renderQuote(quote){const c=conversationContext,box=$('#quoteBox'),form=$('#quoteForm'),paymentNote='';box.hidden=!quote;form.hidden=!(c&&c.actor==='prestador'&&(!quote||quote.estado==='pendiente'));if(!quote){box.innerHTML='';return}const price=new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(quote.monto_clp);if(quote.estado==='aceptada'){box.innerHTML=`<h3>✓ Precio confirmado: ${escapeHtml(price)}</h3><div>${escapeHtml(quote.detalle||'Servicio acordado')}</div>${paymentNote}`;form.hidden=true;return}if(c.actor==='cliente'){box.innerHTML=`<h3>Cotización: ${escapeHtml(price)}</h3><div>${escapeHtml(quote.detalle||'Sin detalle adicional')}</div>${paymentNote}<div class="quote-actions"><button class="quote-accept" data-quote-action="aceptar">Aceptar precio</button><button class="quote-reject" data-quote-action="rechazar">Rechazar</button></div>`;$$('[data-quote-action]').forEach(b=>b.addEventListener('click',()=>answerQuote(quote.id,b.dataset.quoteAction,b)))}else{box.innerHTML=`<h3>Precio enviado: ${escapeHtml(price)}</h3><div>Esperando respuesta del cliente.</div>${paymentNote}`}}
 
   $('#conversationForm').addEventListener('submit',async e=>{e.preventDefault();const c=conversationContext,input=$('#conversationInput'),message=input.value.trim();if(!c||!message)return;const body=c.actor==='cliente'?{actor:'cliente',token:c.token,mensaje:message}:{actor:'prestador',codigo:c.codigo,token:c.token,mensaje:message};input.disabled=true;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/conversacion`,{method:'POST',headers,body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude enviar');input.value='';await loadConversation()}catch(err){alert(err.message)}finally{input.disabled=false;input.focus()}});
 
