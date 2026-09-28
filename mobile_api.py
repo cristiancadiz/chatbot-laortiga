@@ -33,7 +33,6 @@ SERVICE_TYPES = {
     "jardineria",
     "belleza",
     "reciclaje",
-    "salud",
     "otro",
 }
 
@@ -44,7 +43,6 @@ SERVICE_LABELS = {
     "jardineria": "Jardinería",
     "belleza": "Belleza y bienestar",
     "reciclaje": "Reciclaje",
-    "salud": "Salud",
     "otro": "Otros servicios",
 }
 
@@ -61,13 +59,6 @@ BEAUTY_TYPES = {
 
 
 
-HEALTH_TYPES = {
-    "kinesiologia",
-    "enfermeria",
-    "psicologia",
-    "terapia_ocupacional",
-}
-
 CLEANING_TYPES = {
     "limpieza_zapatillas",
 }
@@ -79,7 +70,6 @@ PROVIDER_SPECIALTY_TYPES = {
     "mantencion_jardin", "poda", "corte_pasto", "riego", "paisajismo", "retiro_residuos_verdes",
     "barberia", "peluqueria", "manicure_pedicure", "maquillaje", "depilacion", "masaje_relajacion", "peinado_eventos", "otro_belleza",
     "retiro_reciclaje", "clasificacion_reciclaje", "retiro_voluminosos",
-    "kinesiologia", "enfermeria", "psicologia", "terapia_ocupacional",
     "mantencion_general", "apoyo_eventos", "servicios_varios",
 }
 
@@ -927,7 +917,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "Eres Jaime, asistente de Llama a Jaime Servicios en Chile. "
             "Responde en español claro, cercano y breve. Ayudas a las personas a definir y publicar "
             "solicitudes de servicios para el hogar, limpieza, fletes, jardinería, belleza y bienestar, "
-            "reciclaje, salud u otras "
+            "reciclaje u otras "
             "necesidades cotidianas. No inventes precios, disponibilidad, certificaciones, "
             "destinos ni estados. Explica que el valor final lo propone y confirma un prestador. "
             "Nunca pidas claves, datos bancarios ni documentos sensibles. Si existe una urgencia "
@@ -1041,7 +1031,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
 
         if service_type not in SERVICE_TYPES:
             return _json(app, {"ok": False, "error": "Selecciona una categoría de servicio."}, 400)
-        if service_type == "belleza" and subtype not in BEAUTY_TYPES and subtype not in HEALTH_TYPES:
+        if service_type == "belleza" and subtype not in BEAUTY_TYPES:
             return _json(app, {"ok": False, "error": "Selecciona el servicio de belleza que necesitas."}, 400)
         if service_type == "limpieza" and subtype and subtype not in CLEANING_TYPES:
             return _json(app, {"ok": False, "error": "Selecciona un tipo de limpieza válido."}, 400)
@@ -2359,7 +2349,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     "solicitud_id": request_row["id"],
                     "empresa_id": request_row["empresa_id"],
                 },
-                "marketplace_fee": round(price * 0.12, 2),
+                "marketplace_fee": round(price * 0.1428, 2),  # Nexia/Llama a Jaime: 12% + IVA 19% sobre la comisión = 14,28%
                 "statement_descriptor": "LLAMA A JAIME",
             }
 
