@@ -712,6 +712,35 @@ if(hasProvider&&sol.servicio_finalizado_at){
   }
 }if(!hasProvider){box.innerHTML='<div class="empty">Jaime todavía está buscando un prestador compatible. Vuelve a revisar en unos minutos.</div>';$('#conversationForm').hidden=true;$('#quoteForm').hidden=true;$('#quoteBox').hidden=true;$('#reportForm').hidden=true;$('#finishServiceCard').hidden=true;$('#paymentStatusCard').hidden=true;$('#paymentBreakdown').hidden=true;$('#paymentClientAction').hidden=true;return}$('#conversationTitle').textContent=c.actor==='cliente'?(d.prestador.nombre||'Prestador'):'Cliente y cotización';$('#conversationForm').hidden=false;box.innerHTML='';for(const m of d.mensajes){const el=document.createElement('div'),mine=(c.actor==='cliente'&&m.remitente_tipo==='cliente')||(c.actor==='prestador'&&m.remitente_tipo==='prestador');el.className='conversation-message '+(m.remitente_tipo==='sistema'?'system':mine?'mine':'');el.textContent=m.contenido;box.append(el)}if(!d.mensajes.length)box.innerHTML='<div class="empty">La conversación está lista. Envía el primer mensaje.</div>';box.scrollTop=box.scrollHeight;renderQuote(d.cotizacion)}catch(err){if(!silent)$('#conversationMessages').innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
 
+// V7.38 · FIX envío de mensajes en conversación
+// Intercepta el submit para evitar que el navegador recargue /app/.
+$('#conversationForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const c=conversationContext,input=$('#conversationInput'),button=e.submitter||e.currentTarget.querySelector('button');
+  if(!c||!input)return;
+  const mensaje=input.value.trim();
+  if(!mensaje)return;
+  const auth=c.actor==='cliente'
+    ?{actor:'cliente',token:c.token}
+    :{actor:'prestador',codigo:c.codigo,token:c.token};
+  const original=button?button.textContent:'Enviar';
+  if(button){button.disabled=true;button.textContent='Enviando…';}
+  try{
+    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/conversacion`,{
+      method:'POST',headers,body:JSON.stringify({...auth,mensaje})
+    });
+    const d=await r.json();
+    if(!r.ok||d.ok===false)throw new Error(d.error||'No pude enviar el mensaje.');
+    input.value='';
+    await loadConversation(true);
+    input.focus();
+  }catch(err){
+    alert(err.message||'No pude enviar el mensaje.');
+  }finally{
+    if(button){button.disabled=false;button.textContent=original;}
+  }
+});
+
 let mpCardForm=null,mpCardFormRequestId=null;
 async function ensureMercadoPagoCardForm(){
   const c=conversationContext;if(!c)return;
