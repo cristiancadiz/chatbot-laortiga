@@ -32,6 +32,7 @@ SERVICE_TYPES = {
     "flete",
     "jardineria",
     "belleza",
+    "salud",
     "reciclaje",
     "otro",
 }
@@ -42,6 +43,7 @@ SERVICE_LABELS = {
     "flete": "Fletes y traslados",
     "jardineria": "Jardinería",
     "belleza": "Belleza y bienestar",
+    "salud": "Salud",
     "reciclaje": "Reciclaje",
     "otro": "Otros servicios",
 }
@@ -57,7 +59,12 @@ BEAUTY_TYPES = {
     "otro_belleza",
 }
 
-
+HEALTH_TYPES = {
+    "kinesiologia",
+    "enfermeria",
+    "psicologia",
+    "terapia_ocupacional",
+}
 
 CLEANING_TYPES = {
     "limpieza_zapatillas",
@@ -70,6 +77,7 @@ PROVIDER_SPECIALTY_TYPES = {
     "mantencion_jardin", "poda", "corte_pasto", "riego", "paisajismo", "retiro_residuos_verdes",
     "barberia", "peluqueria", "manicure_pedicure", "maquillaje", "depilacion", "masaje_relajacion", "peinado_eventos", "otro_belleza",
     "retiro_reciclaje", "clasificacion_reciclaje", "retiro_voluminosos",
+    "kinesiologia", "enfermeria", "psicologia", "terapia_ocupacional",
     "mantencion_general", "apoyo_eventos", "servicios_varios",
 }
 
@@ -714,6 +722,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return False
         if request_row.get("tipo") == "belleza" and request_row.get("subtipo") not in specialties:
             return False
+        if request_row.get("tipo") == "salud" and request_row.get("subtipo") not in specialties:
+            return False
         if request_row.get("tipo") == "limpieza" and request_row.get("subtipo") in CLEANING_TYPES and request_row.get("subtipo") not in specialties:
             return False
         return True
@@ -916,7 +926,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         instructions = (
             "Eres Jaime, asistente de Llama a Jaime Servicios en Chile. "
             "Responde en español claro, cercano y breve. Ayudas a las personas a definir y publicar "
-            "solicitudes de servicios para el hogar, limpieza, fletes, jardinería, belleza y bienestar, "
+            "solicitudes de servicios para el hogar, limpieza, fletes, jardinería, belleza y bienestar, salud, "
             "reciclaje u otras "
             "necesidades cotidianas. No inventes precios, disponibilidad, certificaciones, "
             "destinos ni estados. Explica que el valor final lo propone y confirma un prestador. "
@@ -962,7 +972,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "Extrae exclusivamente datos explícitos de la conversación para una solicitud de servicios en Chile. "
             "No inventes ni completes datos ausentes. Devuelve SOLO JSON válido, sin markdown, con estas claves: "
             "tipo, subtipo, nombre, telefono, email, comuna, direccion_origen, direccion_destino, detalles, materiales, fecha_preferida. "
-            "materiales debe ser una lista. Usa cadena vacía para datos ausentes. tipo debe ser uno de hogar, limpieza, flete, jardineria, belleza, reciclaje, otro. "
+            "materiales debe ser una lista. Usa cadena vacía para datos ausentes. tipo debe ser uno de hogar, limpieza, flete, jardineria, belleza, salud, reciclaje, otro. Si tipo es salud, subtipo debe ser kinesiologia, enfermeria, psicologia o terapia_ocupacional. "
             "Si el servicio seleccionado ayuda a clasificar, úsalo, pero no inventes datos personales."
         )
         context = f"Servicio seleccionado: {service}\nConversación:\n" + "\n".join(transcript)
@@ -995,6 +1005,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     missing.append(label)
             if draft["tipo"] == "belleza" and draft.get("subtipo") not in BEAUTY_TYPES:
                 missing.append("tipo de servicio de belleza")
+            if draft["tipo"] == "salud" and draft.get("subtipo") not in HEALTH_TYPES:
+                missing.append("profesional de salud")
             if draft["tipo"] == "limpieza" and draft.get("subtipo") and draft.get("subtipo") not in CLEANING_TYPES:
                 draft["subtipo"] = ""
             if draft["tipo"] == "flete" and not draft.get("direccion_destino"):
@@ -1033,6 +1045,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {"ok": False, "error": "Selecciona una categoría de servicio."}, 400)
         if service_type == "belleza" and subtype not in BEAUTY_TYPES:
             return _json(app, {"ok": False, "error": "Selecciona el servicio de belleza que necesitas."}, 400)
+        if service_type == "salud" and subtype not in HEALTH_TYPES:
+            return _json(app, {"ok": False, "error": "Selecciona el profesional de salud que necesitas."}, 400)
         if service_type == "limpieza" and subtype and subtype not in CLEANING_TYPES:
             return _json(app, {"ok": False, "error": "Selecciona un tipo de limpieza válido."}, 400)
         if not name or not commune or not origin or not details:
@@ -1062,7 +1076,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "access_token_hash": hashlib.sha256(access_token.encode("utf-8")).hexdigest(),
             "empresa_id": settings["empresa_id"],
             "tipo": service_type,
-            "subtipo": subtype if service_type in {"belleza", "limpieza"} and subtype else None,
+            "subtipo": subtype if service_type in {"belleza", "salud", "limpieza"} and subtype else None,
             "nombre": name,
             "telefono": phone,
             "telefono_normalizado": _normalize_phone(phone),
@@ -1110,7 +1124,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     "codigo": public_id,
                     "token": access_token,
                     "tipo": service_type,
-                    "subtipo": subtype if service_type in {"belleza", "limpieza"} and subtype else None,
+                    "subtipo": subtype if service_type in {"belleza", "salud", "limpieza"} and subtype else None,
                     "estado": "publicada",
                     "despacho": "buscando_prestadores",
                 },
