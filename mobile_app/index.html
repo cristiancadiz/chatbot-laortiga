@@ -1,62 +1,3 @@
-
-como quedaria
-
-esta muu cargado
-Sí, demasiado. Hay tres caminos compitiendo al mismo tiempo: IA, “Necesito ayuda” y categorías; además “Quiero ofrecer servicios” ocupa otro bloque grande.
-
-Yo lo simplificaría bastante:
-
-Arriba: logo + ubicación.
-
-Una sola tarjeta protagonista:
-
-✨ ¿Qué necesitas?
-Cuéntaselo a Jaime y te ayudamos a encontrar a la persona indicada.
-Hablar con Jaime
-
-Debajo:
-O elige un servicio
-Hogar · Limpieza · Fletes · Jardinería · Belleza · Reciclaje
-Con las imágenes/iconos que ya tienes.
-
-Al final, una franja pequeña:
-
-🧰 ¿Quieres ofrecer tus servicios? → Crear cuenta / Ingresar
-
-Así eliminamos completamente la tarjeta adicional “Necesito ayuda”, porque hace prácticamente lo mismo que la IA. La IA se convierte en la entrada principal y las categorías son la alternativa rápida.
-
-Eso quedaría bastante más limpio y profesional. Puedo mostrarte esta versión visual mucho más minimalista.
-
-como quedaria1 con mis imagernesz
-
-ok me gusto esta con mis imagenes
-Perfecto. Entonces usaría esta última propuesta como dirección visual, pero conservando tus imágenes reales de categorías en vez de reemplazarlas por nuevos iconos.
-
-La estructura que llevaría al código sería: IA como protagonista arriba → tus categorías actuales → franja compacta “¿Quieres ofrecer tus servicios?” → navegación inferior. Así se ve más profesional sin perder lo que ya construimos.
-
-Y algo importante: no cambiaría la lógica actual de IA, solicitudes ni prestadores; sería principalmente una mejora visual del frontend.
-
-ok
-Perfecto, Cris. Entonces dejamos esa propuesta como referencia visual definitiva para la portada: IA arriba como protagonista, tus imágenes actuales para las categorías y acceso a prestadores más compacto abajo.
-
-Cuando pasemos al código, la aplicamos sobre la versión actual sin rehacer los flujos que ya funcionan.
-
-ok damelo
-
-Ha pensado durante 25s
-
-Listo, Cris. Apliqué la propuesta como V7.24, partiendo de tu V7.23 real y manteniendo tus imágenes actuales de las categorías. 
-
-La portada ahora queda con IA/Jaime como entrada principal, luego tus categorías actuales y finalmente una franja compacta de “¿Quieres ofrecer tus servicios?”. No cambié el funcionamiento interno de solicitudes, prestadores, pagos ni app.py.
-
-También validé el JavaScript: sin errores de sintaxis. 
-
-
-LLAMA_A_JAIME_index_V7_24_PORTADA_IA_CATEGORIAS.txt
-Documento
-
-
-
 <!doctype html>
 <html lang="es">
 <head>
@@ -254,6 +195,13 @@ Documento
     #home .home-ai-hero{padding:21px 18px}
     #home .home-ai-hero h1{font-size:29px}
   }
+</style>
+
+
+<style>
+  /* V7.25 · Respeta siempre el atributo hidden.
+     Con sesión activa, Crear cuenta / Ingresar desaparecen realmente. */
+  [hidden]{display:none !important;}
 </style>
 
 </head>
