@@ -56,9 +56,14 @@ BEAUTY_TYPES = {
 }
 
 
+
+CLEANING_TYPES = {
+    "limpieza_zapatillas",
+}
+
 PROVIDER_SPECIALTY_TYPES = {
     "electricidad", "gasfiteria", "carpinteria", "pintura", "cerrajeria", "muebles_armado", "instalaciones", "reparaciones_hogar",
-    "limpieza_hogar", "limpieza_profunda", "limpieza_oficinas", "limpieza_post_obra", "limpieza_vidrios", "tapices_alfombras",
+    "limpieza_hogar", "limpieza_profunda", "limpieza_oficinas", "limpieza_post_obra", "limpieza_vidrios", "tapices_alfombras", "limpieza_zapatillas",
     "flete_pequeno", "mudanza", "retiro_entrega", "carga_descarga", "transporte_muebles",
     "mantencion_jardin", "poda", "corte_pasto", "riego", "paisajismo", "retiro_residuos_verdes",
     "barberia", "peluqueria", "manicure_pedicure", "maquillaje", "depilacion", "masaje_relajacion", "peinado_eventos", "otro_belleza",
@@ -668,6 +673,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return False
         if request_row.get("tipo") == "belleza" and request_row.get("subtipo") not in specialties:
             return False
+        if request_row.get("tipo") == "limpieza" and request_row.get("subtipo") in CLEANING_TYPES and request_row.get("subtipo") not in specialties:
+            return False
         return True
 
     def _create_match(provider, request_row, notify=True):
@@ -947,6 +954,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     missing.append(label)
             if draft["tipo"] == "belleza" and draft.get("subtipo") not in BEAUTY_TYPES:
                 missing.append("tipo de servicio de belleza")
+            if draft["tipo"] == "limpieza" and draft.get("subtipo") and draft.get("subtipo") not in CLEANING_TYPES:
+                draft["subtipo"] = ""
             if draft["tipo"] == "flete" and not draft.get("direccion_destino"):
                 missing.append("dirección de destino")
             return _json(app, {"ok": True, "solicitud": draft, "faltantes": missing, "usage": {"api": usage.get("api")}})
@@ -983,6 +992,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {"ok": False, "error": "Selecciona una categoría de servicio."}, 400)
         if service_type == "belleza" and subtype not in BEAUTY_TYPES:
             return _json(app, {"ok": False, "error": "Selecciona el servicio de belleza que necesitas."}, 400)
+        if service_type == "limpieza" and subtype and subtype not in CLEANING_TYPES:
+            return _json(app, {"ok": False, "error": "Selecciona un tipo de limpieza válido."}, 400)
         if not name or not commune or not origin or not details:
             return _json(app, {"ok": False, "error": "Completa nombre, comuna, dirección y detalle."}, 400)
         if not _valid_phone(phone):
@@ -1010,7 +1021,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "access_token_hash": hashlib.sha256(access_token.encode("utf-8")).hexdigest(),
             "empresa_id": settings["empresa_id"],
             "tipo": service_type,
-            "subtipo": subtype if service_type == "belleza" else None,
+            "subtipo": subtype if service_type in {"belleza", "limpieza"} and subtype else None,
             "nombre": name,
             "telefono": phone,
             "telefono_normalizado": _normalize_phone(phone),
@@ -1058,7 +1069,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     "codigo": public_id,
                     "token": access_token,
                     "tipo": service_type,
-                    "subtipo": subtype if service_type == "belleza" else None,
+                    "subtipo": subtype if service_type in {"belleza", "limpieza"} and subtype else None,
                     "estado": "publicada",
                     "despacho": "buscando_prestadores",
                 },
