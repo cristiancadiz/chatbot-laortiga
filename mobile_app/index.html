@@ -606,7 +606,31 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
 
   $('#providerLoginForm').addEventListener('submit',async e=>{e.preventDefault();const button=$('#providerLoginSubmit'),note=$('#providerLoginNotice');button.disabled=true;button.innerHTML='<span class="spinner"></span> Ingresando';note.style.display='none';try{const r=await fetch('/app/api/prestadores/login',{method:'POST',headers,body:JSON.stringify({rut:$('#providerLoginRut').value,pin:$('#providerLoginPin').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude ingresar');localStorage.providerAuth=JSON.stringify(d.prestador);e.target.reset();await loadProvider()}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false;button.textContent='Ingresar'}});
 
-  $('#providerLogout').addEventListener('click',()=>{localStorage.removeItem('providerAuth');showProviderAccess('login');loadProvider()});
+  function resetProviderPrivateUI(){
+    $('#providerSummary').style.display='none';
+    $('#providerDashboard').hidden=true;
+    $('#notifyBtn').hidden=true;
+    $('#providerLogout').hidden=true;
+    $('#providerDocumentsCard').hidden=true;
+    $('#providerPhotoCard').hidden=true;
+    $('#providerDocuments').innerHTML='';
+    $('#opportunities').innerHTML='';
+    $('#providerDocsProgress').textContent='0/3 básicos';
+    $('#providerPhotoNotice').style.display='none';
+    $('#providerDocsNotice').style.display='none';
+  }
+
+  function showProviderLoggedOut(message=''){
+    localStorage.removeItem('providerAuth');
+    resetProviderPrivateUI();
+    $('#providerAccessSwitch').hidden=false;
+    showProviderAccess('login');
+    const note=$('#providerLoginNotice');
+    if(message){note.textContent=message;note.className='notice error';note.style.display='block'}
+    else{note.textContent='';note.style.display='none'}
+  }
+
+  $('#providerLogout').addEventListener('click',()=>showProviderLoggedOut());
 
 
   const PROVIDER_DOC_TYPES=[['cedula_frontal','🪪','Cédula frontal',false],['cedula_reverso','🪪','Cédula reverso',false],['antecedentes','📄','Certificado de antecedentes',false],['cv','📋','Currículum Vitae',false],['titulo','🎓','Título profesional o técnico',true],['certificado','📜','Certificados y cursos',true],['licencia_conducir','🚗','Licencia de conducir',false],['otro','📎','Otro documento',true]];
@@ -646,21 +670,25 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
   async function loadProvider(){
     let auth=providerAuth();
     if(!auth){
+      resetProviderPrivateUI();
       $('#providerAccessSwitch').hidden=false;
-      $('#providerSummary').style.display='none';
-      $('#providerDashboard').hidden=true;
-      $('#notifyBtn').hidden=true;
-      $('#providerLogout').hidden=true;
-      $('#providerDocumentsCard').hidden=true;
-      $('#providerPhotoCard').hidden=true;
-      if($('#providerLogin').hidden)showProviderAccess('register');
+      if($('#providerLogin').hidden && $('#providerRegister').hidden)showProviderAccess('login');
       return;
     }
 
-    // Siempre consultar el estado real al servidor.
+    // V7.18: una sesión local solo se considera activa si el backend la valida.
+    // Esto evita mostrar perfil/documentos/oportunidades con un token vencido o reemplazado.
     try{
       const r=await fetch(`/app/api/prestadores/me?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`,{headers,cache:'no-store'});
-      const d=await r.json();
+      const d=await r.json().catch(()=>({}));
+      if(r.status===401){
+        showProviderLoggedOut('Tu sesión de prestador venció o fue reemplazada. Ingresa nuevamente.');
+        return;
+      }
+      if(r.status===403){
+        showProviderLoggedOut(d.error||'Tu cuenta no está habilitada.');
+        return;
+      }
       if(!r.ok)throw new Error(d.error||'No pude actualizar tu cuenta');
 
       const p=d.prestador||{};
@@ -673,9 +701,21 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
       };
       localStorage.providerAuth=JSON.stringify(auth);
     }catch(err){
-      console.warn('No pude refrescar estado del prestador',err);
+      // Un error temporal de red/servidor no borra una sesión válida, pero tampoco
+      // mostramos herramientas privadas sin haber podido validarla en esta carga.
+      resetProviderPrivateUI();
+      $('#providerAccessSwitch').hidden=true;
+      const note=$('#providerLoginNotice');
+      note.textContent='No pudimos validar tu sesión en este momento. Intenta nuevamente.';
+      note.className='notice error';
+      note.style.display='block';
+      $('#providerLogin').hidden=false;
+      $('#providerLogin').style.display='block';
+      return;
     }
 
+    // Solo llegamos aquí con sesión confirmada por /prestadores/me.
+    $('#providerLoginNotice').style.display='none';
     $('#providerAccessSwitch').hidden=true;
     $('#providerRegister').hidden=true;
     $('#providerRegister').style.display='none';
