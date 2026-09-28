@@ -86,6 +86,7 @@
     .quote-economy div{display:flex;justify-content:space-between;gap:12px}.quote-economy .net{padding-top:6px;border-top:1px solid #d7e0d5;font-weight:900}
     .quote-mp-note{display:block;margin-top:8px;color:#69756e;font-size:11px;line-height:1.35}
 
+.mp-reserve-form{display:grid;gap:9px;width:100%}.mp-reserve-form input,.mp-reserve-form select{width:100%;border:1px solid var(--line);border-radius:12px;padding:11px;background:white}.mp-reserve-form p{margin:0 0 4px}.mp-reserve-form small{color:var(--muted);font-weight:500}
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -395,61 +396,42 @@
       <div class="conversation-tools" id="conversationTools">
       <button class="client-notify" id="clientNotifyBtn" hidden>🔔 Recibir avisos de mensajes y precios</button><div class="provider-public-card" id="providerPublicCard" hidden>
   <div class="provider-public-avatar" id="providerPublicAvatar"><span id="providerPublicAvatarInitial">J</span><img id="providerPublicAvatarImage" alt="Foto del prestador" hidden></div>
-  <div class="provider-public-copy">
-    <div class="provider-public-title"><strong id="providerPublicName">Prestador</strong><span id="providerPublicVerified">✓ Verificado</span></div>
-    <div class="provider-public-meta" id="providerPublicMeta"></div>
-    <div class="provider-public-reputation" id="providerPublicReputation"></div>
-    <div class="provider-public-jobs" id="providerPublicJobs"></div>
-    <div class="provider-public-tags" id="providerPublicTags"></div>
-  </div>
+  <div class="provider-public-copy"><div class="provider-public-title"><strong id="providerPublicName">Prestador</strong><span id="providerPublicVerified">✓ Verificado</span></div><div class="provider-public-meta" id="providerPublicMeta"></div><div class="provider-public-reputation" id="providerPublicReputation"></div><div class="provider-public-jobs" id="providerPublicJobs"></div><div class="provider-public-tags" id="providerPublicTags"></div></div>
 </div>
-      <div class="review-card" id="providerReviewCard" hidden>
-        <strong>¿Cómo fue tu experiencia?</strong>
-        <p>Califica al prestador. Solo puedes evaluar una vez esta solicitud.</p>
-        <div class="review-stars" id="providerReviewStars">
-          <button type="button" data-rating="1">★</button><button type="button" data-rating="2">★</button><button type="button" data-rating="3">★</button><button type="button" data-rating="4">★</button><button type="button" data-rating="5">★</button>
-        </div>
-        <textarea id="providerReviewComment" maxlength="1000" placeholder="Comentario opcional"></textarea>
-        <button type="button" class="primary" id="providerReviewSubmit">Enviar evaluación</button>
-        <div class="notice" id="providerReviewNotice"></div>
-      </div>
+      <div class="review-card" id="providerReviewCard" hidden><strong>¿Cómo fue tu experiencia?</strong><p>Califica al prestador. Solo puedes evaluar una vez esta solicitud.</p><div class="review-stars" id="providerReviewStars"><button type="button" data-rating="1">★</button><button type="button" data-rating="2">★</button><button type="button" data-rating="3">★</button><button type="button" data-rating="4">★</button><button type="button" data-rating="5">★</button></div><textarea id="providerReviewComment" maxlength="1000" placeholder="Comentario opcional"></textarea><button type="button" class="primary" id="providerReviewSubmit">Enviar evaluación</button><div class="notice" id="providerReviewNotice"></div></div>
       <div class="location-panel" id="conversationLocations"><div class="location-card" id="clientLocationCard"><strong>Ubicación del cliente</strong><span>No compartida</span></div><div class="location-card" id="providerLocationCard"><strong>Ubicación del prestador</strong><span>No compartida</span></div><button class="share-location" id="shareConversationLocation">📍 Compartir o actualizar mi ubicación</button></div>
       <div class="photo-gallery" id="conversationPhotos" hidden></div>
-      <div class="quote-box" id="quoteBox" hidden></div>
-      <div class="payment-status-card" id="paymentStatusCard" hidden>
-        <div class="payment-status-copy">
-          <strong>Estado del pago</strong>
-          <span id="paymentStatusDetail">Pago pendiente</span>
-        </div>
-        <span class="payment-status-badge" id="paymentStatusBadge">Pendiente</span>
-        <div class="payment-client-action" id="paymentClientAction" hidden>
-          <button type="button" class="primary" id="mercadoPagoBtn" onclick="startMercadoPagoCheckout()">Pagar con Mercado Pago</button>
-          <div class="notice" id="mercadoPagoNotice"></div>
-        </div>
-        <div class="payment-breakdown" id="paymentBreakdown" hidden>
-          <div><span>Precio del servicio</span><strong id="paymentServicePrice">—</strong></div>
-          <div><span>Comisión Llama a Jaime (12%)</span><strong id="paymentPlatformFee">—</strong></div>
-          <div><span>IVA sobre comisión (19%)</span><strong id="paymentPlatformVat">—</strong></div>
-          <div><span>Costo Mercado Pago</span><strong id="paymentGatewayFee">—</strong></div>
-          <div class="payment-net"><span>Recibes</span><strong id="paymentProviderNet">—</strong></div>
-          <small id="paymentGatewayNote">El costo de Mercado Pago se actualizará con el valor real de la transacción.</small>
-        </div>
-      </div>
-      <div class="finish-service-card" id="finishServiceCard" hidden>
-        <div><strong id="finishServiceTitle">¿El trabajo ya terminó?</strong><span id="finishServiceText">Confirma el cierre cuando el servicio haya sido realizado.</span></div>
-        <button id="finishServiceBtn" type="button">✓ Finalizar servicio</button>
-        <div class="notice" id="finishServiceNotice"></div>
-      </div>
       <button class="report-toggle" id="reportToggle" type="button">Reportar un problema de seguridad</button>
       <form class="report-form" id="reportForm" hidden><select id="reportCategory" required><option value="">Selecciona un motivo</option><option value="seguridad">Seguridad</option><option value="estafa">Posible estafa</option><option value="trato">Trato inapropiado</option><option value="cobro">Problema con el cobro</option><option value="servicio">Problema con el servicio</option><option value="contenido">Contenido inapropiado</option><option value="otro">Otro</option></select><textarea id="reportDescription" required minlength="10" maxlength="2000" placeholder="Describe lo ocurrido. No incluyas claves ni datos bancarios."></textarea><button type="submit">Enviar reporte privado</button><div class="notice" id="reportNotice"></div></form>
-      <form class="quote-form" id="quoteForm" hidden><input id="quoteAmount" inputmode="numeric" placeholder="$ Precio CLP" required><input id="quoteDetail" maxlength="500" placeholder="Descripción de la cotización: qué incluye, alcance, materiales, etc."><button>Enviar cotización al cliente</button></form>
       </div>
-      <div class="conversation-messages" id="conversationMessages"></div>
+
+      <div class="quote-box" id="quoteBox" hidden></div>
+      <form class="quote-form" id="quoteForm" hidden><input id="quoteAmount" inputmode="numeric" placeholder="$ Monto de la cotización" required><input id="quoteDetail" maxlength="500" placeholder="Descripción del trabajo: qué incluye, alcance, materiales, etc." required><button>Enviar cotización al cliente</button></form>
+
+      <div class="payment-status-card" id="paymentStatusCard" hidden>
+        <div class="payment-status-copy"><strong>Pago protegido con Mercado Pago</strong><span id="paymentStatusDetail">Primero acepta la cotización.</span></div><span class="payment-status-badge" id="paymentStatusBadge">Pendiente</span>
+        <div class="payment-client-action" id="paymentClientAction" hidden>
+          <div id="mpCardForm" class="mp-reserve-form">
+            <p><strong>Autorizar pago</strong><br><small>Mercado Pago reservará el monto. El cobro se realizará cuando el prestador marque el trabajo terminado y tú confirmes la finalización.</small></p>
+            <input id="form-checkout__cardNumber" placeholder="Número de tarjeta" autocomplete="cc-number">
+            <div class="grid2"><input id="form-checkout__expirationDate" placeholder="MM/AA" autocomplete="cc-exp"><input id="form-checkout__securityCode" placeholder="CVV" autocomplete="cc-csc"></div>
+            <input id="form-checkout__cardholderName" placeholder="Nombre del titular" autocomplete="cc-name">
+            <select id="form-checkout__issuer"></select><select id="form-checkout__installments"></select>
+            <select id="form-checkout__identificationType"></select><input id="form-checkout__identificationNumber" placeholder="RUT / documento">
+            <input id="form-checkout__cardholderEmail" type="email" placeholder="Correo del pagador" autocomplete="email">
+            <button type="button" class="primary" id="mercadoPagoBtn" onclick="startMercadoPagoAuthorization()">Autorizar y reservar fondos</button>
+          </div>
+          <div class="notice" id="mercadoPagoNotice"></div>
+        </div>
+        <div class="payment-breakdown" id="paymentBreakdown" hidden><div><span>Precio del servicio</span><strong id="paymentServicePrice">—</strong></div><div><span>Comisión Llama a Jaime (12%)</span><strong id="paymentPlatformFee">—</strong></div><div><span>IVA sobre comisión (19%)</span><strong id="paymentPlatformVat">—</strong></div><div><span>Costo Mercado Pago</span><strong id="paymentGatewayFee">—</strong></div><div class="payment-net"><span>Recibes</span><strong id="paymentProviderNet">—</strong></div><small id="paymentGatewayNote">El costo de Mercado Pago se actualizará con el valor real de la transacción.</small></div>
+      </div>
+      <div class="finish-service-card" id="finishServiceCard" hidden><div><strong id="finishServiceTitle">¿El trabajo ya terminó?</strong><span id="finishServiceText">Confirma el cierre cuando el servicio haya sido realizado.</span></div><button id="finishServiceBtn" type="button">✓ Finalizar servicio</button><div class="notice" id="finishServiceNotice"></div></div>      <div class="conversation-messages" id="conversationMessages"></div>
       <form class="conversation-compose" id="conversationForm"><input id="conversationInput" maxlength="2000" placeholder="Escribe un mensaje…" autocomplete="off"><button>Enviar</button></form>
     </div>
   </section>
   <nav class="nav"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button data-go="chat"><b>✦</b>IA</button><button data-go="request"><b>＋</b>Solicitar</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="status"><b>◷</b>Estado</button></nav>
 </div>
+<script src="https://sdk.mercadopago.com/js/v2"></script>
 <script>
 (() => {
   const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -646,8 +628,8 @@ const paymentState=String(sol.pago_estado||'pendiente').toLowerCase();
 const paymentLabels={pendiente:'Pendiente',autorizado:'Autorizado',pagado:'Pagado',liberado:'Liberado',reembolsado:'Reembolsado',disputado:'Disputado'};
 const paymentDetails={
   pendiente:'Aún no hay un pago confirmado.',
-  autorizado:'El pago está autorizado, pero todavía no se ha confirmado el cobro.',
-  pagado:'El pago fue confirmado y está pendiente de liberación.',
+  autorizado:'Fondos reservados por Mercado Pago. El cobro se realizará al finalizar y confirmar el trabajo.',
+  pagado:'Trabajo confirmado: Mercado Pago capturó el pago.',
   liberado:'El pago fue liberado después del cierre del servicio.',
   reembolsado:'El pago fue reembolsado.',
   disputado:'El pago se encuentra en revisión por una disputa.'
@@ -663,15 +645,17 @@ if(hasProvider){
   const mercadoPagoBtn=$('#mercadoPagoBtn');
   const mercadoPagoNotice=$('#mercadoPagoNotice');
   const servicePriceForClient=Number(sol.precio_servicio);
+  window.__currentServicePrice=Number.isFinite(servicePriceForClient)?servicePriceForClient:0;
   const canStartPayment=c.actor==='cliente'
     && Number.isFinite(servicePriceForClient)
     && servicePriceForClient>0
-    && !['pagado','liberado','reembolsado','disputado'].includes(paymentState);
+    && !['autorizado','pagado','liberado','reembolsado','disputado'].includes(paymentState);
   clientPaymentAction.hidden=!canStartPayment;
   if(canStartPayment){
     mercadoPagoBtn.disabled=false;
-    mercadoPagoBtn.textContent='Pagar con Mercado Pago';
+    mercadoPagoBtn.textContent='Autorizar y reservar fondos';
     mercadoPagoNotice.textContent='';
+    setTimeout(()=>ensureMercadoPagoCardForm().catch(err=>{mercadoPagoNotice.style.display='block';mercadoPagoNotice.textContent=err.message;}),0);
   }
 
   const breakdown=$('#paymentBreakdown');
@@ -720,7 +704,7 @@ if(hasProvider&&sol.servicio_finalizado_at){
   if(sol.prestador_declaro_finalizado_at){
     finishBtn.hidden=false;finishBtn.textContent='✓ Confirmar servicio recibido';
     $('#finishServiceTitle').textContent='El prestador indicó que terminó';
-    $('#finishServiceText').textContent='Revisa el trabajo y confirma solamente si recibiste el servicio.';
+    $('#finishServiceText').textContent='Revisa el trabajo. Al confirmar, Mercado Pago capturará el monto reservado y se cerrará el servicio.';
   }else{
     finishBtn.hidden=true;
     $('#finishServiceTitle').textContent='Servicio en curso';
@@ -728,44 +712,40 @@ if(hasProvider&&sol.servicio_finalizado_at){
   }
 }if(!hasProvider){box.innerHTML='<div class="empty">Jaime todavía está buscando un prestador compatible. Vuelve a revisar en unos minutos.</div>';$('#conversationForm').hidden=true;$('#quoteForm').hidden=true;$('#quoteBox').hidden=true;$('#reportForm').hidden=true;$('#finishServiceCard').hidden=true;$('#paymentStatusCard').hidden=true;$('#paymentBreakdown').hidden=true;$('#paymentClientAction').hidden=true;return}$('#conversationTitle').textContent=c.actor==='cliente'?(d.prestador.nombre||'Prestador'):'Cliente y cotización';$('#conversationForm').hidden=false;box.innerHTML='';for(const m of d.mensajes){const el=document.createElement('div'),mine=(c.actor==='cliente'&&m.remitente_tipo==='cliente')||(c.actor==='prestador'&&m.remitente_tipo==='prestador');el.className='conversation-message '+(m.remitente_tipo==='sistema'?'system':mine?'mine':'');el.textContent=m.contenido;box.append(el)}if(!d.mensajes.length)box.innerHTML='<div class="empty">La conversación está lista. Envía el primer mensaje.</div>';box.scrollTop=box.scrollHeight;renderQuote(d.cotizacion)}catch(err){if(!silent)$('#conversationMessages').innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
 
-async function startMercadoPagoCheckout(){
-  const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;
-  if(!btn||!note)return;
-  if(!c||c.actor!=='cliente'||!c.public_id||!c.token){
-    note.textContent='No pude identificar la sesión del cliente. Cierra y vuelve a abrir la solicitud.';
-    return;
-  }
-  const original=btn.textContent;
-  btn.disabled=true;btn.textContent='Preparando pago…';note.textContent='Conectando con Mercado Pago…';
-  try{
-    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Accept':'application/json'},
-      body:JSON.stringify({token:c.token})
-    });
-    const raw=await r.text();
-    let d={};
-    try{d=raw?JSON.parse(raw):{}}catch(_){
-      throw new Error(`El servidor respondió ${r.status} con HTML/texto en vez de JSON.`);
-    }
-    if(!r.ok||!d.ok)throw new Error(d.error||`No pude iniciar el pago (HTTP ${r.status}).`);
-    if(!d.checkout_url)throw new Error('Mercado Pago no devolvió el enlace de pago.');
-    note.textContent='Abriendo Mercado Pago…';
-    window.location.assign(d.checkout_url);
-  }catch(err){
-    note.textContent=err?.message||'No pude iniciar el pago.';
-    btn.disabled=false;btn.textContent=original;
-  }
+let mpCardForm=null,mpCardFormRequestId=null;
+async function ensureMercadoPagoCardForm(){
+  const c=conversationContext;if(!c)return;
+  if(mpCardForm&&mpCardFormRequestId===c.public_id)return;
+  if(typeof MercadoPago==='undefined')throw new Error('No se pudo cargar Mercado Pago.');
+  const kr=await fetch('/app/api/mercadopago/public-key',{headers:{'Accept':'application/json'}}),kd=await kr.json();
+  if(!kr.ok||!kd.public_key)throw new Error(kd.error||'Falta configurar la Public Key de Mercado Pago.');
+  if(mpCardForm&&typeof mpCardForm.unmount==='function'){try{mpCardForm.unmount()}catch(_){}}
+  const amount=String(Number(window.__currentServicePrice||0));
+  const mp=new MercadoPago(kd.public_key,{locale:'es-CL'});
+  mpCardForm=mp.cardForm({amount,iframe:true,form:{id:'mpCardForm',cardNumber:{id:'form-checkout__cardNumber',placeholder:'Número de tarjeta'},expirationDate:{id:'form-checkout__expirationDate',placeholder:'MM/AA'},securityCode:{id:'form-checkout__securityCode',placeholder:'CVV'},cardholderName:{id:'form-checkout__cardholderName',placeholder:'Nombre del titular'},issuer:{id:'form-checkout__issuer',placeholder:'Banco emisor'},installments:{id:'form-checkout__installments',placeholder:'Cuotas'},identificationType:{id:'form-checkout__identificationType',placeholder:'Tipo de documento'},identificationNumber:{id:'form-checkout__identificationNumber',placeholder:'RUT / documento'},cardholderEmail:{id:'form-checkout__cardholderEmail',placeholder:'Correo'}},callbacks:{onFormMounted:error=>{if(error)console.error('MP form',error)}}});
+  mpCardFormRequestId=c.public_id;
 }
-
-window.startMercadoPagoCheckout = startMercadoPagoCheckout;
+async function startMercadoPagoAuthorization(){
+  const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;if(!btn||!note||!c)return;
+  const original=btn.textContent;btn.disabled=true;btn.textContent='Autorizando…';note.style.display='block';note.textContent='Mercado Pago está reservando los fondos…';
+  try{
+    await ensureMercadoPagoCardForm();
+    const data=mpCardForm.getCardFormData();
+    if(!data.token)throw new Error('Revisa los datos de la tarjeta.');
+    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago/autorizar`,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({token:c.token,card_token:data.token,payment_method_id:data.paymentMethodId,issuer_id:data.issuerId,installments:Number(data.installments||1),payer:{email:data.cardholderEmail,identification:{type:data.identificationType,number:data.identificationNumber}}})});
+    const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'No fue posible reservar los fondos.');
+    note.className='notice success';note.textContent=d.status==='authorized'?'✓ Fondos reservados. El prestador puede realizar el trabajo. El cobro se hará cuando confirmes que terminó.':(d.message||'Autorización en proceso.');
+    await loadConversation(true);
+  }catch(err){note.className='notice error';note.textContent=err.message||'No pude autorizar el pago.';btn.disabled=false;btn.textContent=original;}
+}
+window.startMercadoPagoAuthorization=startMercadoPagoAuthorization;
 
 $('#finishServiceBtn').addEventListener('click',async()=>{
     const c=conversationContext,btn=$('#finishServiceBtn'),note=$('#finishServiceNotice');if(!c)return;
     const isProvider=c.actor==='prestador';
     const question=isProvider
       ?'¿Confirmas que terminaste el trabajo? El cliente deberá confirmar que recibió el servicio.'
-      :'¿Confirmas que recibiste correctamente el servicio? Esta acción cerrará definitivamente el trabajo.';
+      :'¿Confirmas que recibiste correctamente el servicio? Al confirmar, Mercado Pago capturará el monto reservado y el servicio se cerrará.';
     if(!confirm(question))return;
     const auth=c.actor==='cliente'?{actor:'cliente',token:c.token}:{actor:'prestador',codigo:c.codigo,token:c.token};
     const originalText=btn.textContent;
