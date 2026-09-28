@@ -329,32 +329,59 @@
   function closeConversation(){clearInterval(conversationTimer);conversationTimer=null;conversationContext=null;$('#reportForm').hidden=true;$('#conversationModal').hidden=true}
   $('#closeConversation').addEventListener('click',closeConversation);
 
-  async function loadConversation(silent=false){const c=conversationContext;if(!c)return;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/conversacion?${conversationQuery()}`,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude abrir la conversación');const box=$('#conversationMessages'),hasProvider=!!d.prestador;if(!silent)box.innerHTML='';renderPhotoGallery(d.fotos,$('#conversationPhotos'));renderLocations(d.ubicaciones);$('#reportToggle').hidden=!hasProvider;const finishCard=$('#finishServiceCard'),finishBtn=$('#finishServiceBtn'),finishNote=$('#finishServiceNotice');
+  async function loadConversation(silent=false){const c=conversationContext;if(!c)return;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/conversacion?${conversationQuery()}`,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude abrir la conversación');const box=$('#conversationMessages'),hasProvider=!!d.prestador;if(!silent)box.innerHTML='';renderPhotoGallery(d.fotos,$('#conversationPhotos'));renderLocations(d.ubicaciones);$('#reportToggle').hidden=!hasProvider;const finishCard=$('#finishServiceCard'),finishBtn=$('#finishServiceBtn'),finishNote=$('#finishServiceNotice'),sol=d.solicitud||{};
 finishCard.hidden=!hasProvider;
-if(hasProvider&&d.solicitud&&d.solicitud.servicio_finalizado_at){
+if(hasProvider&&sol.servicio_finalizado_at){
   finishCard.classList.add('done');finishBtn.hidden=true;
   $('#finishServiceTitle').textContent='✓ Servicio finalizado';
-  $('#finishServiceText').textContent='Este trabajo ya fue cerrado.';
+  $('#finishServiceText').textContent='El cliente confirmó que recibió el servicio.';
   finishNote.style.display='none';
-}else if(hasProvider){
-  finishCard.classList.remove('done');finishBtn.hidden=false;
-  $('#finishServiceTitle').textContent='¿El trabajo ya terminó?';
-  $('#finishServiceText').textContent='Confirma el cierre cuando el servicio haya sido realizado.';
+}else if(hasProvider&&c.actor==='prestador'){
+  finishCard.classList.remove('done');
+  if(sol.prestador_declaro_finalizado_at){
+    finishBtn.hidden=true;
+    $('#finishServiceTitle').textContent='⏳ Esperando confirmación del cliente';
+    $('#finishServiceText').textContent='Ya indicaste que terminaste. El trabajo contará como completado cuando el cliente confirme que lo recibió.';
+  }else{
+    finishBtn.hidden=false;finishBtn.textContent='✓ Marcar trabajo como terminado';
+    $('#finishServiceTitle').textContent='¿Terminaste el trabajo?';
+    $('#finishServiceText').textContent='Indica que terminaste para solicitar la confirmación del cliente.';
+  }
+}else if(hasProvider&&c.actor==='cliente'){
+  finishCard.classList.remove('done');
+  if(sol.prestador_declaro_finalizado_at){
+    finishBtn.hidden=false;finishBtn.textContent='✓ Confirmar servicio recibido';
+    $('#finishServiceTitle').textContent='El prestador indicó que terminó';
+    $('#finishServiceText').textContent='Revisa el trabajo y confirma solamente si recibiste el servicio.';
+  }else{
+    finishBtn.hidden=true;
+    $('#finishServiceTitle').textContent='Servicio en curso';
+    $('#finishServiceText').textContent='Podrás confirmar el servicio cuando el prestador indique que terminó.';
+  }
 }if(!hasProvider){box.innerHTML='<div class="empty">Jaime todavía está buscando un prestador compatible. Vuelve a revisar en unos minutos.</div>';$('#conversationForm').hidden=true;$('#quoteForm').hidden=true;$('#quoteBox').hidden=true;$('#reportForm').hidden=true;$('#finishServiceCard').hidden=true;return}$('#conversationTitle').textContent=c.actor==='cliente'?(d.prestador.nombre||'Prestador'):'Cliente y cotización';$('#conversationForm').hidden=false;box.innerHTML='';for(const m of d.mensajes){const el=document.createElement('div'),mine=(c.actor==='cliente'&&m.remitente_tipo==='cliente')||(c.actor==='prestador'&&m.remitente_tipo==='prestador');el.className='conversation-message '+(m.remitente_tipo==='sistema'?'system':mine?'mine':'');el.textContent=m.contenido;box.append(el)}if(!d.mensajes.length)box.innerHTML='<div class="empty">La conversación está lista. Envía el primer mensaje.</div>';box.scrollTop=box.scrollHeight;renderQuote(d.cotizacion)}catch(err){if(!silent)$('#conversationMessages').innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
 
   $('#finishServiceBtn').addEventListener('click',async()=>{
     const c=conversationContext,btn=$('#finishServiceBtn'),note=$('#finishServiceNotice');if(!c)return;
-    if(!confirm('¿Confirmas que el servicio fue realizado y quieres marcarlo como finalizado?'))return;
+    const isProvider=c.actor==='prestador';
+    const question=isProvider
+      ?'¿Confirmas que terminaste el trabajo? El cliente deberá confirmar que recibió el servicio.'
+      :'¿Confirmas que recibiste correctamente el servicio? Esta acción cerrará definitivamente el trabajo.';
+    if(!confirm(question))return;
     const auth=c.actor==='cliente'?{actor:'cliente',token:c.token}:{actor:'prestador',codigo:c.codigo,token:c.token};
-    btn.disabled=true;btn.textContent='Finalizando…';note.style.display='none';
+    const originalText=btn.textContent;
+    btn.disabled=true;btn.textContent=isProvider?'Informando…':'Confirmando…';note.style.display='none';
     try{
       const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/finalizar`,{method:'POST',headers,body:JSON.stringify(auth)}),d=await r.json();
-      if(!r.ok)throw new Error(d.error||'No pude finalizar el servicio');
-      note.className='notice success';note.textContent='Servicio finalizado correctamente.';note.style.display='block';
+      if(!r.ok)throw new Error(d.error||'No pude actualizar el cierre del servicio');
+      note.className='notice success';
+      note.textContent=d.estado_cierre==='esperando_cliente'
+        ?'Listo. Ahora estamos esperando la confirmación del cliente.'
+        :'Servicio confirmado y finalizado correctamente.';
+      note.style.display='block';
       await loadConversation(true);
-      if(c.actor==='cliente')await loadProviderReview();
+      if(c.actor==='cliente'&&d.estado_cierre==='finalizado')await loadProviderReview();
     }catch(err){note.className='notice error';note.textContent=err.message;note.style.display='block'}
-    finally{btn.disabled=false;btn.textContent='✓ Finalizar servicio'}
+    finally{btn.disabled=false;btn.textContent=originalText}
   });
 
   $('#reportToggle').addEventListener('click',()=>{$('#reportForm').hidden=!$('#reportForm').hidden;$('#reportNotice').style.display='none'});
