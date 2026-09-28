@@ -277,7 +277,10 @@
     if(!c||c.actor!=='cliente')return;
     try{
       const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/evaluacion?token=${encodeURIComponent(c.token)}`,{headers,cache:'no-store'}),d=await r.json();
-      if(!r.ok||(!d.puede_evaluar&&!d.evaluacion))return;card.hidden=false;
+      if(!r.ok)return;
+      // La evaluación solo se muestra después del cierre real del servicio.
+      if(!d.evaluacion&&!d.puede_evaluar)return;
+      card.hidden=false;
       if(d.evaluacion){paintReviewStars(d.evaluacion.calificacion);$('#providerReviewComment').value=d.evaluacion.comentario||'';$('#providerReviewComment').disabled=true;$$('#providerReviewStars button').forEach(b=>b.disabled=true);$('#providerReviewSubmit').hidden=true;const n=$('#providerReviewNotice');n.className='notice success';n.textContent='Evaluación enviada. Gracias por compartir tu experiencia.';n.style.display='block'}
       else{$('#providerReviewComment').disabled=false;$$('#providerReviewStars button').forEach(b=>b.disabled=false);$('#providerReviewSubmit').hidden=false}
     }catch{}
