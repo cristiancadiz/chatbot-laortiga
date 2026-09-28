@@ -61,6 +61,15 @@
 
     .provider-communes{max-height:260px;overflow:auto;padding:8px;border:1px solid #e2e8e3;border-radius:14px;background:#fff}
     #providerRegion{width:100%;min-height:48px;border:1px solid #d9e1da;border-radius:12px;padding:0 12px;background:#fff;font:inherit}
+
+/* V7.32: acciones rápidas del prestador */
+.provider-quick-actions{display:flex;align-items:center;gap:5px;flex-wrap:nowrap}
+.provider-quick-actions .provider-mini-action{white-space:nowrap;font-size:10px;padding:6px 8px;min-height:28px}
+.provider-quick-actions .provider-exit{margin-left:auto}
+@media(max-width:420px){
+  .provider-quick-actions{gap:4px}
+  .provider-quick-actions .provider-mini-action{font-size:9px;padding:5px 6px}
+}
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -294,7 +303,7 @@
       <div class="provider-quick-actions" id="providerQuickActions">
         <button class="notify-btn provider-mini-action" id="notifyBtn" hidden>🔔 Notificaciones</button>
         <button class="secondary provider-mini-action" id="providerPhotoQuick" type="button" hidden>📷 Foto</button>
-        <button class="secondary provider-mini-action" id="providerDocsQuick" type="button" hidden>📄 Revisar documentos</button>
+        <button class="secondary provider-mini-action" id="providerDocsQuick" type="button" hidden>📄 Ver documentos</button>
         <button class="secondary provider-mini-action provider-exit" id="providerLogout" type="button" hidden>Salir</button>
       </div>
       <div class="access-switch" id="providerAccessSwitch"><button class="toggle active" type="button" data-provider-access="register">Crear cuenta</button><button class="toggle" type="button" data-provider-access="login">Ingresar</button></div>
