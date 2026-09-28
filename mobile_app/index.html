@@ -389,7 +389,7 @@ if(hasProvider){
   const mercadoPagoBtn=$('#mercadoPagoBtn');
   const mercadoPagoNotice=$('#mercadoPagoNotice');
   const servicePriceForClient=Number(sol.precio_servicio);
-  const canStartPayment=conversationActor==='cliente'
+  const canStartPayment=c.actor==='cliente'
     && Number.isFinite(servicePriceForClient)
     && servicePriceForClient>0
     && !['pagado','liberado','reembolsado','disputado'].includes(paymentState);
@@ -403,8 +403,8 @@ if(hasProvider){
   const breakdown=$('#paymentBreakdown');
   const servicePrice=Number(sol.precio_servicio);
   const hasBreakdown=Number.isFinite(servicePrice)&&servicePrice>0;
-  breakdown.hidden=!(conversationActor==='prestador'&&hasBreakdown);
-  if(conversationActor==='prestador'&&hasBreakdown){
+  breakdown.hidden=!(c.actor==='prestador'&&hasBreakdown);
+  if(c.actor==='prestador'&&hasBreakdown){
     const money=v=>new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(Number(v||0));
     $('#paymentServicePrice').textContent=money(servicePrice);
     $('#paymentPlatformFee').textContent='− '+money(sol.comision_llama_jaime_neta);
@@ -446,15 +446,15 @@ if(hasProvider&&sol.servicio_finalizado_at){
 }if(!hasProvider){box.innerHTML='<div class="empty">Jaime todavía está buscando un prestador compatible. Vuelve a revisar en unos minutos.</div>';$('#conversationForm').hidden=true;$('#quoteForm').hidden=true;$('#quoteBox').hidden=true;$('#reportForm').hidden=true;$('#finishServiceCard').hidden=true;$('#paymentStatusCard').hidden=true;$('#paymentBreakdown').hidden=true;$('#paymentClientAction').hidden=true;return}$('#conversationTitle').textContent=c.actor==='cliente'?(d.prestador.nombre||'Prestador'):'Cliente y cotización';$('#conversationForm').hidden=false;box.innerHTML='';for(const m of d.mensajes){const el=document.createElement('div'),mine=(c.actor==='cliente'&&m.remitente_tipo==='cliente')||(c.actor==='prestador'&&m.remitente_tipo==='prestador');el.className='conversation-message '+(m.remitente_tipo==='sistema'?'system':mine?'mine':'');el.textContent=m.contenido;box.append(el)}if(!d.mensajes.length)box.innerHTML='<div class="empty">La conversación está lista. Envía el primer mensaje.</div>';box.scrollTop=box.scrollHeight;renderQuote(d.cotizacion)}catch(err){if(!silent)$('#conversationMessages').innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
 
   $('#mercadoPagoBtn').addEventListener('click',async()=>{
-  const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice');
-  if(conversationActor!=='cliente'||!conversationAuth?.public_id||!conversationAuth?.token)return;
+  const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;
+  if(!c||c.actor!=='cliente'||!c.public_id||!c.token)return;
   const original=btn.textContent;
   btn.disabled=true;btn.textContent='Preparando pago…';note.textContent='';
   try{
-    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(conversationAuth.public_id)}/pago/mercadopago`,{
+    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({token:conversationAuth.token})
+      body:JSON.stringify({token:c.token})
     });
     const d=await r.json().catch(()=>({}));
     if(!r.ok||!d.ok)throw new Error(d.error||'No pude iniciar el pago.');
