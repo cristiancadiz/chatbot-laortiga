@@ -882,6 +882,67 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             app.logger.exception("MOBILE CHAT ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude responder ahora. Intenta nuevamente en unos segundos."}, 502)
 
+    @app.post(f"{api_base}/chat/preparar-solicitud")
+    def mobile_chat_prepare_request():
+        body = request.get_json(silent=True) or {}
+        service = _clean(body.get("service"), 30).lower()
+        if service not in SERVICE_TYPES:
+            service = "otro"
+        history = body.get("history") if isinstance(body.get("history"), list) else []
+        transcript = []
+        for item in history[-14:]:
+            if not isinstance(item, dict):
+                continue
+            role = "Usuario" if item.get("role") == "user" else "Jaime"
+            content = _clean(item.get("content"), 1500)
+            if content:
+                transcript.append(f"{role}: {content}")
+        if not transcript:
+            return _json(app, {"ok": False, "error": "Aún no hay información suficiente en la conversación."}, 400)
+        instructions = (
+            "Extrae exclusivamente datos explícitos de la conversación para una solicitud de servicios en Chile. "
+            "No inventes ni completes datos ausentes. Devuelve SOLO JSON válido, sin markdown, con estas claves: "
+            "tipo, subtipo, nombre, telefono, email, comuna, direccion_origen, direccion_destino, detalles, materiales, fecha_preferida. "
+            "materiales debe ser una lista. Usa cadena vacía para datos ausentes. tipo debe ser uno de hogar, limpieza, flete, jardineria, belleza, reciclaje, otro. "
+            "Si el servicio seleccionado ayuda a clasificar, úsalo, pero no inventes datos personales."
+        )
+        context = f"Servicio seleccionado: {service}\nConversación:\n" + "\n".join(transcript)
+        try:
+            raw, usage = ai_generate(settings["ai_model"], instructions, context)
+            cleaned = str(raw or "").strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.strip("`").strip()
+                if cleaned.lower().startswith("json"):
+                    cleaned = cleaned[4:].strip()
+            draft = json.loads(cleaned)
+            if not isinstance(draft, dict):
+                raise ValueError("respuesta no es objeto")
+            draft["tipo"] = _clean(draft.get("tipo"), 20).lower() or service
+            if draft["tipo"] not in SERVICE_TYPES:
+                draft["tipo"] = service
+            draft["subtipo"] = _clean(draft.get("subtipo"), 40).lower()
+            draft["nombre"] = _clean(draft.get("nombre"), 120)
+            draft["telefono"] = _clean(draft.get("telefono"), 40)
+            draft["email"] = _clean(draft.get("email"), 180).lower()
+            draft["comuna"] = _clean(draft.get("comuna"), 120)
+            draft["direccion_origen"] = _clean(draft.get("direccion_origen"), 500)
+            draft["direccion_destino"] = _clean(draft.get("direccion_destino"), 500)
+            draft["detalles"] = _clean(draft.get("detalles"), 2000)
+            draft["fecha_preferida"] = _clean(draft.get("fecha_preferida"), 120)
+            draft["materiales"] = _list_clean(draft.get("materiales"), item_limit=120, max_items=30)
+            missing = []
+            for key, label in (("nombre", "nombre"), ("telefono", "teléfono"), ("comuna", "comuna"), ("direccion_origen", "dirección"), ("detalles", "detalle del servicio")):
+                if not draft.get(key):
+                    missing.append(label)
+            if draft["tipo"] == "belleza" and draft.get("subtipo") not in BEAUTY_TYPES:
+                missing.append("tipo de servicio de belleza")
+            if draft["tipo"] == "flete" and not draft.get("direccion_destino"):
+                missing.append("dirección de destino")
+            return _json(app, {"ok": True, "solicitud": draft, "faltantes": missing, "usage": {"api": usage.get("api")}})
+        except Exception as exc:
+            app.logger.exception("MOBILE CHAT PREPARE REQUEST ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude preparar la solicitud desde la conversación."}, 502)
+
     @app.post(f"{api_base}/solicitudes")
     def mobile_create_request():
         if not _allow("request", limit=8):
