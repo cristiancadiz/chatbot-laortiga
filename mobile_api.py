@@ -2406,6 +2406,62 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             app.logger.exception("MP OAUTH CONNECT ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude iniciar la conexión con Mercado Pago."}, 502)
 
+    @app.post(f"{api_base}/prestadores/mercadopago/desconectar")
+    def mobile_provider_mercadopago_disconnect():
+        """Desvincula Mercado Pago del prestador sin borrar su cuenta ni historial externo."""
+        body = request.get_json(silent=True) or {}
+        try:
+            provider = _provider_auth(body.get("codigo"), body.get("token"))
+            if not provider:
+                return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
+
+            active_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
+                headers=_db_headers(),
+                params={
+                    "select": "id,public_id,pago_estado",
+                    "empresa_id": f"eq.{settings['empresa_id']}",
+                    "prestador_id": f"eq.{provider['id']}",
+                    "pago_proveedor": "eq.mercadopago",
+                    "pago_estado": "in.(autorizado,pagado)",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            active_response.raise_for_status()
+            active_rows = active_response.json() if active_response.content else []
+            if active_rows:
+                return _json(app, {
+                    "ok": False,
+                    "error": "No puedes desconectar Mercado Pago mientras tengas un pago autorizado o pagado pendiente de cierre/liberación."
+                }, 409)
+
+            patch = requests.patch(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers("return=minimal"),
+                params={"id": f"eq.{provider['id']}", "empresa_id": f"eq.{settings['empresa_id']}"},
+                json={
+                    "mp_user_id": None,
+                    "mp_access_token": None,
+                    "mp_refresh_token": None,
+                    "mp_token_expires_at": None,
+                    "mp_conectado_at": None,
+                    "mp_oauth_state_hash": None,
+                    "mp_oauth_state_expires_at": None,
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            patch.raise_for_status()
+            Thread(target=_audit, args=("mercadopago_prestador_desconectado", "prestador", provider["id"]), daemon=True).start()
+            return _json(app, {
+                "ok": True,
+                "mercadopago_conectado": False,
+                "message": "Mercado Pago fue desconectado de Llama a Jaime. Tu cuenta e historial de Mercado Pago no se eliminan."
+            })
+        except requests.RequestException as exc:
+            app.logger.exception("MP DISCONNECT ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude desconectar Mercado Pago."}, 502)
+
     @app.get(f"{api_base}/prestadores/mercadopago/callback")
     def mobile_provider_mercadopago_callback():
         """Recibe el code de MP y lo vincula al prestador identificado por state."""
