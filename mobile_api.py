@@ -2665,6 +2665,78 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             app.logger.exception("MERCADO PAGO CHECKOUT ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude iniciar el pago con Mercado Pago."}, 502)
 
+    @app.get(f"{api_base}/mercadopago/public-key")
+    def mobile_mercadopago_public_key():
+        public_key = str(os.getenv("MERCADOPAGO_PUBLIC_KEY") or "").strip()
+        if not public_key:
+            return _json(app, {"ok": False, "error": "Falta configurar MERCADOPAGO_PUBLIC_KEY."}, 503)
+        return _json(app, {"ok": True, "public_key": public_key})
+
+    @app.post(f"{api_base}/solicitudes/<public_id>/pago/mercadopago/autorizar")
+    def mobile_authorize_mercadopago_payment(public_id):
+        """Checkout API: reserva fondos con capture=false y split 1:1."""
+        if not _allow("mercadopago-authorize", limit=10, window_seconds=3600):
+            return _json(app, {"ok": False, "error": "Intenta nuevamente en unos minutos."}, 429)
+        body = request.get_json(silent=True) or {}
+        try:
+            request_row = _client_auth(public_id, body.get("token"))
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso inválido para autorizar esta solicitud."}, 401)
+            provider_id = request_row.get("prestador_id")
+            price = int(request_row.get("precio_servicio") or 0)
+            if not provider_id or price <= 0:
+                return _json(app, {"ok": False, "error": "Primero debes aceptar una cotización válida."}, 409)
+            q = requests.get(f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio", headers=_db_headers(),
+                params={"select":"id", "solicitud_id":f"eq.{request_row['id']}", "prestador_id":f"eq.{provider_id}",
+                        "estado":"eq.aceptada", "order":"created_at.desc", "limit":"1"}, timeout=settings["supabase_timeout"])
+            q.raise_for_status()
+            if not (q.json() if q.content else []):
+                return _json(app, {"ok": False, "error": "Debes aceptar la cotización antes de reservar fondos."}, 409)
+            payment_state = str(request_row.get("pago_estado") or "pendiente").lower()
+            if payment_state == "autorizado":
+                return _json(app, {"ok": False, "error": "Los fondos ya están reservados."}, 409)
+            if payment_state in {"pagado","liberado","reembolsado","disputado"}:
+                return _json(app, {"ok": False, "error": "El estado actual del pago no permite una nueva autorización."}, 409)
+            seller = _mp_provider_credentials(provider_id)
+            if not seller or not seller.get("mp_access_token"):
+                return _json(app, {"ok": False, "error": "El prestador debe conectar Mercado Pago antes de recibir pagos."}, 409)
+            card_token = str(body.get("card_token") or "").strip()
+            method = str(body.get("payment_method_id") or "").strip()
+            payer = body.get("payer") if isinstance(body.get("payer"), dict) else {}
+            email = str(payer.get("email") or "").strip()
+            if not card_token or not method or not email:
+                return _json(app, {"ok": False, "error": "Faltan datos del medio de pago."}, 400)
+            payload={"transaction_amount":float(price),"token":card_token,"description":f"Servicio Llama a Jaime {public_id}",
+                     "installments":int(body.get("installments") or 1),"payment_method_id":method,
+                     "payer":{"email":email},"capture":False,"external_reference":f"LJ-{public_id}",
+                     "application_fee":round(price*0.1428,2),
+                     "metadata":{"solicitud_public_id":public_id,"solicitud_id":request_row["id"]}}
+            if body.get("issuer_id"): payload["issuer_id"]=str(body.get("issuer_id"))
+            ident=payer.get("identification") if isinstance(payer.get("identification"),dict) else None
+            if ident and ident.get("type") and ident.get("number"):
+                payload["payer"]["identification"]={"type":str(ident["type"]),"number":str(ident["number"])}
+            h=_mp_headers_with_token(seller["mp_access_token"]); h["X-Idempotency-Key"]=f"lj-auth-{request_row['id']}-{price}"
+            mp=requests.post("https://api.mercadopago.com/v1/payments",headers=h,json=payload,timeout=25)
+            data=mp.json() if mp.content else {}
+            if not mp.ok:
+                return _json(app,{"ok":False,"error":str(data.get("message") or data.get("error") or "Mercado Pago rechazó la autorización.")},409 if mp.status_code<500 else 502)
+            payment_id=str(data.get("id") or ""); status=str(data.get("status") or "").lower(); detail=str(data.get("status_detail") or "").lower()
+            if status=="authorized" and payment_id:
+                st=requests.post(f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_actualizar_estado_pago",headers=_db_headers(),
+                    json={"p_solicitud_id":request_row["id"],"p_estado":"autorizado","p_monto_total":price,"p_proveedor":"mercadopago","p_referencia_externa":payment_id,"p_actor_tipo":"cliente"},
+                    timeout=settings["supabase_timeout"]); st.raise_for_status()
+                Thread(target=_audit,args=("mercadopago_fondos_reservados","cliente",None,request_row["id"],{"payment_id":payment_id,"monto":price}),daemon=True).start()
+                try: _send_custom_push("nexi_app_push_suscripciones","prestador_id",provider_id,"Fondos reservados","El cliente autorizó el pago. Ya puedes realizar el servicio.","/app/?view=provider",f"fondos-reservados-{request_row['id']}")
+                except Exception: app.logger.exception("PAYMENT AUTHORIZED PUSH ERROR")
+                return _json(app,{"ok":True,"status":status,"status_detail":detail,"payment_id":payment_id,"message":"Fondos reservados correctamente."})
+            if status=="pending": return _json(app,{"ok":True,"status":status,"status_detail":detail,"payment_id":payment_id,"message":"Mercado Pago está procesando la autorización."},202)
+            return _json(app,{"ok":False,"status":status,"status_detail":detail,"error":"No fue posible reservar los fondos."},409)
+        except (ValueError,TypeError):
+            return _json(app,{"ok":False,"error":"Datos de pago inválidos."},400)
+        except requests.RequestException as exc:
+            app.logger.exception("MP AUTHORIZE ERROR: %r",exc)
+            return _json(app,{"ok":False,"error":"No pude comunicarme con Mercado Pago."},502)
+
     @app.route(f"{api_base}/mercadopago/webhook", methods=["POST", "GET"])
     def mobile_mercadopago_webhook():
         """Confirma el pago consultándolo directamente en Mercado Pago."""
@@ -2784,6 +2856,13 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     daemon=True,
                 ).start()
                 return _json(app, {"ok": False, "error": "Monto de pago no coincide."}, 409)
+
+            if status == "authorized":
+                st = requests.post(f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_actualizar_estado_pago", headers=_db_headers(),
+                    json={"p_solicitud_id":request_row["id"],"p_estado":"autorizado","p_monto_total":expected_amount,"p_proveedor":"mercadopago","p_referencia_externa":payment_id,"p_actor_tipo":"sistema"},
+                    timeout=settings["supabase_timeout"])
+                st.raise_for_status()
+                return _json(app,{"ok":True,"status":"authorized"})
 
             if status == "approved":
                 # Mercado Pago puede reintentar el mismo webhook. Solo notificamos
@@ -2929,6 +3008,27 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             provider_id = request_row.get("prestador_id")
             if not provider_id:
                 return _json(app, {"ok": False, "error": "La solicitud aún no tiene un prestador asignado."}, 409)
+
+            if actor == "cliente" and request_row.get("prestador_declaro_finalizado_at"):
+                if str(request_row.get("pago_estado") or "").lower() != "autorizado":
+                    return _json(app,{"ok":False,"error":"Debes tener los fondos autorizados antes de confirmar el cierre."},409)
+                payment_id=str(request_row.get("pago_referencia_externa") or "").strip()
+                seller=_mp_provider_credentials(provider_id)
+                if not payment_id or not seller or not seller.get("mp_access_token"):
+                    return _json(app,{"ok":False,"error":"No encontré la autorización de Mercado Pago para capturar el pago."},409)
+                h=_mp_headers_with_token(seller["mp_access_token"]); h["X-Idempotency-Key"]=f"lj-capture-{request_row['id']}"
+                cap=requests.put(f"https://api.mercadopago.com/v1/payments/{payment_id}",headers=h,json={"capture":True},timeout=25)
+                data=cap.json() if cap.content else {}
+                if not cap.ok or str(data.get("status") or "").lower()!="approved":
+                    app.logger.warning("MP CAPTURE FAILED %s %s",cap.status_code,data)
+                    return _json(app,{"ok":False,"error":"Mercado Pago no pudo capturar el pago. El servicio no se cerró; intenta nuevamente o reporta el problema."},409)
+                amount=int(request_row.get("precio_servicio") or 0); fee=_mp_real_fee(data)
+                br=requests.post(f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_calcular_desglose_pago",headers=_db_headers(),
+                    json={"p_solicitud_id":request_row["id"],"p_precio_servicio":amount,"p_comision_mercado_pago":fee},timeout=settings["supabase_timeout"]); br.raise_for_status()
+                st=requests.post(f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_actualizar_estado_pago",headers=_db_headers(),
+                    json={"p_solicitud_id":request_row["id"],"p_estado":"pagado","p_monto_total":amount,"p_proveedor":"mercadopago","p_referencia_externa":payment_id,"p_actor_tipo":"cliente"},
+                    timeout=settings["supabase_timeout"]); st.raise_for_status()
+                Thread(target=_audit,args=("mercadopago_pago_capturado","cliente",None,request_row["id"],{"payment_id":payment_id,"monto":amount,"comision_mercado_pago":fee}),daemon=True).start()
 
             rpc = requests.post(
                 f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_finalizar_servicio",
