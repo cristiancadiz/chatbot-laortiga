@@ -93,6 +93,20 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.hidden{display:
 
 <div id="modalBg" class="modal-bg hidden"><div class="modal"><h3 id="modalTitle"></h3><p id="modalText"></p><textarea id="observation" placeholder="Observación interna"></textarea><div class="modal-actions"><button id="cancelModal" class="btn">Cancelar</button><button id="confirmAction" class="primary">Confirmar</button></div></div></div>
 
+<div id="editProviderBg" class="modal-bg hidden"><div class="modal"><h3>Editar ficha del prestador</h3><p id="editProviderName" class="meta"></p>
+<div class="field"><label>Nombre</label><input id="editNombre"></div>
+<div class="field"><label>Correo</label><input id="editEmail" type="email"></div>
+<div class="field"><label>Teléfono</label><input id="editTelefono"></div>
+<div class="field"><label>Categorías / roles</label><input id="editRoles" placeholder="hogar, limpieza, salud"></div>
+<div class="field"><label>Especialidades</label><input id="editEspecialidades" placeholder="Separadas por coma"></div>
+<div class="field"><label>Comunas</label><input id="editComunas" placeholder="Separadas por coma"></div>
+<div class="field"><label>Materiales</label><input id="editMateriales" placeholder="Separados por coma"></div>
+<div class="field"><label>Vehículo</label><input id="editVehiculo"></div>
+<div class="field"><label>Radio (km)</label><input id="editRadio" type="number" min="1" max="100"></div>
+<div class="field"><label><input id="editDisponible" type="checkbox" style="width:auto"> Disponible para nuevas oportunidades</label></div>
+<p class="meta">RUT, clave, documentos y credenciales de Mercado Pago no se modifican desde esta ficha.</p>
+<div class="modal-actions"><button id="cancelEditProvider" class="btn">Cancelar</button><button id="saveEditProvider" class="primary">Guardar cambios</button></div></div></div>
+
 <div id="docModalBg" class="modal-bg hidden"><div class="modal"><h3 id="docModalTitle">Revisar documento</h3><p id="docModalText"></p><textarea id="docObservation" placeholder="Observación para el prestador"></textarea><div class="modal-actions"><button id="cancelDocModal" class="btn">Cancelar</button><button id="confirmDocReview" class="primary">Confirmar</button></div></div></div>
 <script>
 const API="/app/api"; let token=sessionStorage.getItem("lja_admin_token")||""; let admin=null; let providers=[]; let selected=null; let pendingAction=null;
@@ -121,6 +135,7 @@ function renderDetail(p,hist,claims){const canSuspend=admin.rol!=="moderador";$(
 <div class="fact"><small>Disponible</small><b>${p.disponible?"Sí":"No"}</b></div><div class="fact"><small>Último login</small><b>${date(p.ultimo_login_at)}</b></div>
 </div>
 <div class="actions">
+${admin.rol!=="moderador"?'<button class="btn" id="editProviderBtn">✏️ Editar ficha</button>':""}
 ${p.estado_verificacion!=="verificado"?'<button class="btn ok" data-action="verificar">Verificar</button>':""}
 ${p.estado_verificacion!=="rechazado"?'<button class="btn warn" data-action="rechazar">Rechazar</button>':""}
 ${canSuspend&&p.estado_cuenta!=="suspendida"?'<button class="btn danger" data-action="suspender">Suspender</button>':""}
@@ -131,7 +146,23 @@ ${p.observacion_admin?`<div class="claim"><b>Observación interna</b><br>${esc(p
 <div class="section"><h3>Documentación y verificación</h3><div id="adminDocuments" class="doc-grid"><div class="loading">Cargando documentos…</div></div></div>
 <div class="section"><h3>Historial administrativo (${hist.length})</h3>${hist.length?hist.map(x=>`<div class="event"><b>${esc(x.accion)}</b> · ${date(x.created_at)}<br><span class="meta">${esc(x.estado_anterior||"—")} → ${esc(x.estado_nuevo||"—")}${x.observacion?" · "+esc(x.observacion):""}</span></div>`).join(""):'<div class="meta">Sin acciones administrativas.</div>'}</div>
 <div class="section"><h3>Reclamos (${claims.length})</h3>${claims.length?claims.map(x=>`<div class="claim"><b>${esc(x.categoria)}</b> ${badge(x.estado)}<br>${esc(x.descripcion)}<div class="meta">${date(x.created_at)} · Reporta: ${esc(x.reportante_tipo)}</div></div>`).join(""):'<div class="meta">Sin reclamos registrados.</div>'}</div>`;
-document.querySelectorAll("[data-action]").forEach(b=>b.onclick=()=>openAction(b.dataset.action,p));loadAdminDocuments(p.id)}
+document.querySelectorAll("[data-action]").forEach(b=>b.onclick=()=>openAction(b.dataset.action,p));
+const editBtn=$("editProviderBtn");if(editBtn)editBtn.onclick=()=>openEditProvider(p);
+loadAdminDocuments(p.id)}
+function csvArray(v){return Array.isArray(v)?v.join(", "):""}
+function parseCsv(v){return String(v||"").split(",").map(x=>x.trim()).filter(Boolean)}
+function openEditProvider(p){
+  $("editProviderName").textContent=`${p.nombre||"Prestador"} · ${p.public_id||""}`;
+  $("editNombre").value=p.nombre||"";$("editEmail").value=p.email||"";$("editTelefono").value=p.telefono||"";
+  $("editRoles").value=csvArray(p.roles);$("editEspecialidades").value=csvArray(p.especialidades);$("editComunas").value=csvArray(p.comunas);$("editMateriales").value=csvArray(p.materiales);
+  $("editVehiculo").value=p.vehiculo||"";$("editRadio").value=p.radio_km??10;$("editDisponible").checked=!!p.disponible;
+  $("editProviderBg").dataset.providerId=p.id;$("editProviderBg").classList.remove("hidden");
+}
+$("cancelEditProvider").onclick=()=>$("editProviderBg").classList.add("hidden");
+$("saveEditProvider").onclick=async()=>{const id=$("editProviderBg").dataset.providerId;if(!id)return;const btn=$("saveEditProvider");btn.disabled=true;try{
+  const payload={nombre:$("editNombre").value.trim(),email:$("editEmail").value.trim(),telefono:$("editTelefono").value.trim(),roles:parseCsv($("editRoles").value),especialidades:parseCsv($("editEspecialidades").value),comunas:parseCsv($("editComunas").value),materiales:parseCsv($("editMateriales").value),vehiculo:$("editVehiculo").value.trim(),radio_km:Number($("editRadio").value||10),disponible:$("editDisponible").checked};
+  await api(`/admin/prestadores/${id}`,{method:"PATCH",body:JSON.stringify(payload)});$("editProviderBg").classList.add("hidden");await loadProviders();await openProvider(id);alert("Ficha actualizada correctamente.");
+}catch(e){alert(e.message)}finally{btn.disabled=false}}
 function openAction(action,p){pendingAction={action,p};$("modalTitle").textContent={verificar:"Verificar prestador",rechazar:"Rechazar verificación",suspender:"Suspender prestador",reactivar:"Reactivar prestador"}[action];$("modalText").textContent=`${p.nombre||"Prestador"} · ${p.email||p.telefono||""}`;$("observation").value="";$("observation").placeholder=action==="suspender"?"Motivo de suspensión (obligatorio)":"Observación interna (opcional)";$("modalBg").classList.remove("hidden")}
 $("cancelModal").onclick=()=>{$("modalBg").classList.add("hidden");pendingAction=null}
 $("confirmAction").onclick=async()=>{if(!pendingAction)return;const obs=$("observation").value.trim();if(pendingAction.action==="suspender"&&!obs){alert("Debes indicar el motivo de la suspensión.");return}$("confirmAction").disabled=true;try{await api(`/admin/prestadores/${pendingAction.p.id}/accion`,{method:"POST",body:JSON.stringify({accion:pendingAction.action,observacion:obs})});$("modalBg").classList.add("hidden");const id=pendingAction.p.id;pendingAction=null;await loadProviders();await openProvider(id)}catch(e){alert(e.message)}finally{$("confirmAction").disabled=false}}
