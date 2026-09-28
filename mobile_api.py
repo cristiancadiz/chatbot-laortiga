@@ -10,6 +10,8 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
+from urllib.parse import urlencode
 import re
 import time
 import uuid
@@ -280,11 +282,50 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
     def _mp_access_token():
         return str(os.getenv("MERCADOPAGO_ACCESS_TOKEN") or "").strip()
 
+    def _mp_client_id():
+        return str(os.getenv("MERCADOPAGO_CLIENT_ID") or os.getenv("MERCADOPAGO_APP_ID") or "").strip()
+
+    def _mp_client_secret():
+        return str(os.getenv("MERCADOPAGO_CLIENT_SECRET") or os.getenv("MERCADOPAGO_SECRET_KEY") or "").strip()
+
+    def _mp_redirect_uri():
+        configured = str(os.getenv("LLAMA_JAIME_MERCADOPAGO_REDIRECT_URI") or "").strip()
+        if configured:
+            return configured
+        base = str(os.getenv("LLAMA_JAIME_PUBLIC_URL") or "").strip().rstrip("/")
+        return f"{base}/app/api/prestadores/mercadopago/callback" if base else ""
+
+    def _mp_headers_with_token(token):
+        token = str(token or "").strip()
+        if not token:
+            raise RuntimeError("El prestador todavía no ha conectado Mercado Pago.")
+        return {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    def _mp_provider_credentials(provider_id):
+        response = requests.get(
+            f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+            headers=_db_headers(),
+            params={
+                "select": "id,mp_user_id,mp_access_token,mp_refresh_token,mp_token_expires_at,mp_conectado_at",
+                "id": f"eq.{provider_id}",
+                "empresa_id": f"eq.{settings['empresa_id']}",
+                "limit": "1",
+            },
+            timeout=settings["supabase_timeout"],
+        )
+        response.raise_for_status()
+        rows = response.json() if response.content else []
+        return rows[0] if rows else None
+
     def _mp_webhook_secret():
         return str(os.getenv("MERCADOPAGO_WEBHOOK_SECRET") or "").strip()
 
     def _mp_notification_url():
-        configured = str(os.getenv("MERCADOPAGO_NOTIFICATION_URL") or "").strip()
+        configured = str(os.getenv("LLAMA_JAIME_MERCADOPAGO_NOTIFICATION_URL") or os.getenv("MERCADOPAGO_NOTIFICATION_URL") or "").strip()
         if configured:
             return configured
         base = str(os.getenv("LLAMA_JAIME_PUBLIC_URL") or "").strip().rstrip("/")
@@ -435,7 +476,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         """Ficha administrativa sin hashes, salts ni tokens de acceso."""
         if not isinstance(row, dict):
             return {}
-        blocked = {"access_token_hash", "pin_hash", "pin_salt"}
+        blocked = {"access_token_hash", "pin_hash", "pin_salt", "mp_access_token", "mp_refresh_token"}
         return {key: value for key, value in row.items() if key not in blocked}
 
     def _provider_auth(code, token):
@@ -1423,8 +1464,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             if request.method == "GET":
                 safe = {key: provider.get(key) for key in (
                     "public_id", "nombre", "email", "roles", "comunas", "materiales", "especialidades",
-                    "vehiculo", "radio_km", "disponible", "estado_cuenta", "estado_verificacion", "verificado_at", "created_at"
+                    "vehiculo", "radio_km", "disponible", "estado_cuenta", "estado_verificacion", "verificado_at", "created_at",
+                    "mp_user_id", "mp_conectado_at"
                 )}
+                safe["mercadopago_conectado"] = bool(provider.get("mp_user_id") and provider.get("mp_conectado_at"))
                 return _json(app, {"ok": True, "prestador": safe})
 
             update = {}
@@ -2123,6 +2166,119 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             app.logger.exception("CONVERSATION ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude abrir la conversación."}, 502)
 
+    @app.post(f"{api_base}/prestadores/mercadopago/conectar")
+    def mobile_provider_mercadopago_connect():
+        """Inicia OAuth de Mercado Pago para vincular la cuenta del prestador."""
+        body = request.get_json(silent=True) or {}
+        try:
+            provider = _provider_auth(body.get("codigo"), body.get("token"))
+            if not provider:
+                return _json(app, {"ok": False, "error": "Acceso de prestador inválido."}, 401)
+            client_id = _mp_client_id()
+            redirect_uri = _mp_redirect_uri()
+            if not client_id or not _mp_client_secret() or not redirect_uri:
+                return _json(app, {"ok": False, "error": "Falta configurar OAuth de Mercado Pago."}, 503)
+
+            state = secrets.token_urlsafe(32)
+            state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+            expires_at = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
+            patch = requests.patch(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers("return=minimal"),
+                params={"id": f"eq.{provider['id']}", "empresa_id": f"eq.{settings['empresa_id']}"},
+                json={"mp_oauth_state_hash": state_hash, "mp_oauth_state_expires_at": expires_at},
+                timeout=settings["supabase_timeout"],
+            )
+            patch.raise_for_status()
+            params = {
+                "client_id": client_id,
+                "response_type": "code",
+                "platform_id": "mp",
+                "state": state,
+                "redirect_uri": redirect_uri,
+            }
+            return _json(app, {"ok": True, "authorization_url": "https://auth.mercadopago.cl/authorization?" + urlencode(params)})
+        except requests.RequestException as exc:
+            app.logger.exception("MP OAUTH CONNECT ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude iniciar la conexión con Mercado Pago."}, 502)
+
+    @app.get(f"{api_base}/prestadores/mercadopago/callback")
+    def mobile_provider_mercadopago_callback():
+        """Recibe el code de MP y lo vincula al prestador identificado por state."""
+        code = str(request.args.get("code") or "").strip()
+        state = str(request.args.get("state") or "").strip()
+        base_url = str(os.getenv("LLAMA_JAIME_PUBLIC_URL") or "").strip().rstrip("/") or request.url_root.rstrip("/")
+        app_return = f"{base_url}/app/?view=provider"
+        if not code or not state:
+            return f'<script>location.replace("{app_return}&mp=error");</script>', 400, {"Content-Type": "text/html"}
+
+        try:
+            state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+            lookup = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers(),
+                params={
+                    "select": "id,mp_oauth_state_expires_at",
+                    "empresa_id": f"eq.{settings['empresa_id']}",
+                    "mp_oauth_state_hash": f"eq.{state_hash}",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            lookup.raise_for_status()
+            rows = lookup.json() if lookup.content else []
+            provider = rows[0] if rows else None
+            if not provider:
+                return f'<script>location.replace("{app_return}&mp=state");</script>', 400, {"Content-Type": "text/html"}
+            expires_raw = str(provider.get("mp_oauth_state_expires_at") or "")
+            expires = datetime.fromisoformat(expires_raw.replace("Z", "+00:00")) if expires_raw else None
+            if not expires or expires < datetime.now(timezone.utc):
+                return f'<script>location.replace("{app_return}&mp=expired");</script>', 400, {"Content-Type": "text/html"}
+
+            token_response = requests.post(
+                "https://api.mercadopago.com/oauth/token",
+                headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+                data={
+                    "client_id": _mp_client_id(),
+                    "client_secret": _mp_client_secret(),
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": _mp_redirect_uri(),
+                },
+                timeout=20,
+            )
+            token_response.raise_for_status()
+            token_data = token_response.json() if token_response.content else {}
+            access_token = str(token_data.get("access_token") or "").strip()
+            refresh_token = str(token_data.get("refresh_token") or "").strip()
+            user_id = str(token_data.get("user_id") or "").strip()
+            expires_in = int(token_data.get("expires_in") or 0)
+            if not access_token or not user_id:
+                raise RuntimeError("Mercado Pago no devolvió credenciales del vendedor.")
+
+            token_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat() if expires_in else None
+            patch = requests.patch(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers("return=minimal"),
+                params={"id": f"eq.{provider['id']}", "empresa_id": f"eq.{settings['empresa_id']}"},
+                json={
+                    "mp_user_id": user_id,
+                    "mp_access_token": access_token,
+                    "mp_refresh_token": refresh_token or None,
+                    "mp_token_expires_at": token_expires_at,
+                    "mp_conectado_at": datetime.now(timezone.utc).isoformat(),
+                    "mp_oauth_state_hash": None,
+                    "mp_oauth_state_expires_at": None,
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            patch.raise_for_status()
+            Thread(target=_audit, args=("mercadopago_prestador_conectado", "prestador", provider["id"]), daemon=True).start()
+            return f'<script>location.replace("{app_return}&mp=connected");</script>', 200, {"Content-Type": "text/html"}
+        except Exception as exc:
+            app.logger.exception("MP OAUTH CALLBACK ERROR: %r", exc)
+            return f'<script>location.replace("{app_return}&mp=error");</script>', 500, {"Content-Type": "text/html"}
+
     @app.post(f"{api_base}/solicitudes/<public_id>/pago/mercadopago")
     def mobile_create_mercadopago_checkout(public_id):
         """Crea Checkout Pro solo para el cliente dueño de la solicitud."""
@@ -2142,6 +2298,13 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             price = int(request_row.get("precio_servicio") or 0)
             if price <= 0:
                 return _json(app, {"ok": False, "error": "Primero debes aceptar una cotización válida."}, 409)
+
+            seller = _mp_provider_credentials(request_row["prestador_id"])
+            if not seller or not seller.get("mp_access_token") or not seller.get("mp_user_id"):
+                return _json(app, {
+                    "ok": False,
+                    "error": "El prestador debe conectar su cuenta de Mercado Pago antes de recibir pagos."
+                }, 409)
 
             payment_state = str(request_row.get("pago_estado") or "pendiente").lower()
             if payment_state in {"pagado", "liberado"}:
@@ -2186,12 +2349,13 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     "solicitud_id": request_row["id"],
                     "empresa_id": request_row["empresa_id"],
                 },
+                "marketplace_fee": round(price * 0.12, 2),
                 "statement_descriptor": "LLAMA A JAIME",
             }
 
             response = requests.post(
                 "https://api.mercadopago.com/checkout/preferences",
-                headers=_mp_headers(),
+                headers=_mp_headers_with_token(seller["mp_access_token"]),
                 json=payload,
                 timeout=20,
             )
@@ -2270,16 +2434,78 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 app.logger.warning("MERCADO PAGO WEBHOOK: firma inválida payment_id=%s", payment_id)
                 return _json(app, {"ok": False, "error": "Firma inválida."}, 401)
 
-            payment = _mp_payment(payment_id)
+            # En marketplace el pago pertenece al vendedor. Buscamos la solicitud por
+            # metadata/external_reference solo después de consultar con el token correcto.
+            # Primero intentamos resolverla por el payment id si ya fue registrado.
+            request_row = None
+            ref_lookup = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
+                headers=_db_headers(),
+                params={
+                    "select": "*",
+                    "pago_referencia_externa": f"eq.{payment_id}",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            ref_lookup.raise_for_status()
+            ref_rows = ref_lookup.json() if ref_lookup.content else []
+            if ref_rows:
+                request_row = ref_rows[0]
+
+            # Webhooks nuevos normalmente llegan antes de guardar payment_id. En ese caso,
+            # probamos solo prestadores vinculados a solicitudes pendientes recientes.
+            if not request_row:
+                candidates_response = requests.get(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
+                    headers=_db_headers(),
+                    params={
+                        "select": "*",
+                        "empresa_id": f"eq.{settings['empresa_id']}",
+                        "pago_proveedor": "eq.mercadopago",
+                        "pago_estado": "in.(pendiente,autorizado)",
+                        "prestador_id": "not.is.null",
+                        "order": "pago_actualizado_at.desc",
+                        "limit": "50",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                candidates_response.raise_for_status()
+                for candidate in (candidates_response.json() if candidates_response.content else []):
+                    seller = _mp_provider_credentials(candidate.get("prestador_id"))
+                    if not seller or not seller.get("mp_access_token"):
+                        continue
+                    try:
+                        probe = requests.get(
+                            f"https://api.mercadopago.com/v1/payments/{payment_id}",
+                            headers=_mp_headers_with_token(seller["mp_access_token"]),
+                            timeout=12,
+                        )
+                        if not probe.ok:
+                            continue
+                        payment = probe.json() if probe.content else {}
+                        ext = str(payment.get("external_reference") or "")
+                        if ext == f"LJ-{candidate.get('public_id')}":
+                            request_row = candidate
+                            break
+                    except requests.RequestException:
+                        continue
+            else:
+                seller = _mp_provider_credentials(request_row.get("prestador_id"))
+                payment = requests.get(
+                    f"https://api.mercadopago.com/v1/payments/{payment_id}",
+                    headers=_mp_headers_with_token((seller or {}).get("mp_access_token")),
+                    timeout=20,
+                )
+                payment.raise_for_status()
+                payment = payment.json() if payment.content else {}
+
+            if not request_row:
+                return _json(app, {"ok": True, "ignored": True})
             status = str(payment.get("status") or "").lower()
             external_reference = str(payment.get("external_reference") or "")
-            if not external_reference.startswith("LJ-NX-"):
+            if external_reference != f"LJ-{request_row['public_id']}":
                 return _json(app, {"ok": True, "ignored": True})
-
-            public_id = external_reference[3:]
-            request_row = _request_by_code(public_id)
-            if not request_row:
-                return _json(app, {"ok": False, "error": "Solicitud no encontrada."}, 404)
 
             expected_amount = int(request_row.get("precio_servicio") or 0)
             try:
