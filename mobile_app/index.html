@@ -27,6 +27,10 @@
     .payment-breakdown .payment-net{border-top:1px dashed var(--line);margin-top:5px;padding-top:9px;font-size:14px}
     .payment-breakdown .payment-net span,.payment-breakdown .payment-net strong{font-weight:900;color:var(--text)}
     .payment-breakdown small{display:block;color:var(--muted);font-size:11px;line-height:1.4;margin-top:7px}
+
+    .payment-client-action{flex:0 0 100%;border-top:1px solid var(--line);padding-top:10px}
+    .payment-client-action button{width:100%}
+    .payment-client-action .notice{margin-top:7px}
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -218,6 +222,10 @@
           <span id="paymentStatusDetail">Pago pendiente</span>
         </div>
         <span class="payment-status-badge" id="paymentStatusBadge">Pendiente</span>
+        <div class="payment-client-action" id="paymentClientAction" hidden>
+          <button type="button" class="primary" id="mercadoPagoBtn">Pagar con Mercado Pago</button>
+          <div class="notice" id="mercadoPagoNotice"></div>
+        </div>
         <div class="payment-breakdown" id="paymentBreakdown" hidden>
           <div><span>Precio del servicio</span><strong id="paymentServicePrice">—</strong></div>
           <div><span>Comisión Llama a Jaime (12%)</span><strong id="paymentPlatformFee">—</strong></div>
@@ -377,6 +385,21 @@ if(hasProvider){
   const amountText=Number.isFinite(amount)&&amount>0?` · ${new Intl.NumberFormat('es-CL',{style:'currency',currency:sol.pago_moneda||'CLP',maximumFractionDigits:0}).format(amount)}`:'';
   paymentDetail.textContent=(paymentDetails[paymentState]||paymentDetails.pendiente)+amountText;
 
+  const clientPaymentAction=$('#paymentClientAction');
+  const mercadoPagoBtn=$('#mercadoPagoBtn');
+  const mercadoPagoNotice=$('#mercadoPagoNotice');
+  const servicePriceForClient=Number(sol.precio_servicio);
+  const canStartPayment=conversationActor==='cliente'
+    && Number.isFinite(servicePriceForClient)
+    && servicePriceForClient>0
+    && !['pagado','liberado','reembolsado','disputado'].includes(paymentState);
+  clientPaymentAction.hidden=!canStartPayment;
+  if(canStartPayment){
+    mercadoPagoBtn.disabled=false;
+    mercadoPagoBtn.textContent='Pagar con Mercado Pago';
+    mercadoPagoNotice.textContent='';
+  }
+
   const breakdown=$('#paymentBreakdown');
   const servicePrice=Number(sol.precio_servicio);
   const hasBreakdown=Number.isFinite(servicePrice)&&servicePrice>0;
@@ -420,9 +443,31 @@ if(hasProvider&&sol.servicio_finalizado_at){
     $('#finishServiceTitle').textContent='Servicio en curso';
     $('#finishServiceText').textContent='Podrás confirmar el servicio cuando el prestador indique que terminó.';
   }
-}if(!hasProvider){box.innerHTML='<div class="empty">Jaime todavía está buscando un prestador compatible. Vuelve a revisar en unos minutos.</div>';$('#conversationForm').hidden=true;$('#quoteForm').hidden=true;$('#quoteBox').hidden=true;$('#reportForm').hidden=true;$('#finishServiceCard').hidden=true;$('#paymentStatusCard').hidden=true;$('#paymentBreakdown').hidden=true;return}$('#conversationTitle').textContent=c.actor==='cliente'?(d.prestador.nombre||'Prestador'):'Cliente y cotización';$('#conversationForm').hidden=false;box.innerHTML='';for(const m of d.mensajes){const el=document.createElement('div'),mine=(c.actor==='cliente'&&m.remitente_tipo==='cliente')||(c.actor==='prestador'&&m.remitente_tipo==='prestador');el.className='conversation-message '+(m.remitente_tipo==='sistema'?'system':mine?'mine':'');el.textContent=m.contenido;box.append(el)}if(!d.mensajes.length)box.innerHTML='<div class="empty">La conversación está lista. Envía el primer mensaje.</div>';box.scrollTop=box.scrollHeight;renderQuote(d.cotizacion)}catch(err){if(!silent)$('#conversationMessages').innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
+}if(!hasProvider){box.innerHTML='<div class="empty">Jaime todavía está buscando un prestador compatible. Vuelve a revisar en unos minutos.</div>';$('#conversationForm').hidden=true;$('#quoteForm').hidden=true;$('#quoteBox').hidden=true;$('#reportForm').hidden=true;$('#finishServiceCard').hidden=true;$('#paymentStatusCard').hidden=true;$('#paymentBreakdown').hidden=true;$('#paymentClientAction').hidden=true;return}$('#conversationTitle').textContent=c.actor==='cliente'?(d.prestador.nombre||'Prestador'):'Cliente y cotización';$('#conversationForm').hidden=false;box.innerHTML='';for(const m of d.mensajes){const el=document.createElement('div'),mine=(c.actor==='cliente'&&m.remitente_tipo==='cliente')||(c.actor==='prestador'&&m.remitente_tipo==='prestador');el.className='conversation-message '+(m.remitente_tipo==='sistema'?'system':mine?'mine':'');el.textContent=m.contenido;box.append(el)}if(!d.mensajes.length)box.innerHTML='<div class="empty">La conversación está lista. Envía el primer mensaje.</div>';box.scrollTop=box.scrollHeight;renderQuote(d.cotizacion)}catch(err){if(!silent)$('#conversationMessages').innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
 
-  $('#finishServiceBtn').addEventListener('click',async()=>{
+  $('#mercadoPagoBtn').addEventListener('click',async()=>{
+  const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice');
+  if(conversationActor!=='cliente'||!conversationAuth?.public_id||!conversationAuth?.token)return;
+  const original=btn.textContent;
+  btn.disabled=true;btn.textContent='Preparando pago…';note.textContent='';
+  try{
+    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(conversationAuth.public_id)}/pago/mercadopago`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token:conversationAuth.token})
+    });
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok)throw new Error(d.error||'No pude iniciar el pago.');
+    if(!d.checkout_url)throw new Error('Mercado Pago no devolvió el enlace de pago.');
+    note.textContent='Abriendo Mercado Pago…';
+    window.location.href=d.checkout_url;
+  }catch(err){
+    note.textContent=err.message||'No pude iniciar el pago.';
+    btn.disabled=false;btn.textContent=original;
+  }
+});
+
+$('#finishServiceBtn').addEventListener('click',async()=>{
     const c=conversationContext,btn=$('#finishServiceBtn'),note=$('#finishServiceNotice');if(!c)return;
     const isProvider=c.actor==='prestador';
     const question=isProvider
