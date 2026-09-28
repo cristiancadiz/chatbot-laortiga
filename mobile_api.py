@@ -1,4 +1,4 @@
-""API y archivos públicos de la PWA Llama a Jaime Servicios.
+"""API y archivos públicos de la PWA Llama a Jaime Servicios.
 
 El módulo no conoce credenciales ni importa el núcleo histórico. Recibe las
 dependencias necesarias al registrarse desde app.py.
@@ -1844,10 +1844,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 result = result[0] if result else {}
             if not result.get("ok"):
                 return _json(app, {"ok": False, "error": result.get("error") or "No se pudo tomar la solicitud."}, 409)
-            response_payload = {"ok": True, "resultado": result}
-            if action == "aceptar":
-                response_payload["desglose"] = breakdown
-            return _json(app, response_payload)
+            return _json(app, {"ok": True, "resultado": result})
         except requests.RequestException as exc:
             app.logger.exception("TAKE OPPORTUNITY ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude tomar la solicitud."}, 502)
