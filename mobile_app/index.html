@@ -18,6 +18,15 @@
     .payment-status-copy strong{font-size:14px}
     .payment-status-copy span{font-size:12px;color:var(--muted)}
     .payment-status-badge{flex:0 0 auto;border:1px solid var(--line);border-radius:999px;padding:7px 10px;font-size:12px;font-weight:800}
+
+    .payment-status-card{flex-wrap:wrap}
+    .payment-breakdown{flex:0 0 100%;border-top:1px solid var(--line);padding-top:10px;margin-top:2px}
+    .payment-breakdown>div{display:flex;justify-content:space-between;gap:14px;padding:5px 0;font-size:12px}
+    .payment-breakdown>div span{color:var(--muted)}
+    .payment-breakdown>div strong{text-align:right}
+    .payment-breakdown .payment-net{border-top:1px dashed var(--line);margin-top:5px;padding-top:9px;font-size:14px}
+    .payment-breakdown .payment-net span,.payment-breakdown .payment-net strong{font-weight:900;color:var(--text)}
+    .payment-breakdown small{display:block;color:var(--muted);font-size:11px;line-height:1.4;margin-top:7px}
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -209,6 +218,14 @@
           <span id="paymentStatusDetail">Pago pendiente</span>
         </div>
         <span class="payment-status-badge" id="paymentStatusBadge">Pendiente</span>
+        <div class="payment-breakdown" id="paymentBreakdown" hidden>
+          <div><span>Precio del servicio</span><strong id="paymentServicePrice">—</strong></div>
+          <div><span>Comisión Llama a Jaime (12%)</span><strong id="paymentPlatformFee">—</strong></div>
+          <div><span>IVA sobre comisión (19%)</span><strong id="paymentPlatformVat">—</strong></div>
+          <div><span>Costo Mercado Pago</span><strong id="paymentGatewayFee">—</strong></div>
+          <div class="payment-net"><span>Recibes</span><strong id="paymentProviderNet">—</strong></div>
+          <small id="paymentGatewayNote">El costo de Mercado Pago se actualizará con el valor real de la transacción.</small>
+        </div>
       </div>
       <div class="finish-service-card" id="finishServiceCard" hidden>
         <div><strong id="finishServiceTitle">¿El trabajo ya terminó?</strong><span id="finishServiceText">Confirma el cierre cuando el servicio haya sido realizado.</span></div>
@@ -359,6 +376,20 @@ if(hasProvider){
   const amount=Number(sol.pago_monto_total);
   const amountText=Number.isFinite(amount)&&amount>0?` · ${new Intl.NumberFormat('es-CL',{style:'currency',currency:sol.pago_moneda||'CLP',maximumFractionDigits:0}).format(amount)}`:'';
   paymentDetail.textContent=(paymentDetails[paymentState]||paymentDetails.pendiente)+amountText;
+
+  const breakdown=$('#paymentBreakdown');
+  const servicePrice=Number(sol.precio_servicio);
+  const hasBreakdown=Number.isFinite(servicePrice)&&servicePrice>0;
+  breakdown.hidden=!(conversationActor==='prestador'&&hasBreakdown);
+  if(conversationActor==='prestador'&&hasBreakdown){
+    const money=v=>new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(Number(v||0));
+    $('#paymentServicePrice').textContent=money(servicePrice);
+    $('#paymentPlatformFee').textContent='− '+money(sol.comision_llama_jaime_neta);
+    $('#paymentPlatformVat').textContent='− '+money(sol.iva_comision_llama_jaime);
+    $('#paymentGatewayFee').textContent='− '+money(sol.comision_mercado_pago);
+    $('#paymentProviderNet').textContent=money(sol.neto_prestador);
+    $('#paymentGatewayNote').hidden=Number(sol.comision_mercado_pago||0)>0;
+  }
 }
 const finishCard=$('#finishServiceCard'),finishBtn=$('#finishServiceBtn'),finishNote=$('#finishServiceNotice');
 finishCard.hidden=!hasProvider;
@@ -389,7 +420,7 @@ if(hasProvider&&sol.servicio_finalizado_at){
     $('#finishServiceTitle').textContent='Servicio en curso';
     $('#finishServiceText').textContent='Podrás confirmar el servicio cuando el prestador indique que terminó.';
   }
-}if(!hasProvider){box.innerHTML='<div class="empty">Jaime todavía está buscando un prestador compatible. Vuelve a revisar en unos minutos.</div>';$('#conversationForm').hidden=true;$('#quoteForm').hidden=true;$('#quoteBox').hidden=true;$('#reportForm').hidden=true;$('#finishServiceCard').hidden=true;$('#paymentStatusCard').hidden=true;return}$('#conversationTitle').textContent=c.actor==='cliente'?(d.prestador.nombre||'Prestador'):'Cliente y cotización';$('#conversationForm').hidden=false;box.innerHTML='';for(const m of d.mensajes){const el=document.createElement('div'),mine=(c.actor==='cliente'&&m.remitente_tipo==='cliente')||(c.actor==='prestador'&&m.remitente_tipo==='prestador');el.className='conversation-message '+(m.remitente_tipo==='sistema'?'system':mine?'mine':'');el.textContent=m.contenido;box.append(el)}if(!d.mensajes.length)box.innerHTML='<div class="empty">La conversación está lista. Envía el primer mensaje.</div>';box.scrollTop=box.scrollHeight;renderQuote(d.cotizacion)}catch(err){if(!silent)$('#conversationMessages').innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
+}if(!hasProvider){box.innerHTML='<div class="empty">Jaime todavía está buscando un prestador compatible. Vuelve a revisar en unos minutos.</div>';$('#conversationForm').hidden=true;$('#quoteForm').hidden=true;$('#quoteBox').hidden=true;$('#reportForm').hidden=true;$('#finishServiceCard').hidden=true;$('#paymentStatusCard').hidden=true;$('#paymentBreakdown').hidden=true;return}$('#conversationTitle').textContent=c.actor==='cliente'?(d.prestador.nombre||'Prestador'):'Cliente y cotización';$('#conversationForm').hidden=false;box.innerHTML='';for(const m of d.mensajes){const el=document.createElement('div'),mine=(c.actor==='cliente'&&m.remitente_tipo==='cliente')||(c.actor==='prestador'&&m.remitente_tipo==='prestador');el.className='conversation-message '+(m.remitente_tipo==='sistema'?'system':mine?'mine':'');el.textContent=m.contenido;box.append(el)}if(!d.mensajes.length)box.innerHTML='<div class="empty">La conversación está lista. Envía el primer mensaje.</div>';box.scrollTop=box.scrollHeight;renderQuote(d.cotizacion)}catch(err){if(!silent)$('#conversationMessages').innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}}
 
   $('#finishServiceBtn').addEventListener('click',async()=>{
     const c=conversationContext,btn=$('#finishServiceBtn'),note=$('#finishServiceNotice');if(!c)return;
