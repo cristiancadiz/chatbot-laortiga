@@ -113,6 +113,38 @@
 .profile-photo-card{margin:0 0 14px;padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff}.profile-photo-head{display:flex;align-items:center;gap:13px;margin-bottom:12px}.profile-photo-head h3{margin:0 0 3px}.profile-photo-head p{margin:0;color:var(--muted);font-size:12px}.profile-photo-preview{width:70px;height:70px;flex:0 0 70px;border-radius:50%;overflow:hidden;background:#edf2ef;display:grid;place-items:center;font-size:27px;font-weight:800}.profile-photo-preview img{width:100%;height:100%;object-fit:cover}.profile-photo-actions{display:flex;gap:8px}.profile-photo-actions .primary{flex:1}
 .provider-public-avatar img{width:100%;height:100%;object-fit:cover;display:block}.provider-public-avatar img[hidden]{display:none}
 .provider-public-jobs{margin-top:4px;font-size:12px;font-weight:800;color:var(--text)}.provider-public-jobs .jobs-check{color:#08a66c}
+
+    /* V7.21 · modo prestador compacto: prioriza oportunidades */
+    #provider .page-head{padding-bottom:10px}
+    #provider .page-head p{margin-bottom:0}
+    #provider .provider-summary{margin-bottom:8px}
+    .provider-quick-actions{display:flex;align-items:center;gap:8px;margin:0 0 8px}
+    .provider-quick-actions .provider-mini-action{width:auto!important;margin:0!important;padding:7px 11px!important;border-radius:999px!important;font-size:12px!important;line-height:1.1!important;min-height:34px!important}
+    .provider-quick-actions .notify-btn{flex:0 1 auto}
+    .provider-quick-actions .provider-exit{margin-left:auto!important;border:1px solid var(--line)!important;background:#fff!important}
+    #provider .profile-photo-card{display:flex;align-items:center;gap:10px;margin:0 0 8px;padding:9px 11px;border-radius:14px}
+    #provider .profile-photo-card[hidden]{display:none!important}
+    #provider .profile-photo-head{display:flex;align-items:center;gap:9px;margin:0;min-width:0;flex:1}
+    #provider .profile-photo-preview{width:42px;height:42px;flex:0 0 42px;font-size:18px}
+    #provider .profile-photo-copy h3{font-size:14px;margin:0}
+    #provider .profile-photo-copy p{font-size:11px;margin:1px 0 0;white-space:nowrap}
+    #provider .profile-photo-actions{display:flex;gap:5px;flex:0 0 auto}
+    #provider .profile-photo-actions .primary,#provider .profile-photo-actions .chip{width:auto;margin:0;padding:7px 9px;border-radius:999px;font-size:11px;min-height:32px}
+    #provider .profile-photo-card>.muted-note{display:none}
+    #provider .profile-photo-card>.notice{position:absolute;left:16px;right:16px;margin-top:90px;z-index:2}
+    #provider .docs-card{margin-bottom:8px}
+    #providerDashboard .section-title{margin-top:8px;margin-bottom:8px}
+    #providerDashboard .section-title h2{font-size:20px}
+    @media(max-width:560px){
+      #provider .page-head{padding-top:10px}
+      #provider .provider-summary{padding:12px}
+      .provider-quick-actions{gap:6px}
+      .provider-quick-actions .provider-mini-action{padding:7px 9px!important;font-size:11px!important}
+      #provider .profile-photo-card{padding:8px 10px}
+      #provider .profile-photo-copy p{display:none}
+      #provider .profile-photo-actions .primary{padding:7px 8px}
+      #provider .profile-photo-actions .chip{padding:7px 8px}
+    }
 </style>
 </head>
 <body>
@@ -182,8 +214,10 @@
     <section class="view" id="provider">
       <div class="page-head"><h1>Modo prestador</h1><p>Ofrece tus servicios y recibe oportunidades según tu cobertura.</p></div>
       <div class="provider-summary" id="providerSummary"><div class="row"><div><h3 id="providerName">Prestador</h3><span id="providerCode"></span><span class="security-status" id="providerSecurityStatus">Identidad pendiente de revisión</span></div><button class="availability" id="availabilityBtn">Disponible</button></div></div>
-      <button class="notify-btn" id="notifyBtn" hidden>🔔 Activar notificaciones</button>
-      <button class="secondary" id="providerLogout" type="button" hidden>Cerrar sesión de prestador</button>
+      <div class="provider-quick-actions" id="providerQuickActions">
+        <button class="notify-btn provider-mini-action" id="notifyBtn" hidden>🔔 Notificaciones</button>
+        <button class="secondary provider-mini-action provider-exit" id="providerLogout" type="button" hidden>Salir</button>
+      </div>
       <div class="access-switch" id="providerAccessSwitch"><button class="toggle active" type="button" data-provider-access="register">Crear cuenta</button><button class="toggle" type="button" data-provider-access="login">Ingresar</button></div>
       <div class="form-card" id="providerRegister">
         <form id="providerForm">
@@ -208,10 +242,10 @@
       <section class="profile-photo-card" id="providerPhotoCard" hidden>
         <div class="profile-photo-head">
           <div class="profile-photo-preview" id="providerPhotoPreview"><span id="providerPhotoInitial">J</span><img id="providerPhotoImage" alt="Foto de perfil" hidden></div>
-          <div><h3>Foto de perfil</h3><p>Esta foto será visible para los clientes en tu ficha.</p></div>
+          <div class="profile-photo-copy"><h3>Foto</h3><p>Visible en tu perfil</p></div>
         </div>
         <input id="providerPhotoInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
-        <div class="profile-photo-actions"><button class="primary" id="providerPhotoChoose" type="button">Subir foto</button><button class="chip" id="providerPhotoDelete" type="button" hidden>Eliminar</button></div>
+        <div class="profile-photo-actions"><button class="primary" id="providerPhotoChoose" type="button">📷 Editar foto</button><button class="chip" id="providerPhotoDelete" type="button" hidden>Eliminar</button></div>
         <div class="notice" id="providerPhotoNotice"></div>
         <p class="muted-note">JPG, PNG o WebP · máximo 5 MB.</p>
       </section>
@@ -679,8 +713,8 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     try{
       const r=await fetch(`/app/api/prestadores/foto-perfil?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`,{headers,cache:'no-store'}),d=await r.json();
       if(!r.ok)throw new Error(d.error||'No pude consultar tu foto');
-      if(d.foto&&d.foto.url){img.src=d.foto.url;img.hidden=false;initial.hidden=true;del.hidden=false;$('#providerPhotoChoose').textContent='Cambiar foto'}
-      else{img.removeAttribute('src');img.hidden=true;initial.hidden=false;del.hidden=true;$('#providerPhotoChoose').textContent='Subir foto'}
+      if(d.foto&&d.foto.url){img.src=d.foto.url;img.hidden=false;initial.hidden=true;del.hidden=false;$('#providerPhotoChoose').textContent='📷 Editar foto'}
+      else{img.removeAttribute('src');img.hidden=true;initial.hidden=false;del.hidden=true;$('#providerPhotoChoose').textContent='📷 Agregar foto'}
     }catch(err){const n=$('#providerPhotoNotice');n.className='notice error';n.textContent=err.message;n.style.display='block'}
   }
   $('#providerPhotoChoose').addEventListener('click',()=>$('#providerPhotoInput').click());
