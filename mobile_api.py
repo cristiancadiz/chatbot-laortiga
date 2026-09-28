@@ -6,6 +6,7 @@ dependencias necesarias al registrarse desde app.py.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -214,6 +215,16 @@ def _valid_pin(value):
 
 def _pin_hash(pin, salt):
     return hashlib.pbkdf2_hmac("sha256", str(pin).encode("utf-8"), bytes.fromhex(salt), 210000).hex()
+
+
+def _b64url_encode(raw):
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(value):
+    value = str(value or "")
+    value += "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(value.encode("ascii"))
 
 
 def _risky_service_reason(*values):
@@ -1404,6 +1415,158 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         except requests.RequestException as exc:
             app.logger.exception("PROVIDER NETWORK ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude conectar con la base de datos."}, 502)
+
+    def _provider_reset_secret():
+        return str(
+            os.getenv("LLAMA_JAIME_RESET_SECRET")
+            or os.getenv("SECRET_KEY")
+            or ""
+        ).strip()
+
+    def _provider_reset_token(provider):
+        secret = _provider_reset_secret()
+        if not secret:
+            raise RuntimeError("Falta LLAMA_JAIME_RESET_SECRET o SECRET_KEY")
+        payload = {
+            "pid": str(provider["id"]),
+            "exp": int(time.time()) + 1800,
+            "ph": hashlib.sha256(str(provider.get("pin_hash") or "").encode("utf-8")).hexdigest()[:24],
+        }
+        encoded = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+        signature = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).hexdigest()
+        return f"{encoded}.{signature}"
+
+    def _provider_reset_payload(token):
+        secret = _provider_reset_secret()
+        if not secret or "." not in str(token or ""):
+            return None
+        encoded, supplied = str(token).rsplit(".", 1)
+        expected = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, supplied):
+            return None
+        try:
+            payload = json.loads(_b64url_decode(encoded).decode("utf-8"))
+            if int(payload.get("exp") or 0) < int(time.time()):
+                return None
+            return payload
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return None
+
+    def _send_provider_reset_email(email, name, reset_url):
+        api_key = str(os.getenv("RESEND_API_KEY") or "").strip()
+        sender = str(os.getenv("LLAMA_JAIME_EMAIL_FROM") or os.getenv("RESEND_FROM_EMAIL") or "").strip()
+        if not api_key or not sender:
+            raise RuntimeError("Falta RESEND_API_KEY o LLAMA_JAIME_EMAIL_FROM")
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "from": sender,
+                "to": [email],
+                "subject": "Recupera tu clave de Llama a Jaime",
+                "html": (
+                    f"<p>Hola {name or 'prestador/a'},</p>"
+                    "<p>Recibimos una solicitud para cambiar tu clave de acceso.</p>"
+                    f'<p><a href="{reset_url}">Crear una nueva clave</a></p>'
+                    "<p>Este enlace vence en 30 minutos. Si no solicitaste el cambio, puedes ignorar este correo.</p>"
+                ),
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+
+    @app.post(f"{api_base}/prestadores/recuperar-clave")
+    def mobile_provider_forgot_pin():
+        if not _allow("provider-forgot-pin", limit=5):
+            return _json(app, {"ok": False, "error": "Espera unos minutos antes de volver a solicitar un enlace."}, 429)
+        body = request.get_json(silent=True) or {}
+        email = _clean(body.get("email"), 180).lower()
+        if not _valid_email(email):
+            return _json(app, {"ok": False, "error": "Ingresa un correo válido."}, 400)
+        try:
+            response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers(),
+                params={
+                    "select": "id,nombre,email,pin_hash,activo,estado_cuenta",
+                    "empresa_id": f"eq.{settings['empresa_id']}",
+                    "email": f"eq.{email}",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            rows = response.json() if response.content else []
+            provider = rows[0] if rows else None
+            # Respuesta neutra para no revelar si un correo está registrado.
+            if not provider or not provider.get("activo") or provider.get("estado_cuenta") != "activa":
+                return _json(app, {"ok": True, "message": "Si el correo está registrado, recibirás un enlace para crear una nueva clave."})
+            token = _provider_reset_token(provider)
+            base = str(os.getenv("LLAMA_JAIME_PUBLIC_URL") or "").strip().rstrip("/")
+            if not base:
+                raise RuntimeError("Falta LLAMA_JAIME_PUBLIC_URL")
+            reset_url = f"{base}/app/?view=provider&reset_token={token}"
+            _send_provider_reset_email(email, provider.get("nombre"), reset_url)
+            Thread(target=_audit, args=("prestador_recuperar_clave_solicitada", "prestador", provider["id"]), daemon=True).start()
+            return _json(app, {"ok": True, "message": "Si el correo está registrado, recibirás un enlace para crear una nueva clave."})
+        except RuntimeError as exc:
+            app.logger.error("PROVIDER RESET CONFIG ERROR: %s", exc)
+            return _json(app, {"ok": False, "error": "La recuperación de clave no está disponible temporalmente."}, 503)
+        except requests.RequestException as exc:
+            app.logger.exception("PROVIDER RESET REQUEST ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude enviar el correo de recuperación."}, 502)
+
+    @app.post(f"{api_base}/prestadores/restablecer-clave")
+    def mobile_provider_reset_pin():
+        if not _allow("provider-reset-pin", limit=10):
+            return _json(app, {"ok": False, "error": "Demasiados intentos. Espera antes de volver a intentarlo."}, 429)
+        body = request.get_json(silent=True) or {}
+        token = str(body.get("token") or "")
+        pin = str(body.get("pin") or "")
+        if not _valid_pin(pin):
+            return _json(app, {"ok": False, "error": "La nueva clave debe tener exactamente 6 números."}, 400)
+        payload = _provider_reset_payload(token)
+        if not payload:
+            return _json(app, {"ok": False, "error": "El enlace de recuperación es inválido o venció."}, 400)
+        try:
+            response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers(),
+                params={
+                    "select": "id,pin_hash,activo,estado_cuenta",
+                    "id": f"eq.{payload['pid']}",
+                    "empresa_id": f"eq.{settings['empresa_id']}",
+                    "limit": "1",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            response.raise_for_status()
+            rows = response.json() if response.content else []
+            provider = rows[0] if rows else None
+            if not provider or not provider.get("activo") or provider.get("estado_cuenta") != "activa":
+                return _json(app, {"ok": False, "error": "El enlace de recuperación es inválido o venció."}, 400)
+            current_fp = hashlib.sha256(str(provider.get("pin_hash") or "").encode("utf-8")).hexdigest()[:24]
+            if not hmac.compare_digest(current_fp, str(payload.get("ph") or "")):
+                return _json(app, {"ok": False, "error": "Este enlace ya fue utilizado o dejó de ser válido."}, 400)
+            pin_salt = os.urandom(16).hex()
+            new_session_token = uuid.uuid4().hex
+            update = requests.patch(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                headers=_db_headers("return=minimal"),
+                params={"id": f"eq.{provider['id']}"},
+                json={
+                    "pin_salt": pin_salt,
+                    "pin_hash": _pin_hash(pin, pin_salt),
+                    "access_token_hash": hashlib.sha256(new_session_token.encode("utf-8")).hexdigest(),
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            update.raise_for_status()
+            Thread(target=_audit, args=("prestador_clave_restablecida", "prestador", provider["id"]), daemon=True).start()
+            return _json(app, {"ok": True, "message": "Clave actualizada. Ya puedes iniciar sesión con tu nueva clave."})
+        except requests.RequestException as exc:
+            app.logger.exception("PROVIDER RESET ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude actualizar la clave."}, 502)
 
     @app.post(f"{api_base}/prestadores/login")
     def mobile_provider_login():
