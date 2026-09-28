@@ -3027,6 +3027,170 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {"ok": False, "error": "No pude aplicar la acción administrativa."}, 502)
 
 
+    @app.get(f"{api_base}/solicitudes/<public_id>/prestadores-disponibles")
+    def mobile_available_providers_for_request(public_id):
+        """Prestadores compatibles que el cliente autenticado puede elegir."""
+        public_id = _clean(public_id, 40).upper()
+        access_token = _clean(request.args.get("token"), 120)
+        if not re.fullmatch(r"NX-\d{6}-[A-F0-9]{8}", public_id) or len(access_token) < 20:
+            return _json(app, {"ok": False, "error": "Código o acceso inválido."}, 400)
+        try:
+            request_row = _client_auth(public_id, access_token)
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
+            if request_row.get("prestador_id"):
+                return _json(app, {"ok": True, "prestadores": [], "cantidad": 0, "ya_asignada": True})
+
+            rpc_response = requests.post(
+                f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_prestadores_para_solicitud",
+                headers=_db_headers(),
+                json={"p_solicitud_id": request_row["id"], "p_limite": 20},
+                timeout=settings["supabase_timeout"],
+            )
+            rpc_response.raise_for_status()
+            candidates = rpc_response.json() if rpc_response.content else []
+            if isinstance(candidates, dict):
+                candidates = [candidates]
+
+            output = []
+            for candidate in candidates:
+                provider_id = candidate.get("prestador_id")
+                if not provider_id:
+                    continue
+
+                provider_response = requests.get(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                    headers=_db_headers(),
+                    params={
+                        "select": "id,public_id,nombre,roles,comunas,especialidades,radio_km,estado_verificacion,verificado_at,created_at,foto_perfil_path",
+                        "id": f"eq.{provider_id}",
+                        "empresa_id": f"eq.{settings['empresa_id']}",
+                        "activo": "eq.true",
+                        "disponible": "eq.true",
+                        "estado_cuenta": "eq.activa",
+                        "estado_verificacion": "eq.verificado",
+                        "limit": "1",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                provider_response.raise_for_status()
+                rows = provider_response.json() if provider_response.content else []
+                if not rows:
+                    continue
+                provider = rows[0]
+
+                photo_url = None
+                photo_path = provider.get("foto_perfil_path")
+                if photo_path:
+                    photo_response = requests.post(
+                        f"{settings['supabase_url']}/storage/v1/object/sign/{PROFILE_BUCKET}/{photo_path}",
+                        headers=_db_headers(),
+                        json={"expiresIn": 900},
+                        timeout=settings["supabase_timeout"],
+                    )
+                    photo_response.raise_for_status()
+                    photo_payload = photo_response.json() if photo_response.content else {}
+                    signed = photo_payload.get("signedURL") or photo_payload.get("signedUrl")
+                    if signed:
+                        photo_url = signed if signed.startswith("http") else f"{settings['supabase_url']}/storage/v1{signed}"
+
+                reputation = {"promedio": 0, "evaluaciones": 0, "cinco_estrellas": 0}
+                rep_response = requests.post(
+                    f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_resumen_reputacion",
+                    headers=_db_headers(),
+                    json={"p_prestador_id": provider_id},
+                    timeout=settings["supabase_timeout"],
+                )
+                rep_response.raise_for_status()
+                rep_data = rep_response.json() if rep_response.content else {}
+                if isinstance(rep_data, list):
+                    rep_data = rep_data[0] if rep_data else {}
+                if isinstance(rep_data, dict):
+                    reputation = {
+                        "promedio": float(rep_data.get("promedio") or 0),
+                        "evaluaciones": int(rep_data.get("evaluaciones") or 0),
+                        "cinco_estrellas": int(rep_data.get("cinco_estrellas") or 0),
+                    }
+
+                jobs_completed = 0
+                jobs_response = requests.post(
+                    f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_resumen_trabajos",
+                    headers=_db_headers(),
+                    json={"p_prestador_id": provider_id},
+                    timeout=settings["supabase_timeout"],
+                )
+                jobs_response.raise_for_status()
+                jobs_data = jobs_response.json() if jobs_response.content else {}
+                if isinstance(jobs_data, list):
+                    jobs_data = jobs_data[0] if jobs_data else {}
+                if isinstance(jobs_data, dict):
+                    jobs_completed = int(jobs_data.get("completados") or 0)
+
+                output.append({
+                    "id": provider_id,
+                    "public_id": provider.get("public_id") or candidate.get("public_id"),
+                    "nombre": provider.get("nombre"),
+                    "roles": provider.get("roles") or [],
+                    "especialidades": provider.get("especialidades") or [],
+                    "comunas": provider.get("comunas") or [],
+                    "radio_km": provider.get("radio_km"),
+                    "verificado": True,
+                    "verificado_at": provider.get("verificado_at"),
+                    "miembro_desde": provider.get("created_at"),
+                    "foto_url": photo_url,
+                    "trabajos_completados": jobs_completed,
+                    "reputacion": reputation,
+                })
+
+            output.sort(key=lambda p: (
+                -float((p.get("reputacion") or {}).get("promedio") or 0),
+                -int(p.get("trabajos_completados") or 0),
+                (p.get("nombre") or "").lower(),
+            ))
+            return _json(app, {"ok": True, "prestadores": output, "cantidad": len(output), "ya_asignada": False})
+        except requests.RequestException as exc:
+            app.logger.exception("AVAILABLE PROVIDERS ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude cargar los profesionales disponibles."}, 502)
+
+    @app.post(f"{api_base}/solicitudes/<public_id>/elegir-prestador")
+    def mobile_client_choose_provider(public_id):
+        """El cliente autenticado asigna uno de los matches compatibles."""
+        public_id = _clean(public_id, 40).upper()
+        body = request.get_json(silent=True) or {}
+        access_token = _clean(body.get("token"), 120)
+        provider_id = _clean(body.get("prestador_id"), 80)
+        if not re.fullmatch(r"NX-\d{6}-[A-F0-9]{8}", public_id) or len(access_token) < 20:
+            return _json(app, {"ok": False, "error": "Código o acceso inválido."}, 400)
+        try:
+            provider_uuid = str(uuid.UUID(provider_id))
+        except (ValueError, TypeError):
+            return _json(app, {"ok": False, "error": "Profesional inválido."}, 400)
+        try:
+            request_row = _client_auth(public_id, access_token)
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso de cliente inválido."}, 401)
+            if request_row.get("prestador_id"):
+                return _json(app, {"ok": False, "error": "La solicitud ya tiene un profesional asignado."}, 409)
+
+            rpc_response = requests.post(
+                f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_cliente_elegir_prestador",
+                headers=_db_headers(),
+                json={"p_solicitud_id": request_row["id"], "p_prestador_id": provider_uuid},
+                timeout=settings["supabase_timeout"],
+            )
+            rpc_response.raise_for_status()
+            result = rpc_response.json() if rpc_response.content else {}
+            if isinstance(result, list):
+                result = result[0] if result else {}
+            if not isinstance(result, dict) or not result.get("ok"):
+                return _json(app, {"ok": False, "error": (result or {}).get("error") or "No pude asignar al profesional."}, 409)
+
+            return _json(app, {"ok": True, "resultado": result})
+        except requests.RequestException as exc:
+            app.logger.exception("CHOOSE PROVIDER ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude asignar al profesional."}, 502)
+
+
     @app.get(f"{api_base}/solicitudes/<public_id>/prestador")
     def mobile_public_provider_profile(public_id):
         """Ficha segura del prestador asignado, visible solo para el cliente dueño de la solicitud."""
