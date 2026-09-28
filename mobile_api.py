@@ -1,4 +1,4 @@
-"""API y archivos públicos de la PWA Llama a Jaime Servicios.
+""API y archivos públicos de la PWA Llama a Jaime Servicios.
 
 El módulo no conoce credenciales ni importa el núcleo histórico. Recibe las
 dependencias necesarias al registrarse desde app.py.
@@ -1938,7 +1938,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
 
             safe_request = {key: request_row.get(key) for key in (
                 "public_id", "tipo", "comuna", "detalles", "fecha_preferida", "estado",
-                "servicio_finalizado_at", "servicio_finalizado_por"
+                "servicio_finalizado_at", "servicio_finalizado_por",
+                "prestador_declaro_finalizado_at", "cliente_confirmo_finalizado_at"
             )}
             return _json(app, {
                 "ok": True,
@@ -1988,21 +1989,25 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     "error": (result or {}).get("error") or "No pude finalizar el servicio."
                 }, 409)
 
+            estado_cierre = result.get("estado_cierre") or (
+                "finalizado" if result.get("finalizado_at") else "en_servicio"
+            )
+
             # Avisar a la contraparte sin convertir un fallo de push en fallo del cierre.
             try:
-                if actor == "cliente":
-                    _send_custom_push(
-                        "nexi_app_push_suscripciones", "prestador_id", provider_id,
-                        "Servicio finalizado",
-                        "El cliente marcó el servicio como finalizado.",
-                        "/app/?view=provider", f"finalizado-{request_row['id']}",
-                    )
-                else:
+                if actor == "prestador" and estado_cierre == "esperando_cliente":
                     _send_custom_push(
                         "nexi_app_push_clientes", "solicitud_id", request_row["id"],
-                        "Servicio finalizado",
-                        "El prestador marcó el servicio como finalizado.",
-                        "/app/?view=status", f"finalizado-{request_row['id']}",
+                        "Trabajo marcado como terminado",
+                        "El prestador indicó que terminó. Revisa el servicio y confirma si fue recibido.",
+                        "/app/?view=status", f"confirmar-cierre-{request_row['id']}",
+                    )
+                elif actor == "cliente" and estado_cierre == "finalizado":
+                    _send_custom_push(
+                        "nexi_app_push_suscripciones", "prestador_id", provider_id,
+                        "Servicio confirmado",
+                        "El cliente confirmó que recibió el servicio.",
+                        "/app/?view=provider", f"finalizado-{request_row['id']}",
                     )
             except Exception:
                 app.logger.exception("FINISH SERVICE PUSH ERROR")
@@ -2010,6 +2015,9 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {
                 "ok": True,
                 "ya_finalizado": bool(result.get("ya_finalizado")),
+                "estado_cierre": estado_cierre,
+                "prestador_declaro_finalizado_at": result.get("prestador_declaro_finalizado_at"),
+                "cliente_confirmo_finalizado_at": result.get("cliente_confirmo_finalizado_at"),
                 "finalizado_at": result.get("finalizado_at"),
                 "finalizado_por": result.get("finalizado_por"),
             })
