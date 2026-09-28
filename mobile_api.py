@@ -1767,7 +1767,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 result = result[0] if result else {}
             if not result.get("ok"):
                 return _json(app, {"ok": False, "error": result.get("error") or "No se pudo tomar la solicitud."}, 409)
-            return _json(app, {"ok": True, "resultado": result})
+            response_payload = {"ok": True, "resultado": result}
+            if action == "aceptar":
+                response_payload["desglose"] = breakdown
+            return _json(app, response_payload)
         except requests.RequestException as exc:
             app.logger.exception("TAKE OPPORTUNITY ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude tomar la solicitud."}, 502)
@@ -1942,7 +1945,12 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 "prestador_declaro_finalizado_at", "cliente_confirmo_finalizado_at",
                 "pago_estado", "pago_monto_total", "pago_moneda",
                 "pago_autorizado_at", "pago_pagado_at", "pago_liberado_at",
-                "pago_reembolsado_at", "pago_disputado_at"
+                "pago_reembolsado_at", "pago_disputado_at",
+                "precio_servicio", "comision_llama_jaime_pct",
+                "iva_comision_pct", "comision_llama_jaime_neta",
+                "iva_comision_llama_jaime", "comision_llama_jaime_total",
+                "comision_mercado_pago", "neto_prestador",
+                "desglose_economico_at"
             )}
             return _json(app, {
                 "ok": True,
@@ -2215,6 +2223,29 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 result = result[0] if result else {}
             if not result.get("ok"):
                 return _json(app, {"ok": False, "error": result.get("error") or "No pude responder."}, 409)
+            if action == "aceptar":
+                breakdown_response = requests.post(
+                    f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_calcular_desglose_pago",
+                    headers=_db_headers(),
+                    json={
+                        "p_solicitud_id": request_row["id"],
+                        "p_precio_servicio": int(quote["monto_clp"]),
+                        # Provisional hasta recibir el costo REAL desde Mercado Pago.
+                        "p_comision_mercado_pago": 0,
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                breakdown_response.raise_for_status()
+                breakdown = breakdown_response.json() if breakdown_response.content else {}
+                if isinstance(breakdown, list):
+                    breakdown = breakdown[0] if breakdown else {}
+                if not breakdown.get("ok"):
+                    return _json(
+                        app,
+                        {"ok": False, "error": breakdown.get("error") or "No pude calcular el desglose económico."},
+                        409,
+                    )
+
             system_text = "El cliente aceptó la cotización." if action == "aceptar" else "El cliente rechazó la cotización y la solicitud volvió a estar disponible."
             requests.post(
                 f"{settings['supabase_url']}/rest/v1/nexi_app_mensajes_servicio",
