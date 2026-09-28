@@ -243,7 +243,7 @@
         <button class="service-card" data-start="flete" style="--service-image:url('/app/assets/categories/fletes.webp')" aria-label="Solicitar un flete o traslado"><span class="service-copy"><strong>Fletes</strong><span>Traslados y entregas</span></span></button>
         <button class="service-card" data-start="jardineria" style="--service-image:url('/app/assets/categories/jardineria.webp')" aria-label="Solicitar un servicio de jardinería"><span class="service-copy"><strong>Jardinería</strong><span>Mantención y áreas verdes</span></span></button>
         <button class="service-card" data-start="belleza" style="--service-image:url('/app/assets/categories/belleza.webp')" aria-label="Solicitar un servicio de belleza o bienestar"><span class="service-copy"><strong>Belleza</strong><span>Barbería, peluquería y bienestar</span></span></button>
-        <button class="service-card" data-start="salud" style="--service-image:url('/app/assets/categories/salud.webp')" aria-label="Solicitar un servicio de salud"><span class="service-copy"><strong>Salud</strong><span>Kinesiología, enfermería, psicología y terapia ocupacional</span></span></button>
+        <button class="service-card" data-start="salud" style="--service-image:linear-gradient(135deg,#0f7c8d,#56b7a7)" aria-label="Solicitar un servicio de salud"><span class="service-copy"><strong>Salud</strong><span>Kinesiología, enfermería, psicología y terapia ocupacional</span></span></button>
         <button class="service-card" data-start="reciclaje" style="--service-image:url('/app/assets/categories/reciclaje.webp')" aria-label="Solicitar retiro de reciclaje"><span class="service-copy"><strong>Reciclaje</strong><span>Retiros y materiales</span></span></button>
         <button class="service-card" data-start="otro" style="--service-image:url('/app/assets/categories/otros.webp')" aria-label="Solicitar otro tipo de servicio"><span class="service-copy"><strong>Otros servicios</strong><span>Cuéntale a Jaime qué necesitas</span></span></button>
       </div>
@@ -328,7 +328,13 @@
         </form>
       </div>
       <div class="form-card" id="providerLogin" hidden>
-        <form id="providerLoginForm"><div class="page-head" style="padding-top:0"><h1 style="font-size:22px">Ingresar como prestador</h1><p>Usa el RUT y la clave de 6 números creada al registrarte.</p></div><div class="field"><label for="providerLoginRut">RUT</label><input id="providerLoginRut" required autocomplete="username" placeholder="12.345.678-5"></div><div class="field"><label for="providerLoginPin">Clave de acceso</label><input id="providerLoginPin" required type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="current-password"></div><button class="primary" id="providerLoginSubmit">Ingresar</button><div class="notice" id="providerLoginNotice"></div></form>
+        <form id="providerLoginForm"><div class="page-head" style="padding-top:0"><h1 style="font-size:22px">Ingresar como prestador</h1><p>Usa el RUT y la clave de 6 números creada al registrarte.</p></div><div class="field"><label for="providerLoginRut">RUT</label><input id="providerLoginRut" required autocomplete="username" placeholder="12.345.678-5"></div><div class="field"><label for="providerLoginPin">Clave de acceso</label><input id="providerLoginPin" required type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="current-password"></div><button class="primary" id="providerLoginSubmit">Ingresar</button><button class="chip" id="providerForgotOpen" type="button" style="margin-top:10px;width:100%">¿Olvidaste tu clave?</button><div class="notice" id="providerLoginNotice"></div></form>
+      </div>
+      <div class="form-card" id="providerForgot" hidden>
+        <form id="providerForgotForm"><div class="page-head" style="padding-top:0"><h1 style="font-size:22px">Recuperar clave</h1><p>Ingresa el correo registrado en tu cuenta. Te enviaremos un enlace para crear una nueva clave.</p></div><div class="field"><label for="providerForgotEmail">Correo</label><input id="providerForgotEmail" required type="email" autocomplete="email" placeholder="correo@ejemplo.cl"></div><button class="primary" id="providerForgotSubmit">Enviar enlace</button><button class="chip" id="providerForgotBack" type="button" style="margin-top:10px;width:100%">Volver a ingresar</button><div class="notice" id="providerForgotNotice"></div></form>
+      </div>
+      <div class="form-card" id="providerReset" hidden>
+        <form id="providerResetForm"><div class="page-head" style="padding-top:0"><h1 style="font-size:22px">Crear nueva clave</h1><p>Tu nueva clave debe tener exactamente 6 números.</p></div><div class="field"><label for="providerResetPin">Nueva clave</label><input id="providerResetPin" required type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="new-password"></div><div class="field"><label for="providerResetPin2">Repite la nueva clave</label><input id="providerResetPin2" required type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="new-password"></div><button class="primary" id="providerResetSubmit">Cambiar clave</button><div class="notice" id="providerResetNotice"></div></form>
       </div>
       <section class="profile-photo-card" id="providerPhotoCard" hidden>
         <div class="profile-photo-head">
@@ -774,6 +780,29 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
 
   $('#providerLoginForm').addEventListener('submit',async e=>{e.preventDefault();const button=$('#providerLoginSubmit'),note=$('#providerLoginNotice');button.disabled=true;button.innerHTML='<span class="spinner"></span> Ingresando';note.style.display='none';try{const r=await fetch('/app/api/prestadores/login',{method:'POST',headers,body:JSON.stringify({rut:$('#providerLoginRut').value,pin:$('#providerLoginPin').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude ingresar');localStorage.providerAuth=JSON.stringify(d.prestador);e.target.reset();await loadProvider()}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false;button.textContent='Ingresar'}});
 
+  function showProviderForgot(){
+    $('#providerRegister').hidden=true;$('#providerRegister').style.display='none';
+    $('#providerLogin').hidden=true;$('#providerLogin').style.display='none';
+    $('#providerReset').hidden=true;$('#providerReset').style.display='none';
+    $('#providerForgot').hidden=false;$('#providerForgot').style.display='block';
+  }
+  function showProviderLoginOnly(){
+    $('#providerForgot').hidden=true;$('#providerForgot').style.display='none';
+    $('#providerReset').hidden=true;$('#providerReset').style.display='none';
+    showProviderAccess('login');
+  }
+  $('#providerForgotOpen').addEventListener('click',showProviderForgot);
+  $('#providerForgotBack').addEventListener('click',showProviderLoginOnly);
+  $('#providerForgotForm').addEventListener('submit',async e=>{
+    e.preventDefault();const button=$('#providerForgotSubmit'),note=$('#providerForgotNotice');button.disabled=true;note.style.display='none';
+    try{const r=await fetch('/app/api/prestadores/recuperar-clave',{method:'POST',headers,body:JSON.stringify({email:$('#providerForgotEmail').value.trim()})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude enviar el enlace');note.textContent=d.message||'Si el correo está registrado, recibirás un enlace para crear una nueva clave.';note.className='notice success';note.style.display='block';e.target.reset()}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false}
+  });
+  $('#providerResetForm').addEventListener('submit',async e=>{
+    e.preventDefault();const pin=$('#providerResetPin').value,pin2=$('#providerResetPin2').value,button=$('#providerResetSubmit'),note=$('#providerResetNotice'),token=new URLSearchParams(location.search).get('reset_token')||'';note.style.display='none';
+    if(pin!==pin2){note.textContent='Las claves no coinciden.';note.className='notice error';note.style.display='block';return}
+    button.disabled=true;try{const r=await fetch('/app/api/prestadores/restablecer-clave',{method:'POST',headers,body:JSON.stringify({token,pin})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude cambiar la clave');note.textContent=d.message||'Clave actualizada.';note.className='notice success';note.style.display='block';e.target.reset();history.replaceState({},'',location.pathname+'?view=provider');setTimeout(showProviderLoginOnly,900)}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false}
+  });
+
   function resetProviderPrivateUI(){
     $('#providerSummary').style.display='none';
     $('#providerDashboard').hidden=true;
@@ -883,6 +912,15 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
   }
 
 async function loadProvider(){
+    if(new URLSearchParams(location.search).get('reset_token')){
+      resetProviderPrivateUI();
+      $('#providerAccessSwitch').hidden=true;
+      $('#providerRegister').hidden=true;$('#providerRegister').style.display='none';
+      $('#providerLogin').hidden=true;$('#providerLogin').style.display='none';
+      $('#providerForgot').hidden=true;$('#providerForgot').style.display='none';
+      $('#providerReset').hidden=false;$('#providerReset').style.display='block';
+      return;
+    }
     let auth=providerAuth();
     if(!auth){
       resetProviderPrivateUI();
@@ -984,7 +1022,7 @@ async function loadProvider(){
   $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
   if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js',{scope:'/app/'}).catch(()=>{});
   fetch('/app/api/config').then(r=>r.json()).then(d=>{if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
-  const initialView=new URLSearchParams(location.search).get('view');if(['provider','status'].includes(initialView))go(initialView);
+  const initialParams=new URLSearchParams(location.search),initialView=initialParams.get('view'),resetToken=initialParams.get('reset_token');if(['provider','status'].includes(initialView))go(initialView);if(resetToken){go('provider');$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerForgot').hidden=true;$('#providerForgot').style.display='none';$('#providerReset').hidden=false;$('#providerReset').style.display='block';}
 })();
 
   // V7.33.1: Documentación queda compacta en la barra superior; la tarjeta se abre solo al tocar el botón.
