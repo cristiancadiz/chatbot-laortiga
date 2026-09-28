@@ -1,4 +1,4 @@
-"""API y archivos públicos de la PWA Llama a Jaime Servicios.
+""API y archivos públicos de la PWA Llama a Jaime Servicios.
 
 El módulo no conoce credenciales ni importa el núcleo histórico. Recibe las
 dependencias necesarias al registrarse desde app.py.
@@ -1984,6 +1984,33 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 result = result[0] if result else {}
             if not result.get("ok"):
                 return _json(app, {"ok": False, "error": result.get("error") or "No se pudo tomar la solicitud."}, 409)
+
+            # Aviso faltante V18.9: cuando un prestador toma una oportunidad,
+            # avisamos al cliente dueño de la solicitud. El push nunca bloquea la toma.
+            try:
+                match_lookup = requests.get(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_matches",
+                    headers=_db_headers(),
+                    params={
+                        "select": "solicitud_id",
+                        "id": f"eq.{_clean(match_id, 80)}",
+                        "prestador_id": f"eq.{provider['id']}",
+                        "limit": "1",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                match_lookup.raise_for_status()
+                match_rows = match_lookup.json() if match_lookup.content else []
+                if match_rows and match_rows[0].get("solicitud_id"):
+                    _send_custom_push(
+                        "nexi_app_push_clientes", "solicitud_id", match_rows[0]["solicitud_id"],
+                        "Ya tienes un profesional",
+                        f"{provider.get('nombre') or 'Un profesional'} tomó tu solicitud. Ya pueden conversar por Llama a Jaime.",
+                        "/app/?view=status", f"prestador-asignado-{match_rows[0]['solicitud_id']}",
+                    )
+            except Exception:
+                app.logger.exception("TAKE OPPORTUNITY CLIENT PUSH ERROR")
+
             return _json(app, {"ok": True, "resultado": result})
         except requests.RequestException as exc:
             app.logger.exception("TAKE OPPORTUNITY ERROR: %r", exc)
@@ -2540,6 +2567,9 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 return _json(app, {"ok": False, "error": "Monto de pago no coincide."}, 409)
 
             if status == "approved":
+                # Mercado Pago puede reintentar el mismo webhook. Solo notificamos
+                # una vez cuando el pago pasa por primera vez a confirmado.
+                was_already_paid = str(request_row.get("pago_estado") or "").lower() in {"pagado", "liberado"}
                 real_fee = _mp_real_fee(payment)
 
                 # Recalcula el neto del prestador usando el costo REAL informado por MP.
@@ -2589,6 +2619,28 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     }),
                     daemon=True,
                 ).start()
+
+                # Avisos faltantes V18.9: confirmación de pago para ambas partes.
+                # Si MP reintenta el webhook, evitamos duplicar las notificaciones.
+                if not was_already_paid:
+                    try:
+                        amount_text = f"${expected_amount:,.0f}".replace(",", ".")
+                        _send_custom_push(
+                            "nexi_app_push_clientes", "solicitud_id", request_row["id"],
+                            "Pago confirmado",
+                            f"Tu pago de {amount_text} fue confirmado correctamente.",
+                            "/app/?view=status", f"pago-confirmado-{request_row['id']}",
+                        )
+                        if request_row.get("prestador_id"):
+                            _send_custom_push(
+                                "nexi_app_push_suscripciones", "prestador_id", request_row["prestador_id"],
+                                "Pago confirmado",
+                                f"El pago de {amount_text} del servicio fue confirmado.",
+                                "/app/?view=provider", f"pago-confirmado-{request_row['id']}",
+                            )
+                    except Exception:
+                        app.logger.exception("PAYMENT CONFIRMED PUSH ERROR")
+
                 return _json(app, {"ok": True, "status": "approved"})
 
             if status in {"refunded", "charged_back"}:
@@ -3728,6 +3780,17 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             if not isinstance(result, dict) or not result.get("ok"):
                 return _json(app, {"ok": False, "error": (result or {}).get("error") or "No pude asignar al profesional."}, 409)
 
+            # Aviso faltante V18.9: el cliente eligió directamente a este prestador.
+            try:
+                _send_custom_push(
+                    "nexi_app_push_suscripciones", "prestador_id", provider_uuid,
+                    "Te eligieron para un servicio",
+                    "Un cliente te eligió como profesional. Revisa la solicitud y abre la conversación.",
+                    "/app/?view=provider", f"cliente-eligio-{request_row['id']}",
+                )
+            except Exception:
+                app.logger.exception("CHOOSE PROVIDER PUSH ERROR")
+
             return _json(app, {"ok": True, "resultado": result})
         except requests.RequestException as exc:
             app.logger.exception("CHOOSE PROVIDER ERROR: %r", exc)
@@ -3954,6 +4017,18 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 solicitud_id=request_row.get("id"),
                 metadata={"prestador_id": provider_id, "calificacion": rating},
             )
+
+            # Aviso faltante V18.9: informar al prestador cuando recibe una evaluación.
+            try:
+                _send_custom_push(
+                    "nexi_app_push_suscripciones", "prestador_id", provider_id,
+                    "Recibiste una evaluación",
+                    f"El cliente calificó tu servicio con {rating} de 5 estrellas.",
+                    "/app/?view=provider", f"evaluacion-{request_row['id']}",
+                )
+            except Exception:
+                app.logger.exception("PROVIDER REVIEW PUSH ERROR")
+
             return _json(app, {"ok": True, "evaluacion": evaluation}, 201)
         except requests.RequestException as exc:
             # La restricción UNIQUE(solicitud_id) también protege contra envíos simultáneos.
