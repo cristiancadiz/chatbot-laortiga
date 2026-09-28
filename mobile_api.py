@@ -1,4 +1,4 @@
-""API y archivos públicos de la PWA Llama a Jaime Servicios.
+"""API y archivos públicos de la PWA Llama a Jaime Servicios.
 
 El módulo no conoce credenciales ni importa el núcleo histórico. Recibe las
 dependencias necesarias al registrarse desde app.py.
@@ -1939,7 +1939,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             safe_request = {key: request_row.get(key) for key in (
                 "public_id", "tipo", "comuna", "detalles", "fecha_preferida", "estado",
                 "servicio_finalizado_at", "servicio_finalizado_por",
-                "prestador_declaro_finalizado_at", "cliente_confirmo_finalizado_at"
+                "prestador_declaro_finalizado_at", "cliente_confirmo_finalizado_at",
+                "pago_estado", "pago_monto_total", "pago_moneda",
+                "pago_autorizado_at", "pago_pagado_at", "pago_liberado_at",
+                "pago_reembolsado_at", "pago_disputado_at"
             )}
             return _json(app, {
                 "ok": True,
@@ -1954,6 +1957,32 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         except requests.RequestException as exc:
             app.logger.exception("CONVERSATION ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude abrir la conversación."}, 502)
+
+    @app.get(f"{api_base}/solicitudes/<public_id>/pago")
+    def mobile_payment_status(public_id):
+        """Devuelve únicamente el estado seguro del pago; no procesa ni modifica dinero."""
+        values = request.args.to_dict(flat=True)
+        try:
+            actor, request_row, provider = _conversation_access(public_id, values)
+            if not request_row or actor not in ("cliente", "prestador"):
+                return _json(app, {"ok": False, "error": "Acceso inválido para consultar el pago."}, 401)
+
+            return _json(app, {
+                "ok": True,
+                "pago": {
+                    "estado": request_row.get("pago_estado") or "pendiente",
+                    "monto_total": request_row.get("pago_monto_total"),
+                    "moneda": request_row.get("pago_moneda") or "CLP",
+                    "autorizado_at": request_row.get("pago_autorizado_at"),
+                    "pagado_at": request_row.get("pago_pagado_at"),
+                    "liberado_at": request_row.get("pago_liberado_at"),
+                    "reembolsado_at": request_row.get("pago_reembolsado_at"),
+                    "disputado_at": request_row.get("pago_disputado_at"),
+                }
+            })
+        except requests.RequestException as exc:
+            app.logger.exception("PAYMENT STATUS ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude consultar el estado del pago."}, 502)
 
     @app.post(f"{api_base}/solicitudes/<public_id>/finalizar")
     def mobile_finish_service(public_id):
