@@ -1,3 +1,62 @@
+
+como quedaria
+
+esta muu cargado
+Sí, demasiado. Hay tres caminos compitiendo al mismo tiempo: IA, “Necesito ayuda” y categorías; además “Quiero ofrecer servicios” ocupa otro bloque grande.
+
+Yo lo simplificaría bastante:
+
+Arriba: logo + ubicación.
+
+Una sola tarjeta protagonista:
+
+✨ ¿Qué necesitas?
+Cuéntaselo a Jaime y te ayudamos a encontrar a la persona indicada.
+Hablar con Jaime
+
+Debajo:
+O elige un servicio
+Hogar · Limpieza · Fletes · Jardinería · Belleza · Reciclaje
+Con las imágenes/iconos que ya tienes.
+
+Al final, una franja pequeña:
+
+🧰 ¿Quieres ofrecer tus servicios? → Crear cuenta / Ingresar
+
+Así eliminamos completamente la tarjeta adicional “Necesito ayuda”, porque hace prácticamente lo mismo que la IA. La IA se convierte en la entrada principal y las categorías son la alternativa rápida.
+
+Eso quedaría bastante más limpio y profesional. Puedo mostrarte esta versión visual mucho más minimalista.
+
+como quedaria1 con mis imagernesz
+
+ok me gusto esta con mis imagenes
+Perfecto. Entonces usaría esta última propuesta como dirección visual, pero conservando tus imágenes reales de categorías en vez de reemplazarlas por nuevos iconos.
+
+La estructura que llevaría al código sería: IA como protagonista arriba → tus categorías actuales → franja compacta “¿Quieres ofrecer tus servicios?” → navegación inferior. Así se ve más profesional sin perder lo que ya construimos.
+
+Y algo importante: no cambiaría la lógica actual de IA, solicitudes ni prestadores; sería principalmente una mejora visual del frontend.
+
+ok
+Perfecto, Cris. Entonces dejamos esa propuesta como referencia visual definitiva para la portada: IA arriba como protagonista, tus imágenes actuales para las categorías y acceso a prestadores más compacto abajo.
+
+Cuando pasemos al código, la aplicamos sobre la versión actual sin rehacer los flujos que ya funcionan.
+
+ok damelo
+
+Ha pensado durante 25s
+
+Listo, Cris. Apliqué la propuesta como V7.24, partiendo de tu V7.23 real y manteniendo tus imágenes actuales de las categorías. 
+
+La portada ahora queda con IA/Jaime como entrada principal, luego tus categorías actuales y finalmente una franja compacta de “¿Quieres ofrecer tus servicios?”. No cambié el funcionamiento interno de solicitudes, prestadores, pagos ni app.py.
+
+También validé el JavaScript: sin errores de sintaxis. 
+
+
+LLAMA_A_JAIME_index_V7_24_PORTADA_IA_CATEGORIAS.txt
+Documento
+
+
+
 <!doctype html>
 <html lang="es">
 <head>
@@ -149,13 +208,72 @@
       #provider .profile-photo-actions .chip{padding:7px 8px}
     }
 </style>
+
+<style>
+  /* V7.24 · Portada IA + categorías usando las imágenes existentes */
+  #home .home-ai-hero{
+    position:relative;overflow:hidden;margin:12px -2px 18px;padding:24px 22px;
+    border:1px solid #f3dcc5;border-radius:26px;
+    background:linear-gradient(135deg,#fff7ed 0%,#fff0df 100%);
+    box-shadow:0 10px 30px rgba(7,59,102,.08);color:#073b66
+  }
+  #home .home-ai-hero:after{
+    content:"✦";position:absolute;right:22px;top:18px;font-size:54px;line-height:1;
+    color:#ff9f1c;opacity:.18;transform:rotate(12deg)
+  }
+  #home .home-ai-badge{
+    display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;
+    background:white;border:1px solid #f4dfc9;color:#073b66;font-size:12px;font-weight:900
+  }
+  #home .home-ai-hero h1{
+    position:relative;z-index:1;margin:13px 0 7px;font-size:32px;line-height:1.02;
+    letter-spacing:-.04em;color:#073b66
+  }
+  #home .home-ai-hero p{
+    position:relative;z-index:1;margin:0;max-width:430px;color:#5d6970;font-size:15px
+  }
+  #home .home-ai-button{
+    position:relative;z-index:1;margin-top:17px;width:100%;border:0;border-radius:16px;
+    padding:14px 16px;background:#ff9f1c;color:#073b66;font-weight:900;
+    display:flex;align-items:center;justify-content:center;gap:9px
+  }
+  #home .home-services-head{
+    display:flex;align-items:end;justify-content:space-between;margin:21px 2px 11px
+  }
+  #home .home-services-head h2{margin:0;font-size:21px;letter-spacing:-.025em;color:#073b66}
+  #home .home-services-head span{font-size:12px;color:var(--muted)}
+  #home .provider-cta{
+    margin-top:16px;padding:14px 16px;border-radius:18px;background:#e9f6ed;border-color:#cfe4d5
+  }
+  #home .provider-cta .icon{
+    width:38px;height:38px;display:grid;place-items:center;border-radius:12px;background:#d7efdd;font-size:20px
+  }
+  #home .provider-cta b{font-size:15px;color:#073b66}
+  #home .provider-cta span span{font-size:11px}
+  @media(max-width:420px){
+    #home .home-ai-hero{padding:21px 18px}
+    #home .home-ai-hero h1{font-size:29px}
+  }
+</style>
+
 </head>
 <body>
 <div class="app">
   <header class="top"><img class="brand-logo" src="/app/assets/logo-llama-a-jaime-final-v534.png" alt="Llama a Jaime"><span class="status-dot" title="Servicio activo"></span></header>
   <main>
     <section class="view active" id="home">
-      <div class="hero"><div class="eyebrow">Soluciones para tu día</div><h1>¿Necesitas ayuda?<br>Llama a Jaime.</h1><p>Cuéntanos qué necesitas y te conectaremos con prestadores disponibles en tu comuna.</p></div>
+      <div class="home-ai-hero">
+        <span class="home-ai-badge">✨ IA · Jaime</span>
+        <h1>¿Qué necesitas?</h1>
+        <p>Cuéntaselo a Jaime con tus palabras. La IA te hará las preguntas necesarias y te ayudará a preparar tu solicitud.</p>
+        <button class="home-ai-button" type="button" data-go="chat">💬 Hablar con Jaime <span aria-hidden="true">→</span></button>
+      </div>
+
+      <div class="home-services-head">
+        <h2>O elige un servicio</h2>
+        <span>Acceso rápido</span>
+      </div>
+
       <div class="quick">
         <button class="service-card" data-start="hogar" style="--service-image:url('/app/assets/categories/hogar.webp')" aria-label="Solicitar un servicio para el hogar"><span class="service-copy"><strong>Hogar</strong><span>Arreglos e instalaciones</span></span></button>
         <button class="service-card" data-start="limpieza" style="--service-image:url('/app/assets/categories/limpieza.webp')" aria-label="Solicitar un servicio de limpieza"><span class="service-copy"><strong>Limpieza</strong><span>Hogar, oficina y apoyo</span></span></button>
@@ -165,7 +283,9 @@
         <button class="service-card" data-start="reciclaje" style="--service-image:url('/app/assets/categories/reciclaje.webp')" aria-label="Solicitar retiro de reciclaje"><span class="service-copy"><strong>Reciclaje</strong><span>Retiros y materiales</span></span></button>
         <button class="service-card" data-start="otro" style="--service-image:url('/app/assets/categories/otros.webp')" aria-label="Solicitar otro tipo de servicio"><span class="service-copy"><strong>Otros servicios</strong><span>Cuéntale a Jaime qué necesitas</span></span></button>
       </div>
-      <button class="provider-cta" data-go="provider"><span class="icon">🧑‍🔧</span><span><b>Quiero ofrecer servicios</b><span>Regístrate y recibe oportunidades cercanas</span></span><i>›</i></button>
+
+      <button class="provider-cta" data-go="provider"><span class="icon">🧑‍🔧</span><span><b>¿Quieres ofrecer tus servicios?</b><span>Crea tu cuenta como prestador</span></span><i>›</i></button>
+
       <div class="section-title"><h2>¿Cómo funciona?</h2><span>3 pasos</span></div>
       <div class="steps"><div class="step"><b>1</b><div><strong>Describe tu necesidad</strong>La IA te ayuda a ordenar los datos.</div></div><div class="step"><b>2</b><div><strong>Publicamos la solicitud</strong>Prestadores disponibles pueden revisarla.</div></div><div class="step"><b>3</b><div><strong>Coordina con seguridad</strong>Revisa la propuesta antes de confirmar.</div></div></div>
       <div class="install" id="installCard"><h3>Instala Llama a Jaime</h3><p>Úsala desde tu pantalla de inicio como cualquier aplicación.</p><button id="installBtn">Instalar aplicación</button></div>
