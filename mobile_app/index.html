@@ -679,7 +679,6 @@
       $('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent='Tu solicitud fue creada con los datos que entregaste a Jaime.';$('#requestCard').style.display='none';$('#trackingCard').style.display='none';$('#providerChoice').style.display='none';
       stopJaimeVoice();
       history=[];sessionStorage.removeItem('llamaAJaimeHistory');
-      const ci=$('#chatInput'),cv=$('#chatVoiceBtn');if(ci)ci.disabled=false;if(cv)cv.disabled=false;
       providerSearchCount=-1;
       go('request');
       const overlay=$('#jaimeReadyOverlay');
@@ -707,27 +706,14 @@
     rec.onerror=()=>{};rec.onend=()=>{button.classList.remove('listening');button.textContent='🎙️'};rec.start();
   }
   const homeVoiceBtn=$('#homeVoiceBtn'),homeNeedInput=$('#homeNeedInput');
-  function resetJaimeForNewRequest(){
-    jaimeRequestFinalized=false;
-    aiRequestAdvancing=false;
-    jaimeChatGeneration++;
-    const ci=$('#chatInput'),cv=$('#chatVoiceBtn');
-    if(ci)ci.disabled=false;
-    if(cv)cv.disabled=false;
-    history=[];
-    sessionStorage.removeItem('llamaAJaimeHistory');
-  }
-
   function sendHomeNeed(){
     const m=homeNeedInput.value.trim();
     if(!m){homeNeedInput.focus();return}
-    resetJaimeForNewRequest();
     homeNeedInput.value='';
     go('chat');
     setTimeout(()=>ask(m),0);
   }
   if(homeVoiceBtn)homeVoiceBtn.addEventListener('click',()=>{
-    resetJaimeForNewRequest();
     if(!('webkitSpeechRecognition' in window||'SpeechRecognition' in window)){alert('Tu navegador no permite dictado por voz.');return}
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;stopJaimeVoice();const rec=new SR();
     rec.lang='es-CL';rec.interimResults=false;rec.maxAlternatives=1;
@@ -744,7 +730,6 @@
   const chatVoiceBtn=$('#chatVoiceBtn');
   if($('#chatInput'))$('#chatInput').addEventListener('input',()=>stopJaimeVoice());
   if(chatVoiceBtn)chatVoiceBtn.addEventListener('click',()=>{
-    if(jaimeRequestFinalized)resetJaimeForNewRequest();
     const input=$('#chatInput');
     speechToInput(input,chatVoiceBtn,()=>{
       const m=input.value.trim();
