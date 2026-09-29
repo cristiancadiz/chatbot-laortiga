@@ -255,26 +255,27 @@
 .home-client-gps{width:36px;height:36px;flex:0 0 36px;border:0;border-radius:12px;background:#eef6df;font-size:17px}
 .home-client-gps:disabled{opacity:.55}
 
+
+/* V7.48 · cabecera compacta */
+.top .brand-logo{flex:0 1 auto;min-width:0}
+.top-client-mini{margin-left:auto;display:flex;align-items:center;gap:7px;max-width:150px;padding:2px 0;border:0;background:transparent;color:var(--forest);text-align:right}
+.top-client-text{min-width:0}.top-client-text strong,.top-client-text small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.top-client-text strong{font-size:12px;line-height:1.15}.top-client-text small{font-size:10px;line-height:1.15;color:var(--muted);margin-top:2px;font-weight:700}
+.top-client-mini .status-dot{margin-left:0;flex:0 0 8px;width:8px;height:8px;box-shadow:0 0 0 3px rgba(89,168,101,.13)}
+.quick-ai-mic-first{order:-1;flex:0 0 46px}
+@media(max-width:430px){.top{padding:10px 14px;gap:8px}.brand-logo{width:112px}.top-client-mini{max-width:128px}}
+
 </style>
 
 </head>
 <body>
 <div class="app">
-  <header class="top"><img class="brand-logo" src="/app/assets/logo-llama-a-jaime-final-v534.png" alt="Llama a Jaime"><span class="status-dot" title="Servicio activo"></span></header>
+  <header class="top"><img class="brand-logo" src="/app/assets/logo-llama-a-jaime-final-v534.png" alt="Llama a Jaime"><button type="button" class="top-client-mini" id="topClientMini" aria-label="Abrir mi perfil"><span class="top-client-text"><strong id="topClientName">Perfil</strong><small id="topClientLocation">📍 Configurar</small></span><span class="status-dot" title="Servicio activo"></span></button></header>
   <main>
     <section class="view active" id="home">
-      <div class="home-client-strip" id="homeClientStrip">
-        <div class="home-client-avatar" id="homeClientInitial">C</div>
-        <div class="home-client-copy">
-          <strong id="homeClientName">Configura tu perfil</strong>
-          <span id="homeClientLocation">📍 Agrega tu ubicación</span>
-        </div>
-        <button type="button" class="home-client-gps" id="homeClientGps" aria-label="Actualizar ubicación">📍</button>
-      </div>
       <div class="home-ai-hero">
         <h1>¿Qué necesitas?</h1>
-        <p>Cuéntaselo a Jaime con tus palabras. La IA te hará las preguntas necesarias y te ayudará a preparar tu solicitud.</p>
-        <div class="quick-ai-request"><div class="quick-ai-row"><textarea id="homeNeedInput" maxlength="800" placeholder="Ej.: mi lavadora no centrifuga y hace un ruido raro"></textarea><button class="quick-ai-action" id="homeVoiceBtn" type="button" aria-label="Hablar">🎙️</button></div><button class="quick-ai-send" id="homeNeedBtn" type="button">Buscar a alguien →</button><small class="quick-ai-hint">Escribe o habla como quieras. Jaime ordenará la solicitud por ti.</small></div>
+        <p>Cuéntaselo a Jaime con tus palabras.</p>
+        <div class="quick-ai-request"><div class="quick-ai-row"><button class="quick-ai-action quick-ai-mic-first" id="homeVoiceBtn" type="button" aria-label="Hablar">🎙️</button><textarea id="homeNeedInput" maxlength="800" placeholder="Ej.: mi lavadora no centrifuga y hace un ruido raro"></textarea></div><button class="quick-ai-send" id="homeNeedBtn" type="button">Buscar a alguien →</button><small class="quick-ai-hint">Escribe o habla como quieras. Jaime ordenará la solicitud por ti.</small></div>
       </div>
 
       <div class="home-services-head">
@@ -516,7 +517,17 @@
   const CLIENT_SESSION_KEY='llamaAJaimeClientProfileV1';
   function clientProfile(){try{return JSON.parse(localStorage.getItem(CLIENT_SESSION_KEY)||'null')}catch{return null}}
   function saveClientProfile(profile){localStorage.setItem(CLIENT_SESSION_KEY,JSON.stringify({...profile,updated_at:new Date().toISOString()}));renderClientSession()}
-  function renderClientSession(){const p=clientProfile(),card=$('#clientSessionCard'),fields=$('#clientSessionFields'),home=$('#homeClientStrip');if(!card||!fields)return;if(!p||!p.nombre){card.hidden=true;fields.hidden=false;if(home){home.hidden=false;$('#homeClientName').textContent='Configura tu perfil';$('#homeClientLocation').textContent='📍 Agrega tu ubicación';$('#homeClientInitial').textContent='C'}return}card.hidden=false;fields.hidden=true;if(home){home.hidden=false;$('#homeClientName').textContent=p.nombre;$('#homeClientLocation').textContent='📍 '+(p.comuna||'Ubicación guardada');$('#homeClientInitial').textContent=(p.nombre||'C').trim().charAt(0).toUpperCase()}$('#clientSessionName').textContent=p.nombre;$('#clientSessionCommune').textContent='📍 '+(p.comuna||'Ubicación guardada');$('#name').value=p.nombre||'';$('#phone').value=p.telefono||'';$('#email').value=p.email||'';$('#commune').value=p.comuna||'';if($('#profileName'))$('#profileName').value=p.nombre||'';if($('#profilePhone'))$('#profilePhone').value=p.telefono||'';if($('#profileCommune'))$('#profileCommune').value=p.comuna||'';if(p.latitud!=null&&p.longitud!=null)pendingLocation={latitud:p.latitud,longitud:p.longitud,precision_m:p.precision_m||0};}
+  function renderClientSession(){
+    const p=clientProfile(),card=$('#clientSessionCard'),fields=$('#clientSessionFields'),top=$('#topClientMini');
+    if(!card||!fields)return;
+    if(!p||!p.nombre){card.hidden=true;fields.hidden=false;if(top){$('#topClientName').textContent='Perfil';$('#topClientLocation').textContent='📍 Configurar'}return}
+    card.hidden=false;fields.hidden=true;
+    if(top){$('#topClientName').textContent=p.nombre;$('#topClientLocation').textContent='📍 '+(p.comuna||'Ubicación')}
+    $('#clientSessionName').textContent=p.nombre;$('#clientSessionCommune').textContent='📍 '+(p.comuna||'Ubicación guardada');
+    $('#name').value=p.nombre||'';$('#phone').value=p.telefono||'';$('#email').value=p.email||'';$('#commune').value=p.comuna||'';
+    if($('#profileName'))$('#profileName').value=p.nombre||'';if($('#profilePhone'))$('#profilePhone').value=p.telefono||'';if($('#profileCommune'))$('#profileCommune').value=p.comuna||'';
+    if(p.latitud!=null&&p.longitud!=null)pendingLocation={latitud:p.latitud,longitud:p.longitud,precision_m:p.precision_m||0};
+  }
   function hydrateClientProfile(){renderClientSession()}
   hydrateClientProfile();
 
@@ -533,15 +544,13 @@
   $('#requestCamera').addEventListener('change',addSelectedPhotos);
 
   function currentPosition(){return new Promise((resolve,reject)=>{if(!('geolocation'in navigator)){reject(new Error('Este dispositivo no permite obtener la ubicación.'));return}navigator.geolocation.getCurrentPosition(position=>resolve({latitud:position.coords.latitude,longitud:position.coords.longitude,precision_m:position.coords.accuracy}),error=>reject(new Error(error.code===1?'Debes permitir el acceso a tu ubicación.':'No pude obtener tu ubicación. Intenta nuevamente.')),{enableHighAccuracy:true,timeout:15000,maximumAge:60000})})}
-  const homeClientStrip=$('#homeClientStrip');
-  if(homeClientStrip)homeClientStrip.addEventListener('click',(e)=>{if(e.target.closest('#homeClientGps'))return;go('profile')});
+  const topClientMini=$('#topClientMini');
+  if(topClientMini)topClientMini.addEventListener('click',()=>go('profile'));
   const profileSave=$('#profileSave');
   if(profileSave)profileSave.addEventListener('click',()=>{const nombre=$('#profileName').value.trim(),telefono=$('#profilePhone').value.trim(),comuna=$('#profileCommune').value.trim(),n=$('#profileNotice');if(!nombre){n.className='notice error';n.textContent='Escribe tu nombre.';n.style.display='block';return}const prev=clientProfile()||{};saveClientProfile({...prev,nombre,telefono,comuna});renderClientSession();n.className='notice success';n.textContent='Perfil guardado.';n.style.display='block'});
   const profileUseGps=$('#profileUseGps');
   if(profileUseGps)profileUseGps.addEventListener('click',async()=>{const original=profileUseGps.textContent;profileUseGps.disabled=true;profileUseGps.textContent='Obteniendo ubicación…';try{const loc=await currentPosition(),prev=clientProfile()||{};pendingLocation=loc;saveClientProfile({...prev,...loc,nombre:$('#profileName').value.trim()||prev.nombre||'',telefono:$('#profilePhone').value.trim()||prev.telefono||'',comuna:$('#profileCommune').value.trim()||prev.comuna||''});renderClientSession();const n=$('#profileNotice');n.className='notice success';n.textContent='Ubicación actualizada.';n.style.display='block'}catch(error){alert(error.message)}finally{profileUseGps.disabled=false;profileUseGps.textContent=original}});
-
-  const homeClientGps=$('#homeClientGps');
-  if(homeClientGps)homeClientGps.addEventListener('click',async()=>{const p=clientProfile();if(!p){go('request');return}const original=homeClientGps.textContent;homeClientGps.disabled=true;homeClientGps.textContent='…';try{const loc=await currentPosition();pendingLocation=loc;saveClientProfile({...p,...loc});homeClientGps.textContent='✓';setTimeout(()=>{homeClientGps.textContent='📍'},900)}catch(error){alert(error.message);homeClientGps.textContent=original}finally{homeClientGps.disabled=false}});
+  homeClientGps.textContent='✓';setTimeout(()=>{homeClientGps.textContent='📍'},900)}catch(error){alert(error.message);homeClientGps.textContent=original}finally{homeClientGps.disabled=false}});
 
   $('#requestLocationBtn').addEventListener('click',async()=>{const button=$('#requestLocationBtn'),status=$('#requestLocationStatus');button.disabled=true;status.textContent='Obteniendo ubicación…';try{pendingLocation=await currentPosition();const current=clientProfile()||{};saveClientProfile({...current,nombre:$('#name').value.trim()||current.nombre||'Cliente',telefono:$('#phone').value.trim()||current.telefono||'',email:$('#email').value.trim()||current.email||'',comuna:$('#commune').value.trim()||current.comuna||'Ubicación guardada',...pendingLocation});button.textContent='✓ GPS activo';status.textContent=`Ubicación actualizada · precisión aproximada ±${Math.round(pendingLocation.precision_m||0)} m.`}catch(error){status.textContent=error.message}finally{button.disabled=false}});
 
