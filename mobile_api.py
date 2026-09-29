@@ -1097,8 +1097,11 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             origin = "Ubicación GPS compartida"
         if location and not commune:
             commune = "Ubicación GPS"
-        if not _valid_phone(phone):
-            return _json(app, {"ok": False, "error": "Ingresa un teléfono válido."}, 400)
+        # En el flujo automático de Jaime el teléfono no debe bloquear la solicitud.
+        # Si existe en el perfil se conserva; si aún no existe, la solicitud puede avanzar
+        # y el teléfono se completa desde la cuenta/perfil cuando esté disponible.
+        if phone and not _valid_phone(phone):
+            phone = ""
         if not _valid_email(email):
             return _json(app, {"ok": False, "error": "Ingresa un correo válido."}, 400)
         if service_type == "flete" and not destination:
