@@ -1289,13 +1289,16 @@ async function submitMercadoPagoAuthorization(data){
     const missing=[];
     if(!data.token)missing.push('token de tarjeta');
     if(!data.paymentMethodId)missing.push('medio de pago');
-    if(!data.issuerId)missing.push('banco emisor');
     if(!data.installments)missing.push('cuotas');
     if(!data.cardholderEmail)missing.push('correo');
     if(!data.identificationType)missing.push('tipo de documento');
     if(!data.identificationNumber)missing.push('documento');
     if(missing.length)throw new Error('Datos incompletos: '+missing.join(', ')+'.');
-    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago/autorizar`,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({token:c.token,card_token:data.token,payment_method_id:data.paymentMethodId,issuer_id:data.issuerId,installments:Number(data.installments||1),payer:{email:data.cardholderEmail,identification:{type:data.identificationType,number:data.identificationNumber}}})});
+    note.textContent='Mercado Pago: tarjeta validada. Enviando autorización…';
+    console.warn('MP FRONTEND AUTH SEND',{public_id:c.public_id,paymentMethodId:data.paymentMethodId,issuerId:data.issuerId||null,installments:Number(data.installments||1),hasToken:!!data.token,hasEmail:!!data.cardholderEmail,identificationType:data.identificationType,hasIdentification:!!data.identificationNumber});
+    const payload={token:c.token,card_token:data.token,payment_method_id:data.paymentMethodId,installments:Number(data.installments||1),payer:{email:data.cardholderEmail,identification:{type:data.identificationType,number:data.identificationNumber}}};
+    if(data.issuerId)payload.issuer_id=data.issuerId;
+    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago/autorizar`,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(payload)});
     let d={};
     try{d=await r.json();}catch(_){throw new Error(`El servidor respondió ${r.status} sin JSON válido.`);}
     if(!r.ok||!d.ok)throw new Error(d.error||d.message||`Mercado Pago rechazó la autorización (${r.status}).`);
@@ -1349,7 +1352,10 @@ async function ensureMercadoPagoCardForm(){
           try{
             const data=form.getCardFormData();
             console.log('MP CardForm submit',{paymentMethodId:data.paymentMethodId,issuerId:data.issuerId,installments:data.installments,hasToken:!!data.token,hasEmail:!!data.cardholderEmail,identificationType:data.identificationType,hasIdentification:!!data.identificationNumber});
-            submitMercadoPagoAuthorization(data);
+            Promise.resolve(submitMercadoPagoAuthorization(data)).catch(err=>{
+              console.error('MP autorización no controlada',err);
+              const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent='Mercado Pago [envío]: '+mpErrorText(err);}
+            });
           }catch(err){
             console.error('MP tokenización/submit',err);
             const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent='Mercado Pago [tokenización]: '+mpErrorText(err);}
