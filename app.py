@@ -16,7 +16,7 @@ from html.parser import HTMLParser
 import pytz
 import requests
 from dotenv import load_dotenv
-from flask import Flask, request, redirect
+from flask import Flask, request, redirect, Response
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from openai import OpenAI
@@ -3761,6 +3761,12 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 OPENAI_CORE_MODEL = os.getenv("OPENAI_CORE_MODEL", "gpt-5.4-mini").strip()
 OPENAI_CORE_REASONING_EFFORT = os.getenv("OPENAI_CORE_REASONING_EFFORT", "none").strip().lower()
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "20"))
+JAIME_TTS_MODEL = os.getenv("JAIME_TTS_MODEL", "gpt-4o-mini-tts").strip()
+JAIME_TTS_VOICE = os.getenv("JAIME_TTS_VOICE", "onyx").strip()
+JAIME_TTS_INSTRUCTIONS = os.getenv(
+    "JAIME_TTS_INSTRUCTIONS",
+    "Habla como Jaime: hombre adulto, voz masculina natural y segura, español chileno neutro, cercano y profesional. Ritmo conversacional, cálido, claro y sin exagerar el acento."
+).strip()
 openai_client = (
     OpenAI(
         api_key=OPENAI_API_KEY,
@@ -16391,6 +16397,52 @@ def _mobile_dispatch_existing_collectors(app_request):
         "correos=", enviados,
     )
     return enviados
+
+
+
+# ============================================================
+# LLAMA A JAIME - VOZ MASCULINA TTS
+# ============================================================
+@app.post("/app/api/jaime/voz")
+def llama_a_jaime_voz():
+    if not openai_client:
+        return {"error": "OpenAI no está configurado"}, 503
+
+    data = request.get_json(silent=True) or {}
+    texto = re.sub(r"\s+", " ", str(data.get("texto") or "")).strip()
+    if not texto:
+        return {"error": "Falta texto"}, 400
+
+    # Evita audios innecesariamente largos/costosos.
+    texto = texto[:1800]
+
+    try:
+        speech = openai_client.audio.speech.create(
+            model=JAIME_TTS_MODEL,
+            voice=JAIME_TTS_VOICE,
+            input=texto,
+            instructions=JAIME_TTS_INSTRUCTIONS,
+            response_format="mp3",
+        )
+        audio = getattr(speech, "content", None)
+        if not audio:
+            # Compatibilidad con versiones del SDK que exponen read().
+            read = getattr(speech, "read", None)
+            audio = read() if callable(read) else None
+        if not audio:
+            raise RuntimeError("OpenAI no devolvió audio")
+
+        return Response(
+            audio,
+            mimetype="audio/mpeg",
+            headers={
+                "Cache-Control": "no-store",
+                "X-AI-Voice": "true",
+            },
+        )
+    except Exception as e:
+        print("JAIME TTS ERROR:", repr(e))
+        return {"error": "No pude generar la voz de Jaime"}, 502
 
 
 register_mobile_app(
