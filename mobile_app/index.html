@@ -499,7 +499,7 @@
               <select id="form-checkout__installments" aria-label="Cuotas"></select>
               <select id="form-checkout__identificationType" aria-label="Tipo de documento"></select><input id="form-checkout__identificationNumber" placeholder="RUT / documento">
               <input id="form-checkout__cardholderEmail" type="email" placeholder="Correo del pagador" autocomplete="email">
-              <button type="submit" class="primary" id="mercadoPagoBtn">Autorizar y reservar fondos</button>
+              <button type="button" class="primary" id="mercadoPagoBtn">Autorizar y reservar fondos</button>
             </form>
           </div>
           <div class="notice" id="mercadoPagoNotice"></div>
@@ -514,7 +514,7 @@
   <nav class="nav nav-jaime"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button class="nav-jaime-ai" data-go="chat" aria-label="Hablar con Jaime"><b>✦</b>Jaime</button><button data-go="status"><b>◷</b>Estado</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="profile"><b>●</b>Perfil</button></nav>
 </div>
 <script src="https://sdk.mercadopago.com/js/v2"></script>
-<!-- V7.86 · MERCADO PAGO ISSUER + CANCELAR SOLICITUD -->
+<!-- V7.88 · MERCADO PAGO BOTON AUTORIZAR ENLAZADO -->
 <script>
 (() => {
   const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -1312,6 +1312,12 @@ async function startMercadoPagoAuthorization(){
   }
 }
 window.startMercadoPagoAuthorization=startMercadoPagoAuthorization;
+const mercadoPagoActionBtn=$('#mercadoPagoBtn');
+if(mercadoPagoActionBtn){
+  mercadoPagoActionBtn.addEventListener('click',()=>{
+    startMercadoPagoAuthorization();
+  });
+}
 
 $('#finishServiceBtn').addEventListener('click',async()=>{
     const c=conversationContext,btn=$('#finishServiceBtn'),note=$('#finishServiceNotice');if(!c)return;
@@ -1792,7 +1798,7 @@ async function loadProvider(){
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
   $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
   if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('/app/sw.js?v=784',{scope:'/app/'}).then(reg=>reg.update()).catch(()=>{});
+    navigator.serviceWorker.register('/app/sw.js?v=788',{scope:'/app/'}).then(reg=>reg.update()).catch(()=>{});
   }
   fetch('/app/api/config').then(r=>r.json()).then(d=>{if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
   const initialParams=new URLSearchParams(location.search),initialView=initialParams.get('view'),resetToken=initialParams.get('reset_token');if(['provider','status'].includes(initialView))go(initialView);if(resetToken){go('provider');$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerForgot').hidden=true;$('#providerForgot').style.display='none';$('#providerReset').hidden=false;$('#providerReset').style.display='block';}
