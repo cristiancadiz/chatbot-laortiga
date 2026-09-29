@@ -258,18 +258,18 @@
 
 /* V7.48 · cabecera compacta */
 .top .brand-logo{flex:0 1 auto;min-width:0}
-.top-client-mini{margin-left:auto;display:flex;align-items:center;gap:7px;max-width:150px;padding:2px 0;border:0;background:transparent;color:var(--forest);text-align:right}
-.top-client-text{min-width:0}.top-client-text strong,.top-client-text small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.top-client-text strong{font-size:12px;line-height:1.15}.top-client-text small{font-size:10px;line-height:1.15;color:var(--muted);margin-top:2px;font-weight:700}
+.top-client-mini{margin-left:auto;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:142px;max-width:170px;min-height:44px;padding:5px 7px;border:0;border-radius:12px;background:transparent;color:var(--forest);text-align:right;position:relative;z-index:30;touch-action:manipulation}
+.top-client-text{min-width:0}.top-client-text strong,.top-client-text small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.top-client-text strong{font-size:13px;line-height:1.15}.top-client-text small{font-size:11px;line-height:1.15;color:var(--muted);margin-top:2px;font-weight:700}
 .top-client-mini .status-dot{margin-left:0;flex:0 0 8px;width:8px;height:8px;box-shadow:0 0 0 3px rgba(89,168,101,.13)}
 .quick-ai-mic-first{order:-1;flex:0 0 46px}
-@media(max-width:430px){.top{padding:10px 14px;gap:8px}.brand-logo{width:112px}.top-client-mini{max-width:128px}}
+@media(max-width:430px){.top{padding:9px 12px;gap:6px}.brand-logo{width:106px}.top-client-mini{min-width:140px;max-width:158px}}
 
 </style>
 
 </head>
 <body>
 <div class="app">
-  <header class="top"><img class="brand-logo" src="/app/assets/logo-llama-a-jaime-final-v534.png" alt="Llama a Jaime"><button type="button" class="top-client-mini" id="topClientMini" aria-label="Abrir mi perfil"><span class="top-client-text"><strong id="topClientName">Perfil</strong><small id="topClientLocation">📍 Configurar</small></span><span class="status-dot" title="Servicio activo"></span></button></header>
+  <header class="top"><img class="brand-logo" src="/app/assets/logo-llama-a-jaime-final-v534.png" alt="Llama a Jaime"><button type="button" class="top-client-mini" id="topClientMini" data-go="profile" aria-label="Abrir mi perfil"><span class="top-client-text"><strong id="topClientName">Perfil</strong><small id="topClientLocation">📍 Configurar</small></span><span class="status-dot" title="Servicio activo"></span></button></header>
   <main>
     <section class="view active" id="home">
       <div class="home-ai-hero">
@@ -544,8 +544,6 @@
   $('#requestCamera').addEventListener('change',addSelectedPhotos);
 
   function currentPosition(){return new Promise((resolve,reject)=>{if(!('geolocation'in navigator)){reject(new Error('Este dispositivo no permite obtener la ubicación.'));return}navigator.geolocation.getCurrentPosition(position=>resolve({latitud:position.coords.latitude,longitud:position.coords.longitude,precision_m:position.coords.accuracy}),error=>reject(new Error(error.code===1?'Debes permitir el acceso a tu ubicación.':'No pude obtener tu ubicación. Intenta nuevamente.')),{enableHighAccuracy:true,timeout:15000,maximumAge:60000})})}
-  const topClientMini=$('#topClientMini');
-  if(topClientMini)topClientMini.addEventListener('click',()=>go('profile'));
   const profileSave=$('#profileSave');
   if(profileSave)profileSave.addEventListener('click',()=>{const nombre=$('#profileName').value.trim(),telefono=$('#profilePhone').value.trim(),comuna=$('#profileCommune').value.trim(),n=$('#profileNotice');if(!nombre){n.className='notice error';n.textContent='Escribe tu nombre.';n.style.display='block';return}const prev=clientProfile()||{};saveClientProfile({...prev,nombre,telefono,comuna});renderClientSession();n.className='notice success';n.textContent='Perfil guardado.';n.style.display='block'});
   const profileUseGps=$('#profileUseGps');
