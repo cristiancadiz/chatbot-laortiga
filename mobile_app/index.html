@@ -571,8 +571,14 @@
     const u=new SpeechSynthesisUtterance(plainAssistantText(text));
     u.lang='es-CL';u.rate=1;u.pitch=1;
     const voices=window.speechSynthesis.getVoices();
-    const preferred=voices.find(v=>/^es-CL/i.test(v.lang))||voices.find(v=>/^es/i.test(v.lang));
+    const maleHints=['jorge','diego','carlos','pablo','miguel','antonio','juan','pedro','alejandro','andrés','andres','felipe','tomás','tomas','martín','martin','daniel','david','mateo','male','masculino'];
+    const spanish=voices.filter(v=>/^es(?:-|_)/i.test(v.lang));
+    const chile=spanish.filter(v=>/^es[-_]CL/i.test(v.lang));
+    const looksMale=v=>maleHints.some(n=>String(v.name||'').toLowerCase().includes(n));
+    const preferred=chile.find(looksMale)||spanish.find(looksMale)||chile[0]||spanish[0]||voices[0];
     if(preferred)u.voice=preferred;
+    u.pitch=.82;
+    u.rate=.96;
     window.speechSynthesis.speak(u);
   }
   function addMessage(content, role, speak=false){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'){const audio=document.createElement('button');audio.type='button';audio.className='jaime-audio-btn';audio.setAttribute('aria-label','Escuchar respuesta');audio.title='Escuchar respuesta';audio.textContent='🔊';audio.addEventListener('click',()=>speakJaime(display));el.append(audio)} if(role!=='user'&&/crear solicitud/i.test(display)){const button=document.createElement('button');button.type='button';button.className='chat-request-cta';button.textContent='Revisar y enviar solicitud';button.addEventListener('click',()=>prepareAIRequest(button));el.append(button)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; if(role!=='user'&&speak)speakJaime(display); }
