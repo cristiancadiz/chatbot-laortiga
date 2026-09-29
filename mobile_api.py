@@ -352,6 +352,13 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         base = str(os.getenv("LLAMA_JAIME_PUBLIC_URL") or "").strip().rstrip("/")
         return f"{base}/app/api/prestadores/mercadopago/callback" if base else ""
 
+    def _mp_token_fingerprint(token):
+        """Huella no reversible para comparar tokens sin exponer credenciales."""
+        token = str(token or "").strip()
+        if not token:
+            return "empty"
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
     def _mp_headers_with_token(token):
         token = str(token or "").strip()
         if not token:
@@ -2619,9 +2626,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             if live_mode is False:
                 raise RuntimeError("Mercado Pago devolvió credenciales de prueba; se requieren credenciales productivas.")
 
-            app.logger.info(
-                "MP OAUTH OK provider=%s mp_user_id=%s scope=%s live_mode=%s",
-                provider["id"], user_id, scope, live_mode
+            app.logger.warning(
+                "MP OAUTH TOKEN SAVED provider=%s mp_user_id=%s scope=%s live_mode=%s token_fp=%s token_len=%s",
+                provider["id"], user_id, scope, live_mode,
+                _mp_token_fingerprint(access_token), len(access_token)
             )
 
             token_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat() if expires_in else None
@@ -2823,6 +2831,12 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             ident=payer.get("identification") if isinstance(payer.get("identification"),dict) else None
             if ident and ident.get("type") and ident.get("number"):
                 payload["payer"]["identification"]={"type":str(ident["type"]),"number":str(ident["number"])}
+            app.logger.warning(
+                "MP PAYMENT TOKEN USED provider=%s mp_user_id=%s token_fp=%s token_len=%s",
+                provider_id, seller.get("mp_user_id"),
+                _mp_token_fingerprint(seller.get("mp_access_token")),
+                len(str(seller.get("mp_access_token") or "").strip())
+            )
             h=_mp_headers_with_token(seller["mp_access_token"]); h["X-Idempotency-Key"]=f"lj-auth-{request_row['id']}-{price}"
             mp=requests.post("https://api.mercadopago.com/v1/payments",headers=h,json=payload,timeout=25)
             data=mp.json() if mp.content else {}
