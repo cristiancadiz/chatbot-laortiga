@@ -568,6 +568,11 @@
   $('#requestLocationBtn').addEventListener('click',async()=>{const button=$('#requestLocationBtn'),status=$('#requestLocationStatus');button.disabled=true;status.textContent='Obteniendo ubicación…';try{pendingLocation=await currentPosition();status.textContent='Detectando comuna…';const comuna=await communeFromCoordinates(pendingLocation.latitud,pendingLocation.longitud);const current=clientProfile()||{};saveClientProfile({...current,nombre:$('#name').value.trim()||current.nombre||'Cliente',telefono:$('#phone').value.trim()||current.telefono||'',email:$('#email').value.trim()||current.email||'',comuna:comuna||current.comuna||'Ubicación GPS',...pendingLocation});if($('#commune'))$('#commune').value=comuna||current.comuna||'Ubicación GPS';button.textContent='✓ GPS activo';status.textContent=comuna?`📍 ${comuna} · precisión aproximada ±${Math.round(pendingLocation.precision_m||0)} m.`:`Ubicación GPS guardada · precisión aproximada ±${Math.round(pendingLocation.precision_m||0)} m.`}catch(error){status.textContent=error.message}finally{button.disabled=false}});
 
   function plainAssistantText(content){return String(content||'').replace(/\*\*(.*?)\*\*/gs,'$1').replace(/__(.*?)__/gs,'$1').replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,'$1$2').replace(/`([^`\n]+)`/g,'$1').replace(/^\s{0,3}#{1,6}\s*/gm,'').replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'$1 ($2)').trim()}
+  function stopJaimeVoice(){
+    try{if(jaimeAudio){jaimeAudio.pause();jaimeAudio.currentTime=0;jaimeAudio=null}}catch(_){}
+    try{if(jaimeAudioUrl){URL.revokeObjectURL(jaimeAudioUrl);jaimeAudioUrl=''}}catch(_){}
+    try{if('speechSynthesis' in window)window.speechSynthesis.cancel()}catch(_){}
+  }
   function speakJaimeFallback(text){
     if(!('speechSynthesis' in window)||!text)return;
     window.speechSynthesis.cancel();
@@ -604,7 +609,7 @@
       speakJaimeFallback(clean);
     }
   }
-  function addMessage(content, role, speak=false){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'){const audio=document.createElement('button');audio.type='button';audio.className='jaime-audio-btn';audio.setAttribute('aria-label','Escuchar respuesta');audio.title='Escuchar respuesta';audio.textContent='🔊';audio.addEventListener('click',()=>speakJaime(display));el.append(audio)} if(role!=='user'&&role==='assistant'){setTimeout(()=>prepareAIRequest(null),180)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; if(role!=='user'&&speak)speakJaime(display); }
+  function addMessage(content, role, speak=false){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'){const audio=document.createElement('button');audio.type='button';audio.className='jaime-audio-btn';audio.setAttribute('aria-label','Escuchar respuesta');audio.title='Escuchar respuesta';audio.textContent='🔊';audio.addEventListener('click',()=>speakJaime(display));el.append(audio)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; if(role!=='user'&&speak)speakJaime(display); }
 
   async function prepareAIRequest(button){
     const original=button?.textContent||'';if(button){button.disabled=true;button.innerHTML='<span class="spinner"></span> Preparando'}
@@ -615,14 +620,25 @@
         const p=clientProfile()||{};
         const ignorables=d.faltantes.filter(x=>{
           const k=String(x||'').toLowerCase();
-          if((k.includes('teléfono')||k.includes('telefono'))&&p.telefono)return false;
-          if((k.includes('comuna')||k.includes('ubicación')||k.includes('ubicacion')||k.includes('dirección de origen')||k.includes('direccion de origen')||k==='dirección'||k==='direccion')&&p.latitud!=null&&p.longitud!=null)return false;
+          if(k.includes('teléfono')||k.includes('telefono'))return false;
+          if(k.includes('comuna')||k.includes('ubicación')||k.includes('ubicacion')||k.includes('dirección de origen')||k.includes('direccion de origen')||k==='dirección'||k==='direccion')return false;
           if(k.includes('nombre')&&p.nombre)return false;
           return true;
         });
-        if(ignorables.length){addMessage(`Me falta: ${ignorables.join(', ')}.`,'assistant',true);return}
+        if(ignorables.length){
+          stopJaimeVoice();
+          const faltan=[...new Set(ignorables.map(x=>String(x||'').trim()).filter(Boolean))];
+          addMessage(`Para seguir, cuéntame ${faltan.join(' y ')}.`,'assistant',false);
+          return
+        }
       }
-      await publishAIRequest(d.solicitud||{},null,null,true);
+      const draft={...(d.solicitud||{})};
+      if(p.nombre&&!draft.nombre)draft.nombre=p.nombre;
+      if(p.telefono&&!draft.telefono)draft.telefono=p.telefono;
+      if(p.comuna&&!draft.comuna)draft.comuna=p.comuna;
+      if(p.latitud!=null&&draft.latitud==null)draft.latitud=p.latitud;
+      if(p.longitud!=null&&draft.longitud==null)draft.longitud=p.longitud;
+      await publishAIRequest(draft,null,null,true);
     }catch(err){addMessage(err.message||'No pude preparar la solicitud.','assistant')}finally{if(button){button.disabled=false;button.textContent=original}}
   }
 
@@ -649,7 +665,7 @@
   function speechToInput(target,button,onDone){
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     if(!SR){alert('El dictado por voz no está disponible en este navegador. Puedes escribir tu solicitud.');return}
-    const rec=new SR();rec.lang='es-CL';rec.interimResults=false;rec.maxAlternatives=1;button.classList.add('listening');button.textContent='●';
+    stopJaimeVoice();const rec=new SR();rec.lang='es-CL';rec.interimResults=false;rec.maxAlternatives=1;button.classList.add('listening');button.textContent='●';
     rec.onresult=e=>{const text=(e.results?.[0]?.[0]?.transcript||'').trim();if(text){target.value=(target.value.trim()?target.value.trim()+' ':'')+text;if(onDone)onDone(text)}};
     rec.onerror=()=>{};rec.onend=()=>{button.classList.remove('listening');button.textContent='🎙️'};rec.start();
   }
@@ -663,7 +679,7 @@
   }
   if(homeVoiceBtn)homeVoiceBtn.addEventListener('click',()=>{
     if(!('webkitSpeechRecognition' in window||'SpeechRecognition' in window)){alert('Tu navegador no permite dictado por voz.');return}
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition,rec=new SR();
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;stopJaimeVoice();const rec=new SR();
     rec.lang='es-CL';rec.interimResults=false;rec.maxAlternatives=1;
     homeVoiceBtn.disabled=true;homeVoiceBtn.textContent='…';
     rec.onresult=e=>{homeNeedInput.value=e.results[0][0].transcript||''};
@@ -671,13 +687,18 @@
     rec.onend=()=>{homeVoiceBtn.disabled=false;homeVoiceBtn.textContent='🎙️';if(homeNeedInput.value.trim())sendHomeNeed()};
     rec.start();
   });
-  if(homeNeedInput)homeNeedInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendHomeNeed()}});
-  const chatVoiceBtn=$('#chatVoiceBtn');if(chatVoiceBtn)chatVoiceBtn.addEventListener('click',()=>speechToInput($('#chatInput'),chatVoiceBtn));
+  if(homeNeedInput){
+    homeNeedInput.addEventListener('input',()=>stopJaimeVoice());
+    homeNeedInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendHomeNeed()}});
+  }
+  const chatVoiceBtn=$('#chatVoiceBtn');
+  if($('#chatInput'))$('#chatInput').addEventListener('input',()=>stopJaimeVoice());
+  if(chatVoiceBtn)chatVoiceBtn.addEventListener('click',()=>speechToInput($('#chatInput'),chatVoiceBtn));
   $$('.schedule-quick button').forEach(b=>b.addEventListener('click',()=>{const v=b.dataset.schedule||'';$$('.schedule-quick button').forEach(x=>x.classList.toggle('active',x===b));$('#schedule').value=v;if(!v)$('#schedule').focus()}));
 
   history.forEach(m=>addMessage(m.content,m.role));
   async function ask(message){ addMessage(message,'user'); const prior=history.slice(-8); history.push({role:'user',content:message}); $('#chatInput').disabled=true; const waiting=document.createElement('div'); waiting.className='message bot'; waiting.innerHTML='<span class="spinner"></span> Pensando…'; $('#chatBox').append(waiting); $('#chatBox').scrollTop=$('#chatBox').scrollHeight;
-    try{ const p=clientProfile()||{};const known=[p.nombre&&`Nombre: ${p.nombre}`,p.telefono&&`Teléfono: ${p.telefono}`,p.comuna&&`Comuna: ${p.comuna}`].filter(Boolean).join(' · ');const aiMessage=known?`[DATOS YA GUARDADOS: ${known}. GPS: ${p.latitud!=null&&p.longitud!=null?'activo':'pendiente'}. No vuelvas a pedir nombre, teléfono, comuna, dirección de origen ni ubicación si ya están disponibles. El GPS guardado reemplaza pedir una dirección de origen escrita. Deduce el tipo de servicio desde lo que cuenta el usuario y pregunta solo información indispensable del trabajo. Cuando tengas lo suficiente, no le digas que pulse “crear solicitud” ni que confirme: la app avanzará automáticamente.]\n${message}`:message; const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message:aiMessage,service,history:prior})}); const d=await r.json(); waiting.remove(); if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant',true); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
+    try{ const p=clientProfile()||{};const known=[p.nombre&&`Nombre: ${p.nombre}`,p.telefono&&`Teléfono: ${p.telefono}`,p.comuna&&`Comuna: ${p.comuna}`].filter(Boolean).join(' · ');const aiMessage=known?`[DATOS YA GUARDADOS: ${known}. GPS: ${p.latitud!=null&&p.longitud!=null?'activo':'pendiente'}. No vuelvas a pedir nombre, teléfono, comuna, dirección de origen ni ubicación si ya están disponibles. El GPS guardado reemplaza pedir una dirección de origen escrita. Deduce el tipo de servicio desde lo que cuenta el usuario y pregunta solo información indispensable del trabajo. Cuando tengas lo suficiente, no le digas que pulse “crear solicitud” ni que confirme: la app avanzará automáticamente.]\n${message}`:message; const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message:aiMessage,service,history:prior})}); const d=await r.json(); waiting.remove(); if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant',true); setTimeout(()=>prepareAIRequest(null),220); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
     catch(e){waiting.remove();addMessage(e.message||'No pude conectar. Intenta nuevamente.','assistant')} finally{$('#chatInput').disabled=false;$('#chatInput').focus()}
   }
   $('#chatForm').addEventListener('submit',e=>{e.preventDefault();const m=$('#chatInput').value.trim();if(!m)return;$('#chatInput').value='';ask(m)});
