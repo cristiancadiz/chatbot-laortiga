@@ -118,6 +118,9 @@
     .home-main-mic{width:82px!important;height:82px!important;border-radius:50%!important;font-size:34px!important;margin:0 auto 10px!important;display:flex!important;align-items:center;justify-content:center}
     .home-voice-only .quick-ai-hint{font-size:12px;margin-top:4px}
 
+
+    .mp-secure-field{min-height:44px;border:1px solid #d8dee4;border-radius:10px;background:#fff;padding:11px 12px;box-sizing:border-box;}
+    .mp-secure-field iframe{width:100%!important;height:22px!important;border:0!important;}
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -492,8 +495,8 @@
           </div>
           <div id="mpCardFields" class="mp-card-fields" hidden>
             <form id="mpCardForm" class="mp-reserve-form">
-              <input id="form-checkout__cardNumber" placeholder="Número de tarjeta" autocomplete="cc-number">
-              <div class="grid2"><input id="form-checkout__expirationDate" placeholder="MM/AA" autocomplete="cc-exp"><input id="form-checkout__securityCode" placeholder="CVV" autocomplete="cc-csc"></div>
+              <div id="form-checkout__cardNumber" class="mp-secure-field"></div>
+              <div class="grid2"><div id="form-checkout__expirationDate" class="mp-secure-field"></div><div id="form-checkout__securityCode" class="mp-secure-field"></div></div>
               <input id="form-checkout__cardholderName" placeholder="Nombre del titular" autocomplete="cc-name">
               <select id="form-checkout__issuer" aria-label="Banco emisor"></select>
               <select id="form-checkout__installments" aria-label="Cuotas"></select>
@@ -514,7 +517,7 @@
   <nav class="nav nav-jaime"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button class="nav-jaime-ai" data-go="chat" aria-label="Hablar con Jaime"><b>✦</b>Jaime</button><button data-go="status"><b>◷</b>Estado</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="profile"><b>●</b>Perfil</button></nav>
 </div>
 <script src="https://sdk.mercadopago.com/js/v2"></script>
-<!-- V7.90 · MERCADO PAGO SUBMIT NATIVO CARDFORM -->
+<!-- V7.91 · MERCADO PAGO CARDFORM IFRAME OFICIAL -->
 <script>
 (() => {
   const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -1794,7 +1797,7 @@ async function loadProvider(){
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
   $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
   if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('/app/sw.js?v=790',{scope:'/app/'}).then(reg=>reg.update()).catch(()=>{});
+    navigator.serviceWorker.register('/app/sw.js?v=791',{scope:'/app/'}).then(reg=>reg.update()).catch(()=>{});
   }
   fetch('/app/api/config').then(r=>r.json()).then(d=>{if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
   const initialParams=new URLSearchParams(location.search),initialView=initialParams.get('view'),resetToken=initialParams.get('reset_token');if(['provider','status'].includes(initialView))go(initialView);if(resetToken){go('provider');$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerForgot').hidden=true;$('#providerForgot').style.display='none';$('#providerReset').hidden=false;$('#providerReset').style.display='block';}
