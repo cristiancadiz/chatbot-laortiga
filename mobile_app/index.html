@@ -637,20 +637,9 @@
       const p=clientProfile()||{};const knownContext={role:'user',content:`DATOS FIJOS DEL CLIENTE YA GUARDADOS. Nombre: ${p.nombre||'pendiente'}. El teléfono es un dato interno del perfil: NO lo preguntes ni lo marques como faltante. Comuna: ${p.comuna||'pendiente'}. GPS/origen: ${p.latitud!=null&&p.longitud!=null?'activo y guardado':'pendiente'}. REGLAS: no pedir teléfono. No pedir nuevamente comuna, dirección de origen ni ubicación si ya están disponibles. La dirección exacta de origen se obtiene del GPS privado. Pregunta únicamente datos indispensables del trabajo que todavía falten. Si ya hay información suficiente, devuelve la solicitud lista sin pedir al usuario que pulse, confirme o diga “crear solicitud”.`};const r=await fetch('/app/api/chat/preparar-solicitud',{method:'POST',headers,body:JSON.stringify({service,history:[knownContext,...history]})});
       const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude preparar la solicitud');
       if(Array.isArray(d.faltantes)&&d.faltantes.length){
-        const p=clientProfile()||{};
-        const ignorables=d.faltantes.filter(x=>{
-          const k=String(x||'').toLowerCase();
-          if(k.includes('teléfono')||k.includes('telefono'))return false;
-          if(k.includes('comuna')||k.includes('ubicación')||k.includes('ubicacion')||k.includes('dirección')||k.includes('direccion')||k.includes('domicilio')||k.includes('origen'))return false;
-          if(k.includes('nombre')&&p.nombre)return false;
-          return true;
-        });
-        if(ignorables.length){
-          stopJaimeVoice();
-          const faltan=[...new Set(ignorables.map(x=>String(x||'').trim()).filter(Boolean))];
-          addMessage(`Para seguir, cuéntame ${faltan.join(' y ')}.`,'assistant',false);
-          return
-        }
+        const lastUser=[...history].reverse().find(m=>m.role==='user')?.content||'';
+        d.solicitud=d.solicitud||{};
+        if(!d.solicitud.detalles)d.solicitud.detalles=lastUser||'Servicio solicitado';
       }
       aiRequestAdvancing=true;
       jaimeRequestFinalized=true;
@@ -814,7 +803,9 @@
     if(jaimeRequestFinalized||aiRequestAdvancing)return;
     const myGeneration=jaimeChatGeneration;
     addMessage(message,'user'); const prior=history.slice(-8); history.push({role:'user',content:message}); $('#chatInput').disabled=true; const waiting=document.createElement('div'); waiting.className='message bot'; waiting.innerHTML='<span class="spinner"></span> Pensando…'; $('#chatBox').append(waiting); $('#chatBox').scrollTop=$('#chatBox').scrollHeight;
-    try{ const p=clientProfile()||{};const known=[p.nombre&&`Nombre: ${p.nombre}`,p.telefono&&`Teléfono: ${p.telefono}`,p.comuna&&`Comuna: ${p.comuna}`].filter(Boolean).join(' · ');const aiMessage=known?`[DATOS YA GUARDADOS: ${known}. GPS: ${p.latitud!=null&&p.longitud!=null?'activo':'pendiente'}. No vuelvas a pedir nombre, teléfono, comuna, dirección de origen ni ubicación si ya están disponibles. El GPS guardado reemplaza pedir una dirección de origen escrita. Deduce el tipo de servicio desde lo que cuenta el usuario y pregunta solo información indispensable del trabajo. Cuando tengas lo suficiente, no le digas que pulse “crear solicitud” ni que confirme: la app avanzará automáticamente.]\n${message}`:message; const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message:aiMessage,service,history:prior})}); const d=await r.json(); waiting.remove(); if(myGeneration!==jaimeChatGeneration||jaimeRequestFinalized||aiRequestAdvancing)return; if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant',true); setTimeout(()=>{if(!jaimeRequestFinalized&&!aiRequestAdvancing)prepareAIRequest(null)},220); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
+    try{ const p=clientProfile()||{};const known=[p.nombre&&`Nombre: ${p.nombre}`,p.telefono&&`Teléfono: ${p.telefono}`,p.comuna&&`Comuna: ${p.comuna}`].filter(Boolean).join(' · ');const aiMessage=known?`[DATOS YA GUARDADOS: ${known}. GPS: ${p.latitud!=null&&p.longitud!=null?'activo':'pendiente'}. No vuelvas a pedir nombre, teléfono, comuna, dirección de origen ni ubicación si ya están disponibles. El GPS guardado reemplaza pedir una dirección de origen escrita. Deduce el tipo de servicio desde lo que cuenta el usuario y pregunta solo información indispensable del trabajo. Cuando tengas lo suficiente, no le digas que pulse “crear solicitud” ni que confirme: la app avanzará automáticamente.]\n${message}`:message; const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message:aiMessage,service,history:prior})}); const d=await r.json(); waiting.remove(); if(myGeneration!==jaimeChatGeneration||jaimeRequestFinalized||aiRequestAdvancing)return; if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply);
+      history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history));
+      await prepareAIRequest(null); }
     catch(e){waiting.remove();addMessage(e.message||'No pude conectar. Intenta nuevamente.','assistant')} finally{if(!jaimeRequestFinalized&&!aiRequestAdvancing){$('#chatInput').disabled=false;$('#chatInput').focus()}}
   }
   $('#chatForm').addEventListener('submit',e=>{e.preventDefault();const m=$('#chatInput').value.trim();if(!m)return;$('#chatInput').value='';ask(m)});
@@ -1666,8 +1657,8 @@ async function loadProvider(){
 <div id="jaimeReadyOverlay" style="display:none;pointer-events:none;position:fixed;inset:0;z-index:9999;background:#f6f8f7;overflow:auto">
   <div style="max-width:620px;margin:0 auto;padding:20px 16px 90px">
     <div style="background:#fff;border:1px solid #e4e9e6;border-radius:18px;padding:16px;margin-bottom:12px">
-      <strong style="font-size:18px">✓ Solicitud lista</strong>
-      <div style="margin-top:5px;color:#66736b;font-size:13px">Elige un profesional disponible o espera a que Jaime encuentre otro.</div>
+      <strong style="font-size:18px">Buscando profesionales…</strong>
+      <div style="margin-top:5px;color:#66736b;font-size:13px">Te mostraremos profesionales disponibles para contactar.</div>
     </div>
     <div id="jaimeReadyProviders"></div>
     <button type="button" id="jaimeWaitMoreBtn" class="secondary" style="width:100%;margin-top:12px">Esperar otro profesional</button>
