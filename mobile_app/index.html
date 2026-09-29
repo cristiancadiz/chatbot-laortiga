@@ -610,7 +610,7 @@
   }
   function addMessage(content, role, speak=false){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'){const audio=document.createElement('button');audio.type='button';audio.className='jaime-audio-btn';audio.setAttribute('aria-label','Escuchar respuesta');audio.title='Escuchar respuesta';audio.textContent='🔊';audio.addEventListener('click',()=>speakJaime(display));el.append(audio)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; if(role!=='user'&&speak)speakJaime(display); }
 
-  let aiRequestAdvancing=false, jaimeRequestFinalized=false, jaimeChatGeneration=0;
+  let aiRequestAdvancing=false, jaimeRequestFinalized=false;
   async function prepareAIRequest(button){
     if(aiRequestAdvancing)return;
     const original=button?.textContent||'';if(button){button.disabled=true;button.innerHTML='<span class="spinner"></span> Preparando'}
@@ -635,9 +635,7 @@
       }
       aiRequestAdvancing=true;
       jaimeRequestFinalized=true;
-      jaimeChatGeneration++;
       stopJaimeVoice();
-      const chatBox=$('#chatBox');if(chatBox)chatBox.innerHTML='';
       $('#chatInput').disabled=true;
       if($('#chatVoiceBtn'))$('#chatVoiceBtn').disabled=true;
       const draft={...(d.solicitud||{})};
@@ -743,9 +741,8 @@
   history.forEach(m=>addMessage(m.content,m.role));
   async function ask(message){
     if(jaimeRequestFinalized||aiRequestAdvancing)return;
-    const myGeneration=jaimeChatGeneration;
     addMessage(message,'user'); const prior=history.slice(-8); history.push({role:'user',content:message}); $('#chatInput').disabled=true; const waiting=document.createElement('div'); waiting.className='message bot'; waiting.innerHTML='<span class="spinner"></span> Pensando…'; $('#chatBox').append(waiting); $('#chatBox').scrollTop=$('#chatBox').scrollHeight;
-    try{ const p=clientProfile()||{};const known=[p.nombre&&`Nombre: ${p.nombre}`,p.telefono&&`Teléfono: ${p.telefono}`,p.comuna&&`Comuna: ${p.comuna}`].filter(Boolean).join(' · ');const aiMessage=known?`[DATOS YA GUARDADOS: ${known}. GPS: ${p.latitud!=null&&p.longitud!=null?'activo':'pendiente'}. No vuelvas a pedir nombre, teléfono, comuna, dirección de origen ni ubicación si ya están disponibles. El GPS guardado reemplaza pedir una dirección de origen escrita. Deduce el tipo de servicio desde lo que cuenta el usuario y pregunta solo información indispensable del trabajo. Cuando tengas lo suficiente, no le digas que pulse “crear solicitud” ni que confirme: la app avanzará automáticamente.]\n${message}`:message; const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message:aiMessage,service,history:prior})}); const d=await r.json(); waiting.remove(); if(myGeneration!==jaimeChatGeneration||jaimeRequestFinalized||aiRequestAdvancing)return; if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant',true); setTimeout(()=>{if(!jaimeRequestFinalized&&!aiRequestAdvancing)prepareAIRequest(null)},220); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
+    try{ const p=clientProfile()||{};const known=[p.nombre&&`Nombre: ${p.nombre}`,p.telefono&&`Teléfono: ${p.telefono}`,p.comuna&&`Comuna: ${p.comuna}`].filter(Boolean).join(' · ');const aiMessage=known?`[DATOS YA GUARDADOS: ${known}. GPS: ${p.latitud!=null&&p.longitud!=null?'activo':'pendiente'}. No vuelvas a pedir nombre, teléfono, comuna, dirección de origen ni ubicación si ya están disponibles. El GPS guardado reemplaza pedir una dirección de origen escrita. Deduce el tipo de servicio desde lo que cuenta el usuario y pregunta solo información indispensable del trabajo. Cuando tengas lo suficiente, no le digas que pulse “crear solicitud” ni que confirme: la app avanzará automáticamente.]\n${message}`:message; const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message:aiMessage,service,history:prior})}); const d=await r.json(); waiting.remove(); if(jaimeRequestFinalized||aiRequestAdvancing)return; if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant',true); setTimeout(()=>{if(!jaimeRequestFinalized&&!aiRequestAdvancing)prepareAIRequest(null)},220); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
     catch(e){waiting.remove();addMessage(e.message||'No pude conectar. Intenta nuevamente.','assistant')} finally{if(!jaimeRequestFinalized&&!aiRequestAdvancing){$('#chatInput').disabled=false;$('#chatInput').focus()}}
   }
   $('#chatForm').addEventListener('submit',e=>{e.preventDefault();const m=$('#chatInput').value.trim();if(!m)return;$('#chatInput').value='';ask(m)});
@@ -783,21 +780,18 @@
   function renderReadyProviders(items){
     const dst=$('#jaimeReadyProviders');if(!dst)return;
     if(!items.length){
-      dst.innerHTML='<div class="empty" style="padding:18px"><strong>Buscando profesionales…</strong><br>Jaime te avisará cuando aparezca uno compatible.<br><button type="button" id="readyNotifyBtn" class="secondary" style="margin-top:10px">🔔 Activar avisos</button></div>';
+      dst.innerHTML='<div class="empty"><strong>No encontré uno disponible todavía.</strong><br>Jaime seguirá buscando y te avisará cuando aparezca uno compatible.<br><button type="button" id="readyNotifyBtn" class="secondary" style="margin-top:12px">🔔 Activar avisos</button></div>';
       const nb=$('#readyNotifyBtn');if(nb)nb.addEventListener('click',()=>enableSearchNotifications(nb));
       return;
     }
     dst.innerHTML='';
     items.forEach(p=>{
+      const card=document.createElement('article');card.className='provider-candidate';
       const rep=p.reputacion||{},avg=Number(rep.promedio||0),reviews=Number(rep.evaluaciones||0);
-      const card=document.createElement('article');
-      card.style.cssText='display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #e4e9e6;border-radius:16px;padding:12px;margin-bottom:9px';
-      const info=document.createElement('div');info.style.cssText='min-width:0;flex:1';
-      const where=p.distancia_km!=null?`${Number(p.distancia_km).toFixed(1)} km aprox.`:'Disponible en tu zona';
-      info.innerHTML=`<strong style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.nombre||'Profesional')}</strong><span style="font-size:12px;color:#66736b">${reviews?`⭐ ${avg.toFixed(1)} · ${reviews} eval.`:'⭐ Nuevo'} · ${escapeHtml(where)}</span>`;
-      const btn=document.createElement('button');btn.type='button';btn.className='primary';btn.textContent='Elegir';btn.style.cssText='width:auto;flex:0 0 auto;padding:9px 12px';
-      btn.addEventListener('click',()=>chooseAvailableProvider(p,btn));
-      card.append(info,btn);dst.append(card);
+      const where=p.distancia_km!=null?`Aprox. ${escapeHtml(Number(p.distancia_km).toFixed(1))} km de tu ubicación`:'Disponible en tu zona';
+      card.innerHTML=`<div class="provider-candidate-main"><strong>${escapeHtml(p.nombre||'Profesional')}</strong><div class="provider-candidate-rating">${reviews?`⭐ ${avg.toFixed(1)} · ${reviews} evaluación${reviews===1?'':'es'}`:'⭐ Profesional nuevo'}</div><div class="provider-candidate-meta">${where}</div></div><button type="button" class="primary">Seleccionar</button>`;
+      card.querySelector('button').addEventListener('click',e=>chooseAvailableProvider(p,e.currentTarget));
+      dst.append(card);
     });
   }
 
@@ -860,20 +854,8 @@
   });
 
   async function chooseAvailableProvider(provider,button){
-    const req=latestCreatedRequest;if(!req)return;
-    const original=button.textContent;
-    button.disabled=true;button.textContent='…';
-    try{
-      const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/elegir-prestador`,{method:'POST',headers,body:JSON.stringify({token:req.token,prestador_id:provider.id})});
-      const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude asignar al profesional');
-      if(providerSearchTimer){clearInterval(providerSearchTimer);providerSearchTimer=null}
-      $('#providerChoice').style.display='none';
-      const overlay=$('#jaimeReadyOverlay');if(overlay)overlay.style.display='none';
-      button.textContent='✓';
-      await openConversation('cliente',{public_id:req.codigo,token:req.token});
-    }catch(err){
-      alert(err.message);button.disabled=false;button.textContent=original;
-    }
+    const req=latestCreatedRequest;if(!req)return;if(!confirm(`¿Solicitar este trabajo a ${provider.nombre||'este profesional'}?`))return;const original=button.textContent;button.disabled=true;button.textContent='Asignando…';
+    try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/elegir-prestador`,{method:'POST',headers,body:JSON.stringify({token:req.token,prestador_id:provider.id})}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude asignar al profesional');$('#providerChoice').style.display='none';openConversation('cliente',{public_id:req.codigo,token:req.token})}catch(err){alert(err.message);button.disabled=false;button.textContent=original}
   }
 
   async function loadSaved(){const box=$('#savedList'),items=JSON.parse(localStorage.requests||'[]');if(!items.length){box.innerHTML='<div class="empty">Aún no has creado solicitudes desde este dispositivo.</div>';return}box.innerHTML='';for(const item of items){const meta=SERVICE_META[item.tipo]||SERVICE_META.otro,el=document.createElement('button');el.className='saved';el.innerHTML=`<strong>${escapeHtml(meta.label)} · ${escapeHtml(item.codigo)}</strong><span>Consultando estado… · Toca para conversar</span>`;el.addEventListener('click',()=>openConversation('cliente',{public_id:item.codigo,token:item.token}));box.append(el);try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(item.codigo)}?token=${encodeURIComponent(item.token)}`,{headers});const d=await r.json();el.querySelector('span').textContent=r.ok?`${d.solicitud.estado} · Toca para conversar y revisar precios`:(d.error||'Sin información');}catch{el.querySelector('span').textContent='Sin conexión'}}}
@@ -1567,14 +1549,13 @@ async function loadProvider(){
 
   // V7.33.1: Documentación queda compacta en la barra superior; la tarjeta se abre solo al tocar el botón.
 </script>
-<div id="jaimeReadyOverlay" style="display:none;position:fixed;inset:0;z-index:9999;background:#f6f8f7;overflow:auto">
-  <div style="max-width:620px;margin:0 auto;padding:20px 16px 90px">
-    <div style="background:#fff;border:1px solid #e4e9e6;border-radius:18px;padding:16px;margin-bottom:12px">
-      <strong style="font-size:18px">✓ Solicitud lista</strong>
-      <div style="margin-top:5px;color:#66736b;font-size:13px">Elige un profesional disponible o espera a que Jaime encuentre otro.</div>
-    </div>
+<div id="jaimeReadyOverlay" style="display:none;position:fixed;inset:0;z-index:9999;background:#fff;padding:28px 20px;overflow:auto">
+  <div style="max-width:620px;margin:10vh auto 0;text-align:center">
+    <div style="font-size:48px;margin-bottom:12px">✓</div>
+    <h2 style="margin:0 0 10px">OK, tu solicitud está lista</h2>
+    <p style="margin:0 0 24px">Ahora puedes seleccionar uno de estos profesionales cercanos o esperar a que Jaime encuentre otro.</p>
     <div id="jaimeReadyProviders"></div>
-    <button type="button" id="jaimeWaitMoreBtn" class="secondary" style="width:100%;margin-top:12px">Esperar otro profesional</button>
+    <button type="button" id="jaimeWaitMoreBtn" class="secondary" style="margin-top:18px">Esperar que Jaime encuentre otro</button>
   </div>
 </div>
 </body>
