@@ -1,4 +1,4 @@
-<!doctype html>
+!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8">
@@ -86,7 +86,7 @@
     .quote-economy div{display:flex;justify-content:space-between;gap:12px}.quote-economy .net{padding-top:6px;border-top:1px solid #d7e0d5;font-weight:900}
     .quote-mp-note{display:block;margin-top:8px;color:#69756e;font-size:11px;line-height:1.35}
 
-.mp-reserve-form{display:grid;gap:9px;width:100%}.mp-reserve-form input,.mp-reserve-form select{width:100%;border:1px solid var(--line);border-radius:12px;padding:11px;background:white}.mp-reserve-form p{margin:0 0 4px}.mp-reserve-form small{color:var(--muted);font-weight:500}
+.mp-reserve-form{display:grid;gap:9px;width:100%}.mp-reserve-form input,.mp-reserve-form select{width:100%;border:1px solid var(--line);border-radius:12px;padding:11px;background:white}.mp-reserve-form p{margin:0 0 4px}.mp-reserve-form small{color:var(--muted);font-weight:500}.mp-card-fields[hidden]{display:none!important}.mp-pay-intro{display:grid;gap:9px}.mp-pay-intro p{margin:0}.mp-pay-intro small{color:var(--muted)}
 
 /* V7.40 · paneles compactos de cotización/pago */
 .compact-panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;background:transparent;border:0;padding:0;cursor:pointer;text-align:left;color:inherit}
@@ -418,15 +418,20 @@
         <div class="compact-panel-body" id="paymentPanelBody" hidden>
         <div class="payment-status-copy"><span id="paymentStatusDetail">Primero acepta la cotización.</span></div>
         <div class="payment-client-action" id="paymentClientAction" hidden>
-          <div id="mpCardForm" class="mp-reserve-form">
+          <div class="mp-pay-intro" id="mpPayIntro">
             <p><strong>🛡️ Tu pago está protegido</strong><br><small>Paga de forma segura con Mercado Pago. El monto quedará protegido mientras se realiza el servicio. El cobro se completará cuando el prestador marque el trabajo terminado y tú confirmes la finalización. <strong>Si el trabajo no se completa, podrás solicitar la devolución íntegra del monto pagado</strong>, sujeta a la validación del estado del servicio y las condiciones aplicables.</small></p>
-            <input id="form-checkout__cardNumber" placeholder="Número de tarjeta" autocomplete="cc-number">
-            <div class="grid2"><input id="form-checkout__expirationDate" placeholder="MM/AA" autocomplete="cc-exp"><input id="form-checkout__securityCode" placeholder="CVV" autocomplete="cc-csc"></div>
-            <input id="form-checkout__cardholderName" placeholder="Nombre del titular" autocomplete="cc-name">
-            <select id="form-checkout__issuer"></select><select id="form-checkout__installments"></select>
-            <select id="form-checkout__identificationType"></select><input id="form-checkout__identificationNumber" placeholder="RUT / documento">
-            <input id="form-checkout__cardholderEmail" type="email" placeholder="Correo del pagador" autocomplete="email">
-            <button type="button" class="primary" id="mercadoPagoBtn" onclick="startMercadoPagoAuthorization()">Autorizar y reservar fondos</button>
+            <button type="button" class="primary" id="showMercadoPagoFormBtn">Pagar con Mercado Pago</button>
+          </div>
+          <div id="mpCardFields" class="mp-card-fields" hidden>
+            <div id="mpCardForm" class="mp-reserve-form">
+              <input id="form-checkout__cardNumber" placeholder="Número de tarjeta" autocomplete="cc-number">
+              <div class="grid2"><input id="form-checkout__expirationDate" placeholder="MM/AA" autocomplete="cc-exp"><input id="form-checkout__securityCode" placeholder="CVV" autocomplete="cc-csc"></div>
+              <input id="form-checkout__cardholderName" placeholder="Nombre del titular" autocomplete="cc-name">
+              <select id="form-checkout__installments" aria-label="Cuotas"></select>
+              <select id="form-checkout__identificationType" aria-label="Tipo de documento"></select><input id="form-checkout__identificationNumber" placeholder="RUT / documento">
+              <input id="form-checkout__cardholderEmail" type="email" placeholder="Correo del pagador" autocomplete="email">
+              <button type="button" class="primary" id="mercadoPagoBtn" onclick="startMercadoPagoAuthorization()">Autorizar y reservar fondos</button>
+            </div>
           </div>
           <div class="notice" id="mercadoPagoNotice"></div>
         </div>
@@ -448,6 +453,8 @@
   if(conversationActionsToggle&&conversationTools){conversationActionsToggle.addEventListener('click',()=>{const open=conversationTools.classList.toggle('open');conversationActionsToggle.setAttribute('aria-expanded',open?'true':'false');conversationActionsToggle.textContent=open?'× Cerrar acciones':'＋ Acciones';});}
   const paymentPanelToggle=$('#paymentPanelToggle'),paymentPanelBody=$('#paymentPanelBody');
   if(paymentPanelToggle&&paymentPanelBody){paymentPanelToggle.addEventListener('click',()=>{const open=paymentPanelBody.hidden;paymentPanelBody.hidden=!open;paymentPanelToggle.setAttribute('aria-expanded',open?'true':'false');});}
+  const showMpFormBtn=$('#showMercadoPagoFormBtn'),mpCardFields=$('#mpCardFields');
+  if(showMpFormBtn&&mpCardFields){showMpFormBtn.addEventListener('click',async()=>{showMpFormBtn.disabled=true;try{await ensureMercadoPagoCardForm();mpCardFields.hidden=false;showMpFormBtn.hidden=true;setTimeout(()=>$('#form-checkout__cardNumber')?.focus(),0);}catch(err){const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent=err.message||'No pude cargar Mercado Pago.'}}finally{showMpFormBtn.disabled=false;}});}
   const session = localStorage.appSession || (localStorage.appSession = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
   const headers = {"Content-Type":"application/json","X-App-Session":session};
   const SERVICE_META = {
@@ -666,7 +673,7 @@ if(hasProvider){
     mercadoPagoBtn.disabled=false;
     mercadoPagoBtn.textContent='Autorizar y reservar fondos';
     mercadoPagoNotice.textContent='';
-    setTimeout(()=>ensureMercadoPagoCardForm().catch(err=>{mercadoPagoNotice.style.display='block';mercadoPagoNotice.textContent=err.message;}),0);
+    const mpFields=$('#mpCardFields'),showPay=$('#showMercadoPagoFormBtn'); if(mpFields)mpFields.hidden=true; if(showPay)showPay.hidden=false;
   }
 
   const breakdown=$('#paymentBreakdown');
@@ -763,7 +770,7 @@ async function ensureMercadoPagoCardForm(){
   if(mpCardForm&&typeof mpCardForm.unmount==='function'){try{mpCardForm.unmount()}catch(_){}}
   const amount=String(Number(window.__currentServicePrice||0));
   const mp=new MercadoPago(kd.public_key,{locale:'es-CL'});
-  mpCardForm=mp.cardForm({amount,iframe:true,form:{id:'mpCardForm',cardNumber:{id:'form-checkout__cardNumber',placeholder:'Número de tarjeta'},expirationDate:{id:'form-checkout__expirationDate',placeholder:'MM/AA'},securityCode:{id:'form-checkout__securityCode',placeholder:'CVV'},cardholderName:{id:'form-checkout__cardholderName',placeholder:'Nombre del titular'},issuer:{id:'form-checkout__issuer',placeholder:'Banco emisor'},installments:{id:'form-checkout__installments',placeholder:'Cuotas'},identificationType:{id:'form-checkout__identificationType',placeholder:'Tipo de documento'},identificationNumber:{id:'form-checkout__identificationNumber',placeholder:'RUT / documento'},cardholderEmail:{id:'form-checkout__cardholderEmail',placeholder:'Correo'}},callbacks:{onFormMounted:error=>{if(error)console.error('MP form',error)}}});
+  mpCardForm=mp.cardForm({amount,iframe:true,form:{id:'mpCardForm',cardNumber:{id:'form-checkout__cardNumber',placeholder:'Número de tarjeta'},expirationDate:{id:'form-checkout__expirationDate',placeholder:'MM/AA'},securityCode:{id:'form-checkout__securityCode',placeholder:'CVV'},cardholderName:{id:'form-checkout__cardholderName',placeholder:'Nombre del titular'},installments:{id:'form-checkout__installments',placeholder:'Cuotas'},identificationType:{id:'form-checkout__identificationType',placeholder:'Tipo de documento'},identificationNumber:{id:'form-checkout__identificationNumber',placeholder:'RUT / documento'},cardholderEmail:{id:'form-checkout__cardholderEmail',placeholder:'Correo'}},callbacks:{onFormMounted:error=>{if(error)console.error('MP form',error)}}});
   mpCardFormRequestId=c.public_id;
 }
 async function startMercadoPagoAuthorization(){
@@ -773,7 +780,7 @@ async function startMercadoPagoAuthorization(){
     await ensureMercadoPagoCardForm();
     const data=mpCardForm.getCardFormData();
     if(!data.token)throw new Error('Revisa los datos de la tarjeta.');
-    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago/autorizar`,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({token:c.token,card_token:data.token,payment_method_id:data.paymentMethodId,issuer_id:data.issuerId,installments:Number(data.installments||1),payer:{email:data.cardholderEmail,identification:{type:data.identificationType,number:data.identificationNumber}}})});
+    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago/autorizar`,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({token:c.token,card_token:data.token,payment_method_id:data.paymentMethodId,installments:Number(data.installments||1),payer:{email:data.cardholderEmail,identification:{type:data.identificationType,number:data.identificationNumber}}})});
     const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'No fue posible reservar los fondos.');
     note.className='notice success';note.textContent=d.status==='authorized'?'✓ Fondos reservados. El prestador puede realizar el trabajo. El cobro se hará cuando confirmes que terminó.':(d.message||'Autorización en proceso.');
     await loadConversation(true);
