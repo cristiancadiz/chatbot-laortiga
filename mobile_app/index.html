@@ -283,7 +283,7 @@
       <div class="home-ai-hero">
         <h1>¿Qué necesitas?</h1>
         <p>Cuéntaselo a Jaime con tus palabras.</p>
-        <div class="quick-ai-request"><div class="quick-ai-row"><button class="quick-ai-action quick-ai-mic-first" id="homeVoiceBtn" type="button" aria-label="Hablar">🎙️</button><textarea id="homeNeedInput" maxlength="800" placeholder="Ej.: mi lavadora no centrifuga y hace un ruido raro"></textarea></div><button class="quick-ai-send" id="homeNeedBtn" type="button">Buscar a alguien →</button><small class="quick-ai-hint">Escribe o habla como quieras. Jaime ordenará la solicitud por ti.</small></div>
+        <div class="quick-ai-request"><div class="quick-ai-row"><button class="quick-ai-action quick-ai-mic-first" id="homeVoiceBtn" type="button" aria-label="Hablar">🎙️</button><textarea id="homeNeedInput" maxlength="800" placeholder="Ej.: mi lavadora no centrifuga y hace un ruido raro"></textarea></div><small class="quick-ai-hint">Escribe o habla como quieras. Jaime ordenará la solicitud por ti.</small></div>
       </div>
 
       <div class="home-services-head">
@@ -355,7 +355,7 @@
       <div class="page-head"><h1>Mi perfil</h1><p>Guarda tus datos una vez y pide servicios más rápido.</p></div>
       <div class="form-card">
         <div class="field"><label for="profileName">Nombre</label><input id="profileName" autocomplete="name" placeholder="Tu nombre"></div>
-        <div class="profile-auto-data"><span>Teléfono</span><strong id="profilePhoneDisplay">Teléfono guardado en la sesión</strong></div>
+        <div class="profile-auto-data"><span>Teléfono</span><strong id="profilePhoneDisplay">—</strong></div>
         <button class="secondary profile-location-btn" type="button" id="profileUseGps">📍 Activar mi ubicación</button>
         <div class="profile-location-result" id="profileLocationResult">Ubicación pendiente</div>
         <button class="primary" type="button" id="profileSave">Guardar perfil</button>
@@ -490,7 +490,7 @@
       <form class="conversation-compose" id="conversationForm"><input id="conversationInput" maxlength="2000" placeholder="Escribe un mensaje…" autocomplete="off"><button type="submit">Enviar</button></form>
     </div>
   </section>
-  <nav class="nav nav-jaime"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button data-go="provider"><b>⚙</b>Prestador</button><button class="nav-jaime-ai" data-go="chat" aria-label="Hablar con Jaime"><b>✦</b>Jaime</button><button data-go="status"><b>◷</b>Estado</button><button data-go="profile"><b>●</b>Perfil</button></nav>
+  <nav class="nav nav-jaime"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button class="nav-jaime-ai" data-go="chat" aria-label="Hablar con Jaime"><b>✦</b>Jaime</button><button data-go="status"><b>◷</b>Estado</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="profile"><b>●</b>Perfil</button></nav>
 </div>
 <script src="https://sdk.mercadopago.com/js/v2"></script>
 <!-- V7.40 · PANELES PLEGABLES + FINALIZAR SOLO TRAS PAGO AUTORIZADO -->
@@ -531,7 +531,7 @@
     if(top){$('#topClientName').textContent=p.nombre;$('#topClientLocation').textContent='📍 '+(p.comuna||'Ubicación')}
     $('#clientSessionName').textContent=p.nombre;$('#clientSessionCommune').textContent='📍 '+(p.comuna||'Ubicación guardada');
     $('#name').value=p.nombre||'';$('#phone').value=p.telefono||'';$('#email').value=p.email||'';$('#commune').value=p.comuna||'';
-    if($('#profileName'))$('#profileName').value=p.nombre||'';if($('#profilePhoneDisplay'))$('#profilePhoneDisplay').textContent=p.telefono||'Teléfono guardado en la sesión';if($('#profileLocationResult'))$('#profileLocationResult').textContent=p.comuna?'📍 '+p.comuna:(p.latitud!=null?'📍 Ubicación GPS guardada':'Ubicación pendiente');
+    if($('#profileName'))$('#profileName').value=p.nombre||'';if($('#profilePhoneDisplay'))$('#profilePhoneDisplay').textContent=p.telefono||'—';if($('#profileLocationResult'))$('#profileLocationResult').textContent=p.comuna?'📍 '+p.comuna:(p.latitud!=null?'📍 Ubicación GPS guardada':'Ubicación pendiente');
     if(p.latitud!=null&&p.longitud!=null)pendingLocation={latitud:p.latitud,longitud:p.longitud,precision_m:p.precision_m||0};
   }
   function hydrateClientProfile(){renderClientSession()}
@@ -568,11 +568,11 @@
   $('#requestLocationBtn').addEventListener('click',async()=>{const button=$('#requestLocationBtn'),status=$('#requestLocationStatus');button.disabled=true;status.textContent='Obteniendo ubicación…';try{pendingLocation=await currentPosition();status.textContent='Detectando comuna…';const comuna=await communeFromCoordinates(pendingLocation.latitud,pendingLocation.longitud);const current=clientProfile()||{};saveClientProfile({...current,nombre:$('#name').value.trim()||current.nombre||'Cliente',telefono:$('#phone').value.trim()||current.telefono||'',email:$('#email').value.trim()||current.email||'',comuna:comuna||current.comuna||'Ubicación GPS',...pendingLocation});if($('#commune'))$('#commune').value=comuna||current.comuna||'Ubicación GPS';button.textContent='✓ GPS activo';status.textContent=comuna?`📍 ${comuna} · precisión aproximada ±${Math.round(pendingLocation.precision_m||0)} m.`:`Ubicación GPS guardada · precisión aproximada ±${Math.round(pendingLocation.precision_m||0)} m.`}catch(error){status.textContent=error.message}finally{button.disabled=false}});
 
   function plainAssistantText(content){return String(content||'').replace(/\*\*(.*?)\*\*/gs,'$1').replace(/__(.*?)__/gs,'$1').replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,'$1$2').replace(/`([^`\n]+)`/g,'$1').replace(/^\s{0,3}#{1,6}\s*/gm,'').replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'$1 ($2)').trim()}
-  function speakJaime(text){
+  function speakJaimeFallback(text){
     if(!('speechSynthesis' in window)||!text)return;
     window.speechSynthesis.cancel();
     const u=new SpeechSynthesisUtterance(plainAssistantText(text));
-    u.lang='es-CL';u.rate=1;u.pitch=1;
+    u.lang='es-CL';u.rate=.96;u.pitch=.82;
     const voices=window.speechSynthesis.getVoices();
     const maleHints=['jorge','diego','carlos','pablo','miguel','antonio','juan','pedro','alejandro','andrés','andres','felipe','tomás','tomas','martín','martin','daniel','david','mateo','male','masculino'];
     const spanish=voices.filter(v=>/^es(?:-|_)/i.test(v.lang));
@@ -580,20 +580,40 @@
     const looksMale=v=>maleHints.some(n=>String(v.name||'').toLowerCase().includes(n));
     const preferred=chile.find(looksMale)||spanish.find(looksMale)||chile[0]||spanish[0]||voices[0];
     if(preferred)u.voice=preferred;
-    u.pitch=.82;
-    u.rate=.96;
     window.speechSynthesis.speak(u);
   }
-  function addMessage(content, role, speak=false){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'){const audio=document.createElement('button');audio.type='button';audio.className='jaime-audio-btn';audio.setAttribute('aria-label','Escuchar respuesta');audio.title='Escuchar respuesta';audio.textContent='🔊';audio.addEventListener('click',()=>speakJaime(display));el.append(audio)} if(role!=='user'&&/crear solicitud/i.test(display)){const button=document.createElement('button');button.type='button';button.className='chat-request-cta';button.textContent='Revisar y enviar solicitud';button.addEventListener('click',()=>prepareAIRequest(button));el.append(button)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; if(role!=='user'&&speak)speakJaime(display); }
+
+  let jaimeAudio=null,jaimeAudioUrl='';
+  async function speakJaime(text){
+    const clean=plainAssistantText(text);
+    if(!clean)return;
+    try{
+      if(jaimeAudio){jaimeAudio.pause();jaimeAudio=null}
+      if(jaimeAudioUrl){URL.revokeObjectURL(jaimeAudioUrl);jaimeAudioUrl=''}
+      const r=await fetch('/app/api/jaime/voz',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({texto:clean})
+      });
+      if(!r.ok)throw new Error('TTS no disponible');
+      const blob=await r.blob();
+      jaimeAudioUrl=URL.createObjectURL(blob);
+      jaimeAudio=new Audio(jaimeAudioUrl);
+      await jaimeAudio.play();
+    }catch(_){
+      speakJaimeFallback(clean);
+    }
+  }
+  function addMessage(content, role, speak=false){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'){const audio=document.createElement('button');audio.type='button';audio.className='jaime-audio-btn';audio.setAttribute('aria-label','Escuchar respuesta');audio.title='Escuchar respuesta';audio.textContent='🔊';audio.addEventListener('click',()=>speakJaime(display));el.append(audio)} if(role!=='user'&&/crear solicitud/i.test(display)){setTimeout(()=>prepareAIRequest(null),150)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; if(role!=='user'&&speak)speakJaime(display); }
 
   async function prepareAIRequest(button){
-    const original=button.textContent;button.disabled=true;button.innerHTML='<span class="spinner"></span> Preparando';
+    const original=button?.textContent||'';if(button){button.disabled=true;button.innerHTML='<span class="spinner"></span> Preparando'}
     try{
       const p=clientProfile()||{};const knownContext={role:'user',content:`Datos del perfil ya guardados. Nombre: ${p.nombre||'pendiente'}. Teléfono: ${p.telefono||'pendiente'}. Comuna: ${p.comuna||'pendiente'}. GPS: ${p.latitud!=null&&p.longitud!=null?'activo':'pendiente'}. No solicitar nuevamente los datos disponibles.`};const r=await fetch('/app/api/chat/preparar-solicitud',{method:'POST',headers,body:JSON.stringify({service,history:[knownContext,...history]})});
       const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude preparar la solicitud');
-      if(Array.isArray(d.faltantes)&&d.faltantes.length){addMessage(`Antes de enviarla me falta: ${d.faltantes.join(', ')}. Escríbeme esos datos y luego vuelve a pulsar “Revisar y enviar solicitud”.`,'assistant');return}
-      renderAIRequestConfirmation(d.solicitud||{});
-    }catch(err){addMessage(err.message||'No pude preparar la solicitud.','assistant')}finally{button.disabled=false;button.textContent=original}
+      if(Array.isArray(d.faltantes)&&d.faltantes.length){addMessage(`Me falta: ${d.faltantes.join(', ')}.`,'assistant',true);return}
+      await publishAIRequest(d.solicitud||{},null,null,true);
+    }catch(err){addMessage(err.message||'No pude preparar la solicitud.','assistant')}finally{if(button){button.disabled=false;button.textContent=original}}
   }
 
   function renderAIRequestConfirmation(draft){
@@ -605,15 +625,15 @@
     $('#chatBox').append(box);$('#chatBox').scrollTop=$('#chatBox').scrollHeight;
   }
 
-  async function publishAIRequest(draft,consent,button){
-    if(!consent.checked){alert('Debes aceptar los términos y el tratamiento de datos para enviar la solicitud.');return}
-    const payload={...draft,acepta_terminos:true,acepta_privacidad:true};button.disabled=true;button.innerHTML='<span class="spinner"></span> Enviando';
+  async function publishAIRequest(draft,consent,button,automatic=false){
+    if(!automatic&&consent&&!consent.checked){alert('Debes aceptar los términos y el tratamiento de datos para enviar la solicitud.');return}
+    const payload={...draft,acepta_terminos:true,acepta_privacidad:true};if(button){button.disabled=true;button.innerHTML='<span class="spinner"></span> Enviando'};
     try{
       const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');
       const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));latestCreatedRequest=d.solicitud;
       $('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent='Tu solicitud fue creada con los datos que entregaste a Jaime.';$('#requestCard').style.display='none';$('#trackingCard').style.display='block';$('#providerChoice').style.display='block';$('#providerBrowser').style.display='none';$('#providerCandidates').innerHTML='';
       go('request');
-    }catch(err){alert(err.message);button.disabled=false;button.textContent='Enviar solicitud'}
+     }catch(err){alert(err.message);if(button){button.disabled=false;button.textContent='Enviar solicitud'}}
   }
   // V7.45: entrada rápida y dictado por voz. La IA sigue usando los endpoints existentes.
   function speechToInput(target,button,onDone){
@@ -623,10 +643,25 @@
     rec.onresult=e=>{const text=(e.results?.[0]?.[0]?.transcript||'').trim();if(text){target.value=(target.value.trim()?target.value.trim()+' ':'')+text;if(onDone)onDone(text)}};
     rec.onerror=()=>{};rec.onend=()=>{button.classList.remove('listening');button.textContent='🎙️'};rec.start();
   }
-  const homeVoiceBtn=$('#homeVoiceBtn'),homeNeedInput=$('#homeNeedInput'),homeNeedBtn=$('#homeNeedBtn');
-  if(homeVoiceBtn)homeVoiceBtn.addEventListener('click',()=>speechToInput(homeNeedInput,homeVoiceBtn));
-  if(homeNeedBtn)homeNeedBtn.addEventListener('click',()=>{const m=homeNeedInput.value.trim();if(!m){homeNeedInput.focus();return}go('chat');setTimeout(()=>ask(m),0)});
-  if(homeNeedInput)homeNeedInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();homeNeedBtn.click()}});
+  const homeVoiceBtn=$('#homeVoiceBtn'),homeNeedInput=$('#homeNeedInput');
+  function sendHomeNeed(){
+    const m=homeNeedInput.value.trim();
+    if(!m){homeNeedInput.focus();return}
+    homeNeedInput.value='';
+    go('chat');
+    setTimeout(()=>ask(m),0);
+  }
+  if(homeVoiceBtn)homeVoiceBtn.addEventListener('click',()=>{
+    if(!('webkitSpeechRecognition' in window||'SpeechRecognition' in window)){alert('Tu navegador no permite dictado por voz.');return}
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition,rec=new SR();
+    rec.lang='es-CL';rec.interimResults=false;rec.maxAlternatives=1;
+    homeVoiceBtn.disabled=true;homeVoiceBtn.textContent='…';
+    rec.onresult=e=>{homeNeedInput.value=e.results[0][0].transcript||''};
+    rec.onerror=()=>{homeVoiceBtn.disabled=false;homeVoiceBtn.textContent='🎙️'};
+    rec.onend=()=>{homeVoiceBtn.disabled=false;homeVoiceBtn.textContent='🎙️';if(homeNeedInput.value.trim())sendHomeNeed()};
+    rec.start();
+  });
+  if(homeNeedInput)homeNeedInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendHomeNeed()}});
   const chatVoiceBtn=$('#chatVoiceBtn');if(chatVoiceBtn)chatVoiceBtn.addEventListener('click',()=>speechToInput($('#chatInput'),chatVoiceBtn));
   $$('.schedule-quick button').forEach(b=>b.addEventListener('click',()=>{const v=b.dataset.schedule||'';$$('.schedule-quick button').forEach(x=>x.classList.toggle('active',x===b));$('#schedule').value=v;if(!v)$('#schedule').focus()}));
 
