@@ -247,6 +247,14 @@
   /* V7.25 · Respeta siempre el atributo hidden.
      Con sesión activa, Crear cuenta / Ingresar desaparecen realmente. */
   [hidden]{display:none !important;}
+
+/* V7.46 · Identidad y ubicación del cliente visibles arriba, sin chat separado */
+.home-client-strip{display:flex;align-items:center;gap:10px;margin:10px 0 8px;padding:9px 11px;border:1px solid var(--line);border-radius:16px;background:#fff;box-shadow:0 5px 16px rgba(18,61,43,.05)}
+.home-client-avatar{width:36px;height:36px;flex:0 0 36px;border-radius:50%;display:grid;place-items:center;background:#e7f2cf;color:var(--forest);font-weight:900}
+.home-client-copy{min-width:0;flex:1}.home-client-copy strong,.home-client-copy span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.home-client-copy strong{font-size:14px}.home-client-copy span{margin-top:1px;font-size:12px;color:var(--muted)}
+.home-client-gps{width:36px;height:36px;flex:0 0 36px;border:0;border-radius:12px;background:#eef6df;font-size:17px}
+.home-client-gps:disabled{opacity:.55}
+
 </style>
 
 </head>
@@ -255,11 +263,18 @@
   <header class="top"><img class="brand-logo" src="/app/assets/logo-llama-a-jaime-final-v534.png" alt="Llama a Jaime"><span class="status-dot" title="Servicio activo"></span></header>
   <main>
     <section class="view active" id="home">
+      <div class="home-client-strip" id="homeClientStrip" hidden>
+        <div class="home-client-avatar" id="homeClientInitial">C</div>
+        <div class="home-client-copy">
+          <strong id="homeClientName">Cliente</strong>
+          <span id="homeClientLocation">📍 Ubicación guardada</span>
+        </div>
+        <button type="button" class="home-client-gps" id="homeClientGps" aria-label="Actualizar ubicación">📍</button>
+      </div>
       <div class="home-ai-hero">
         <h1>¿Qué necesitas?</h1>
         <p>Cuéntaselo a Jaime con tus palabras. La IA te hará las preguntas necesarias y te ayudará a preparar tu solicitud.</p>
         <div class="quick-ai-request"><div class="quick-ai-row"><textarea id="homeNeedInput" maxlength="800" placeholder="Ej.: mi lavadora no centrifuga y hace un ruido raro"></textarea><button class="quick-ai-action" id="homeVoiceBtn" type="button" aria-label="Hablar">🎙️</button></div><button class="quick-ai-send" id="homeNeedBtn" type="button">Buscar a alguien →</button><small class="quick-ai-hint">Escribe o habla como quieras. Jaime ordenará la solicitud por ti.</small></div>
-        <button class="home-ai-button" type="button" data-go="chat">💬 Conversar con Jaime <span aria-hidden="true">→</span></button>
       </div>
 
       <div class="home-services-head">
@@ -456,7 +471,7 @@
       <form class="conversation-compose" id="conversationForm"><input id="conversationInput" maxlength="2000" placeholder="Escribe un mensaje…" autocomplete="off"><button type="submit">Enviar</button></form>
     </div>
   </section>
-  <nav class="nav"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button data-go="chat"><b>✦</b>IA</button><button data-go="request"><b>＋</b>Solicitar</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="status"><b>◷</b>Estado</button></nav>
+  <nav class="nav"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button data-go="request"><b>＋</b>Solicitar</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="status"><b>◷</b>Estado</button></nav>
 </div>
 <script src="https://sdk.mercadopago.com/js/v2"></script>
 <!-- V7.40 · PANELES PLEGABLES + FINALIZAR SOLO TRAS PAGO AUTORIZADO -->
@@ -489,7 +504,7 @@
   const CLIENT_SESSION_KEY='llamaAJaimeClientProfileV1';
   function clientProfile(){try{return JSON.parse(localStorage.getItem(CLIENT_SESSION_KEY)||'null')}catch{return null}}
   function saveClientProfile(profile){localStorage.setItem(CLIENT_SESSION_KEY,JSON.stringify({...profile,updated_at:new Date().toISOString()}));renderClientSession()}
-  function renderClientSession(){const p=clientProfile(),card=$('#clientSessionCard'),fields=$('#clientSessionFields');if(!card||!fields)return;if(!p||!p.nombre){card.hidden=true;fields.hidden=false;return}card.hidden=false;fields.hidden=true;$('#clientSessionName').textContent=p.nombre;$('#clientSessionCommune').textContent='📍 '+(p.comuna||'Ubicación guardada');$('#name').value=p.nombre||'';$('#phone').value=p.telefono||'';$('#email').value=p.email||'';$('#commune').value=p.comuna||'';if(p.latitud!=null&&p.longitud!=null)pendingLocation={latitud:p.latitud,longitud:p.longitud,precision_m:p.precision_m||0};}
+  function renderClientSession(){const p=clientProfile(),card=$('#clientSessionCard'),fields=$('#clientSessionFields'),home=$('#homeClientStrip');if(!card||!fields)return;if(!p||!p.nombre){card.hidden=true;fields.hidden=false;if(home)home.hidden=true;return}card.hidden=false;fields.hidden=true;if(home){home.hidden=false;$('#homeClientName').textContent=p.nombre;$('#homeClientLocation').textContent='📍 '+(p.comuna||'Ubicación guardada');$('#homeClientInitial').textContent=(p.nombre||'C').trim().charAt(0).toUpperCase()}$('#clientSessionName').textContent=p.nombre;$('#clientSessionCommune').textContent='📍 '+(p.comuna||'Ubicación guardada');$('#name').value=p.nombre||'';$('#phone').value=p.telefono||'';$('#email').value=p.email||'';$('#commune').value=p.comuna||'';if(p.latitud!=null&&p.longitud!=null)pendingLocation={latitud:p.latitud,longitud:p.longitud,precision_m:p.precision_m||0};}
   function hydrateClientProfile(){renderClientSession()}
   hydrateClientProfile();
 
@@ -506,6 +521,9 @@
   $('#requestCamera').addEventListener('change',addSelectedPhotos);
 
   function currentPosition(){return new Promise((resolve,reject)=>{if(!('geolocation'in navigator)){reject(new Error('Este dispositivo no permite obtener la ubicación.'));return}navigator.geolocation.getCurrentPosition(position=>resolve({latitud:position.coords.latitude,longitud:position.coords.longitude,precision_m:position.coords.accuracy}),error=>reject(new Error(error.code===1?'Debes permitir el acceso a tu ubicación.':'No pude obtener tu ubicación. Intenta nuevamente.')),{enableHighAccuracy:true,timeout:15000,maximumAge:60000})})}
+  const homeClientGps=$('#homeClientGps');
+  if(homeClientGps)homeClientGps.addEventListener('click',async()=>{const p=clientProfile();if(!p){go('request');return}const original=homeClientGps.textContent;homeClientGps.disabled=true;homeClientGps.textContent='…';try{const loc=await currentPosition();pendingLocation=loc;saveClientProfile({...p,...loc});homeClientGps.textContent='✓';setTimeout(()=>{homeClientGps.textContent='📍'},900)}catch(error){alert(error.message);homeClientGps.textContent=original}finally{homeClientGps.disabled=false}});
+
   $('#requestLocationBtn').addEventListener('click',async()=>{const button=$('#requestLocationBtn'),status=$('#requestLocationStatus');button.disabled=true;status.textContent='Obteniendo ubicación…';try{pendingLocation=await currentPosition();const current=clientProfile()||{};saveClientProfile({...current,nombre:$('#name').value.trim()||current.nombre||'Cliente',telefono:$('#phone').value.trim()||current.telefono||'',email:$('#email').value.trim()||current.email||'',comuna:$('#commune').value.trim()||current.comuna||'Ubicación guardada',...pendingLocation});button.textContent='✓ GPS activo';status.textContent=`Ubicación actualizada · precisión aproximada ±${Math.round(pendingLocation.precision_m||0)} m.`}catch(error){status.textContent=error.message}finally{button.disabled=false}});
 
   function plainAssistantText(content){return String(content||'').replace(/\*\*(.*?)\*\*/gs,'$1').replace(/__(.*?)__/gs,'$1').replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,'$1$2').replace(/`([^`\n]+)`/g,'$1').replace(/^\s{0,3}#{1,6}\s*/gm,'').replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'$1 ($2)').trim()}
