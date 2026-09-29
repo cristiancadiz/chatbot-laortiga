@@ -754,7 +754,9 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         if not match_response.ok:
             app.logger.warning("MATCH DB ERROR %s: %s", match_response.status_code, match_response.text[:500])
             return 0, 0
-        return 1, _send_push(provider["id"], request_row) if notify else 0
+        rows = match_response.json() if match_response.content else []
+        created = 1 if rows else 0
+        return created, (_send_push(provider["id"], request_row) if notify and created else 0)
 
     def _match_request(request_row):
         try:
@@ -790,15 +792,35 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         except Exception as exc:
             app.logger.exception("MOBILE DISPATCH ERROR: %r", exc)
 
-    def _match_provider(provider):
-        """Entrega solicitudes abiertas a quien recién crea su perfil."""
+    def _notify_client_new_provider(request_row, provider):
+        """Avisa al cliente cuando aparece un profesional nuevo y ya verificado para su solicitud."""
         try:
+            provider_name = _clean(provider.get("nombre"), 120) or "un profesional"
+            return _send_custom_push(
+                "nexi_app_push_clientes",
+                "solicitud_id",
+                request_row["id"],
+                "Jaime encontró un profesional",
+                f"{provider_name} está disponible para revisar tu solicitud.",
+                f"/app/?solicitud={request_row.get('public_id') or ''}",
+                f"nuevo-profesional-{request_row['id']}-{provider.get('id')}",
+            )
+        except Exception as exc:
+            app.logger.warning("CLIENT NEW PROVIDER PUSH ERROR: %r", exc)
+            return 0
+
+    def _match_provider(provider):
+        """Cruza un prestador con solicitudes abiertas y avisa al cliente si aparece una opción nueva."""
+        try:
+            # No avisamos al cliente por perfiles todavía pendientes de verificación.
+            if str(provider.get("estado_verificacion") or "").lower() != "verificado":
+                return
             cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
             response = requests.get(
                 f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
                 headers=_db_headers(),
                 params={
-                    "select": "id,public_id,tipo,subtipo,comuna,materiales,telefono,telefono_normalizado,estado,created_at",
+                    "select": "id,public_id,tipo,subtipo,comuna,materiales,telefono,telefono_normalizado,estado,created_at,cliente_latitud,cliente_longitud",
                     "empresa_id": f"eq.{settings['empresa_id']}",
                     "estado": "in.(publicada,revisando)",
                     "created_at": f"gte.{cutoff}",
@@ -809,8 +831,11 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             )
             response.raise_for_status()
             for request_row in (response.json() if response.content else []):
-                if _provider_matches_request(provider, request_row):
-                    _create_match(provider, request_row, notify=False)
+                if not _provider_matches_request(provider, request_row):
+                    continue
+                created, _ = _create_match(provider, request_row, notify=True)
+                if created:
+                    _notify_client_new_provider(request_row, provider)
         except Exception as exc:
             app.logger.exception("PROVIDER BACKFILL ERROR: %r", exc)
 
@@ -943,7 +968,9 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "destinos ni estados. Explica que el valor final lo propone y confirma un prestador. "
             "Nunca pidas claves, datos bancarios ni documentos sensibles. Si existe una urgencia "
             "o riesgo físico, recomienda contactar servicios de emergencia. Cuando ya estén los "
-            "datos esenciales, invita a pulsar 'Crear solicitud'. Responde siempre como texto plano: "
+            "datos esenciales del trabajo, no pidas teléfono, comuna ni dirección de origen si la app ya los tiene guardados. "
+            "No le pidas al usuario pulsar 'Crear solicitud' ni confirmar la publicación: la app continuará automáticamente. "
+            "Responde siempre como texto plano: "
             "no uses Markdown, asteriscos, negritas, encabezados con #, tablas ni bloques de código. "
             "Si necesitas enumerar información, usa frases cortas o guiones simples."
         )
@@ -1011,7 +1038,9 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             draft["fecha_preferida"] = _clean(draft.get("fecha_preferida"), 120)
             draft["materiales"] = _list_clean(draft.get("materiales"), item_limit=120, max_items=30)
             missing = []
-            for key, label in (("nombre", "nombre"), ("telefono", "teléfono"), ("comuna", "comuna"), ("direccion_origen", "dirección"), ("detalles", "detalle del servicio")):
+            # Los datos de identidad y ubicación pertenecen al perfil/GPS de la app.
+            # Jaime solo debe pedir información necesaria para entender el trabajo.
+            for key, label in (("detalles", "detalle del servicio"),):
                 if not draft.get(key):
                     missing.append(label)
             if draft["tipo"] == "belleza" and draft.get("subtipo") not in BEAUTY_TYPES:
@@ -1060,8 +1089,15 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return _json(app, {"ok": False, "error": "Selecciona el profesional de salud que necesitas."}, 400)
         if service_type == "limpieza" and subtype and subtype not in CLEANING_TYPES:
             return _json(app, {"ok": False, "error": "Selecciona un tipo de limpieza válido."}, 400)
-        if not name or not commune or not origin or not details:
-            return _json(app, {"ok": False, "error": "Completa nombre, comuna, dirección y detalle."}, 400)
+        if not name or not details:
+            return _json(app, {"ok": False, "error": "Falta el nombre o el detalle del servicio."}, 400)
+        if not location and (not commune or not origin):
+            return _json(app, {"ok": False, "error": "Activa tu ubicación para buscar profesionales cerca de ti."}, 400)
+        # Con GPS no obligamos al cliente a escribir su dirección.
+        if location and not origin:
+            origin = "Ubicación GPS compartida"
+        if location and not commune:
+            commune = "Ubicación GPS"
         if not _valid_phone(phone):
             return _json(app, {"ok": False, "error": "Ingresa un teléfono válido."}, 400)
         if not _valid_email(email):
@@ -4018,6 +4054,26 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             if not result.get("ok"):
                 return _json(app, {"ok": False, "error": result.get("error") or "No pude aplicar la acción."}, 409)
 
+            if action in {"verificar", "reactivar"}:
+                try:
+                    provider_response = requests.get(
+                        f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
+                        headers=_db_headers(),
+                        params={
+                            "select": "*",
+                            "id": f"eq.{provider_uuid}",
+                            "empresa_id": f"eq.{admin['empresa_id']}",
+                            "limit": "1",
+                        },
+                        timeout=settings["supabase_timeout"],
+                    )
+                    provider_response.raise_for_status()
+                    provider_rows = provider_response.json() if provider_response.content else []
+                    if provider_rows:
+                        Thread(target=_match_provider, args=(provider_rows[0],), daemon=True).start()
+                except Exception as exc:
+                    app.logger.warning("PROVIDER REMATCH AFTER ADMIN ACTION ERROR: %r", exc)
+
             return _json(app, {"ok": True, "resultado": result})
         except requests.RequestException as exc:
             app.logger.exception("ADMIN PROVIDER ACTION ERROR: %r", exc)
@@ -4131,6 +4187,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     "especialidades": provider.get("especialidades") or [],
                     "comunas": provider.get("comunas") or [],
                     "radio_km": provider.get("radio_km"),
+                    "distancia_km": candidate.get("distancia_km"),
                     "verificado": True,
                     "verificado_at": provider.get("verificado_at"),
                     "miembro_desde": provider.get("created_at"),
