@@ -66,6 +66,9 @@
 .provider-quick-actions{display:flex;align-items:center;gap:5px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}.provider-quick-actions::-webkit-scrollbar{display:none}
 .provider-quick-actions .provider-mini-action{white-space:nowrap;font-size:10px;padding:6px 8px;min-height:28px}
 .provider-quick-actions .provider-exit{margin-left:auto}
+/* V7.43 · cabecera compacta y perfil del prestador */
+.provider-summary .row{gap:8px!important}.provider-summary-main{display:flex;align-items:center;gap:9px;min-width:0;flex:1}.provider-summary-avatar{width:42px;height:42px;flex:0 0 42px;border-radius:50%;overflow:hidden;background:#edf2ef;display:grid;place-items:center;font-weight:900;font-size:17px;cursor:pointer}.provider-summary-avatar img{width:100%;height:100%;object-fit:cover}.provider-summary-copy{min-width:0}.provider-summary-copy h3{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.provider-summary-copy #providerCode{display:block;font-size:10px;color:var(--muted)}.provider-summary-copy .security-status{font-size:10px}.provider-profile-panel{margin:0 0 10px;padding:10px;border:1px solid var(--line);border-radius:16px;background:#fff}.provider-profile-panel[hidden]{display:none!important}.provider-profile-menu{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:9px}.provider-profile-menu button{min-height:38px;border-radius:12px;font-size:11px}.provider-profile-panel .profile-photo-card{margin:0 0 8px!important}.provider-profile-panel .docs-card{margin:0!important}.provider-quick-actions{justify-content:space-between}.provider-quick-actions #notifyBtn,.provider-quick-actions #providerProfileQuick{flex:1}.provider-quick-actions .provider-exit{display:none!important}@media(max-width:560px){#provider .page-head{padding-top:8px;margin-bottom:8px}#provider .page-head h1{font-size:20px}#provider .page-head p{display:none}#provider .provider-summary{padding:9px 10px!important}.provider-summary-avatar{width:38px;height:38px;flex-basis:38px}.provider-summary-copy .security-status{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px}.provider-profile-menu{grid-template-columns:1fr 1fr}}
+
 @media(max-width:420px){
   .provider-quick-actions{gap:4px}
   .provider-quick-actions .provider-mini-action{font-size:9px;padding:5px 6px}
@@ -322,12 +325,10 @@
 
     <section class="view" id="provider">
       <div class="page-head"><h1>Modo prestador</h1><p>Ofrece tus servicios y recibe oportunidades según tu cobertura.</p></div>
-      <div class="provider-summary" id="providerSummary"><div class="row"><div><h3 id="providerName">Prestador</h3><span id="providerCode"></span><span class="security-status" id="providerSecurityStatus">Identidad pendiente de revisión</span></div><button class="availability" id="availabilityBtn">Activado</button></div></div>
+      <div class="provider-summary" id="providerSummary"><div class="row"><div class="provider-summary-main"><div class="provider-summary-avatar" id="providerSummaryAvatar" title="Abrir perfil"><span id="providerSummaryAvatarInitial">J</span><img id="providerSummaryAvatarImage" alt="Foto del prestador" hidden></div><div class="provider-summary-copy"><h3 id="providerName">Prestador</h3><span id="providerCode"></span><span class="security-status" id="providerSecurityStatus">Identidad pendiente de revisión</span></div></div><button class="availability" id="availabilityBtn">Activado</button></div></div>
       <div class="provider-quick-actions" id="providerQuickActions">
-        <button class="notify-btn provider-mini-action" id="notifyBtn" hidden>🔔 Notificaciones</button>
-        <button class="secondary provider-mini-action" id="providerPhotoQuick" type="button" hidden>📷 Foto</button>
-        <button class="secondary provider-mini-action" id="providerDocsQuick" type="button" hidden>📄 Ver documentos</button>
-        <button class="secondary provider-mini-action" id="providerMPQuick" type="button" hidden>💳 Mercado Pago</button>
+        <button class="notify-btn provider-mini-action" id="notifyBtn" hidden>🔔 Activar notificaciones</button>
+        <button class="secondary provider-mini-action" id="providerProfileQuick" type="button" hidden>👤 Perfil</button>
         <button class="secondary provider-mini-action provider-exit" id="providerLogout" type="button" hidden>Salir</button>
       </div>
       <div class="access-switch" id="providerAccessSwitch"><button class="toggle active" type="button" data-provider-access="register">Crear cuenta</button><button class="toggle" type="button" data-provider-access="login">Ingresar</button></div>
@@ -358,6 +359,13 @@
       <div class="form-card" id="providerReset" hidden>
         <form id="providerResetForm"><div class="page-head" style="padding-top:0"><h1 style="font-size:22px">Crear nueva clave</h1><p>Tu nueva clave debe tener exactamente 6 números.</p></div><div class="field"><label for="providerResetPin">Nueva clave</label><input id="providerResetPin" required type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="new-password"></div><div class="field"><label for="providerResetPin2">Repite la nueva clave</label><input id="providerResetPin2" required type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="new-password"></div><button class="primary" id="providerResetSubmit">Cambiar clave</button><div class="notice" id="providerResetNotice"></div></form>
       </div>
+      <section class="provider-profile-panel" id="providerProfilePanel" hidden>
+        <div class="provider-profile-menu">
+          <button class="secondary" id="providerPhotoQuick" type="button">📷 Editar foto</button>
+          <button class="secondary" id="providerDocsQuick" type="button">📄 Documentos</button>
+          <button class="secondary" id="providerMPQuick" type="button">💳 Mercado Pago</button>
+          <button class="secondary" id="providerLogoutProfile" type="button">↪ Salir</button>
+        </div>
       <section class="profile-photo-card" id="providerPhotoCard" hidden>
         <div class="profile-photo-head">
           <div class="profile-photo-preview" id="providerPhotoPreview"><span id="providerPhotoInitial">J</span><img id="providerPhotoImage" alt="Foto de perfil" hidden></div>
@@ -374,6 +382,7 @@
 <div class="notice" id="providerDocsNotice"></div>
 <p class="muted-note">PDF, JPG, PNG o WebP · máximo 10 MB. Tus documentos no son públicos.</p></div>
 </section>
+      </section>
 <div id="providerDashboard" hidden><div class="section-title"><h2>Oportunidades</h2><button class="chip" id="refreshOpportunities">Actualizar</button></div>
 
 <div class="provider-job-filters" id="providerJobFilters" aria-label="Filtrar oportunidades">
@@ -920,10 +929,10 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     $('#providerDashboard').hidden=true;
     $('#notifyBtn').hidden=true;
     $('#providerLogout').hidden=true;
-    $('#providerPhotoQuick').hidden=true;
-    $('#providerPhotoQuick').textContent='📷 Foto';
-    $('#providerDocsQuick').hidden=true;
-    $('#providerMPQuick').hidden=true;
+    $('#providerProfileQuick').hidden=true;
+    $('#providerProfilePanel').hidden=true;
+    $('#providerPhotoQuick').textContent='📷 Editar foto';
+    
     $('#providerDocumentsCard').hidden=true;
     $('#providerPhotoCard').hidden=true;
     $('#providerDocuments').innerHTML='';
@@ -995,22 +1004,27 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
 
   async function loadProviderPhoto(){
     const auth=providerAuth(),card=$('#providerPhotoCard'),img=$('#providerPhotoImage'),initial=$('#providerPhotoInitial'),del=$('#providerPhotoDelete');
+    const summaryImg=$('#providerSummaryAvatarImage'),summaryInitial=$('#providerSummaryAvatarInitial');
     if(!auth){card.hidden=true;return}
-    card.hidden=false;initial.textContent=((auth.nombre||'J').trim()[0]||'J').toUpperCase();
+    card.hidden=false;initial.textContent=((auth.nombre||'J').trim()[0]||'J').toUpperCase();summaryInitial.textContent=initial.textContent;
     try{
       const r=await fetch(`/app/api/prestadores/foto-perfil?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`,{headers,cache:'no-store'}),d=await r.json();
       if(!r.ok)throw new Error(d.error||'No pude consultar tu foto');
-      if(d.foto&&d.foto.url){img.src=d.foto.url;img.hidden=false;initial.hidden=true;del.hidden=false;$('#providerPhotoChoose').textContent='📷 Cambiar foto'}
-      else{img.removeAttribute('src');img.hidden=true;initial.hidden=false;del.hidden=true;$('#providerPhotoChoose').textContent='📷 Agregar foto'}
+      if(d.foto&&d.foto.url){img.src=d.foto.url;img.hidden=false;initial.hidden=true;summaryImg.src=d.foto.url;summaryImg.hidden=false;summaryInitial.hidden=true;del.hidden=false;$('#providerPhotoChoose').textContent='📷 Cambiar foto'}
+      else{img.removeAttribute('src');img.hidden=true;initial.hidden=false;summaryImg.removeAttribute('src');summaryImg.hidden=true;summaryInitial.hidden=false;del.hidden=true;$('#providerPhotoChoose').textContent='📷 Agregar foto'}
     }catch(err){const n=$('#providerPhotoNotice');n.className='notice error';n.textContent=err.message;n.style.display='block'}
   }
+  function setProviderProfileOpen(open){
+    const panel=$('#providerProfilePanel'),btn=$('#providerProfileQuick');
+    if(!panel||!btn)return;
+    panel.hidden=!open;btn.textContent=open?'✕ Cerrar perfil':'👤 Perfil';
+    if(open){$('#providerPhotoCard').hidden=false;$('#providerDocumentsCard').hidden=true;panel.scrollIntoView({behavior:'smooth',block:'nearest'});}
+  }
+  $('#providerProfileQuick').addEventListener('click',()=>setProviderProfileOpen($('#providerProfilePanel').hidden));
+  $('#providerSummaryAvatar').addEventListener('click',()=>setProviderProfileOpen(true));
   $('#providerPhotoQuick').addEventListener('click',()=>{
-    const card=$('#providerPhotoCard');
-    if(!card)return;
-    const opening=card.hidden;
-    card.hidden=!opening;
-    $('#providerPhotoQuick').textContent=opening?'✕ Cerrar foto':'📷 Foto';
-    if(opening)card.scrollIntoView({behavior:'smooth',block:'nearest'});
+    $('#providerPhotoCard').hidden=false;$('#providerDocumentsCard').hidden=true;
+    $('#providerPhotoCard').scrollIntoView({behavior:'smooth',block:'nearest'});
   });
 
   $('#providerPhotoChoose').addEventListener('click',()=>$('#providerPhotoInput').click());
@@ -1030,6 +1044,8 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
   });
 
   
+  $('#providerLogoutProfile').addEventListener('click',()=>$('#providerLogout').click());
+
   $('#providerMPQuick').addEventListener('click',async()=>{
     let auth=providerAuth();if(!auth)return;
     const btn=$('#providerMPQuick'),original=btn.textContent;
@@ -1067,6 +1083,7 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
       if(!card)return;
       const abrir=card.hidden;
       card.hidden=!abrir;
+      if(abrir)$('#providerPhotoCard').hidden=true;
       if(abrir){
         setProviderDocsOpen(true);
         card.scrollIntoView({behavior:'smooth',block:'start'});
@@ -1158,10 +1175,9 @@ async function loadProvider(){
     }
 
     $('#notifyBtn').hidden=false;
-    $('#providerPhotoQuick').hidden=false;
-    $('#providerPhotoQuick').textContent='📷 Foto';
-    $('#providerDocsQuick').hidden=false;
-    $('#providerMPQuick').hidden=false;
+    $('#providerProfileQuick').hidden=false;
+    $('#providerProfileQuick').textContent='👤 Perfil';
+    $('#providerProfilePanel').hidden=true;
     $('#providerMPQuick').textContent=auth.mercadopago_conectado?'💳 MP conectado · Desconectar':'💳 Conectar MP';
     $('#providerLogout').hidden=false;
     $('#providerDocumentsCard').hidden=true;
