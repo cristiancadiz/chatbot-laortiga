@@ -4303,6 +4303,32 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                         "cinco_estrellas": int(rep_data.get("cinco_estrellas") or 0),
                     }
 
+                # Últimos comentarios públicos del prestador. No se expone identidad del cliente.
+                public_reviews = []
+                reviews_response = requests.get(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_evaluaciones_prestador",
+                    headers=_db_headers(),
+                    params={
+                        "select": "calificacion,comentario,created_at",
+                        "prestador_id": f"eq.{provider_id}",
+                        "comentario": "not.is.null",
+                        "order": "created_at.desc",
+                        "limit": "5",
+                    },
+                    timeout=settings["supabase_timeout"],
+                )
+                reviews_response.raise_for_status()
+                review_rows = reviews_response.json() if reviews_response.content else []
+                public_reviews = [
+                    {
+                        "calificacion": int(row.get("calificacion") or 0),
+                        "comentario": _clean(row.get("comentario"), 1000),
+                        "created_at": row.get("created_at"),
+                    }
+                    for row in review_rows
+                    if _clean(row.get("comentario"), 1000)
+                ]
+
                 jobs_completed = 0
                 jobs_response = requests.post(
                     f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_resumen_trabajos",
@@ -4332,6 +4358,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     "foto_url": photo_url,
                     "trabajos_completados": jobs_completed,
                     "reputacion": reputation,
+                    "comentarios": public_reviews,
                 })
 
             output.sort(key=lambda p: (
@@ -4465,6 +4492,32 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     "cinco_estrellas": int(reputation_data.get("cinco_estrellas") or 0),
                 }
 
+            # Últimos comentarios públicos del prestador. La ficha no revela quién evaluó.
+            public_reviews = []
+            reviews_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_evaluaciones_prestador",
+                headers=_db_headers(),
+                params={
+                    "select": "calificacion,comentario,created_at",
+                    "prestador_id": f"eq.{provider.get('id')}",
+                    "comentario": "not.is.null",
+                    "order": "created_at.desc",
+                    "limit": "5",
+                },
+                timeout=settings["supabase_timeout"],
+            )
+            reviews_response.raise_for_status()
+            review_rows = reviews_response.json() if reviews_response.content else []
+            public_reviews = [
+                {
+                    "calificacion": int(row.get("calificacion") or 0),
+                    "comentario": _clean(row.get("comentario"), 1000),
+                    "created_at": row.get("created_at"),
+                }
+                for row in review_rows
+                if _clean(row.get("comentario"), 1000)
+            ]
+
             jobs_completed = 0
             jobs_response = requests.post(
                 f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_resumen_trabajos",
@@ -4492,6 +4545,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 "foto_url": profile_photo_url,
                 "trabajos_completados": jobs_completed,
                 "reputacion": reputation,
+                "comentarios": public_reviews,
             }
             return _json(app, {"ok": True, "prestador": profile})
         except requests.RequestException as exc:
