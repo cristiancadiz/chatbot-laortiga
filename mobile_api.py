@@ -2597,6 +2597,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     "grant_type": "authorization_code",
                     "code": code,
                     "redirect_uri": _mp_redirect_uri(),
+                    "state": state,
                 },
                 timeout=20,
             )
@@ -2605,9 +2606,23 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             access_token = str(token_data.get("access_token") or "").strip()
             refresh_token = str(token_data.get("refresh_token") or "").strip()
             user_id = str(token_data.get("user_id") or "").strip()
+            scope = str(token_data.get("scope") or "").strip().lower()
+            live_mode = token_data.get("live_mode")
             expires_in = int(token_data.get("expires_in") or 0)
-            if not access_token or not user_id:
-                raise RuntimeError("Mercado Pago no devolvió credenciales del vendedor.")
+
+            # Marketplace: exigir una autorización OAuth real del vendedor.
+            scope_parts = set(scope.split())
+            if not access_token or not user_id or not refresh_token:
+                raise RuntimeError("Mercado Pago no devolvió credenciales OAuth completas del vendedor.")
+            if "write" not in scope_parts:
+                raise RuntimeError("Mercado Pago no otorgó permiso de escritura al Marketplace.")
+            if live_mode is False:
+                raise RuntimeError("Mercado Pago devolvió credenciales de prueba; se requieren credenciales productivas.")
+
+            app.logger.info(
+                "MP OAUTH OK provider=%s mp_user_id=%s scope=%s live_mode=%s",
+                provider["id"], user_id, scope, live_mode
+            )
 
             token_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat() if expires_in else None
             patch = requests.patch(
@@ -2812,7 +2827,19 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             mp=requests.post("https://api.mercadopago.com/v1/payments",headers=h,json=payload,timeout=25)
             data=mp.json() if mp.content else {}
             if not mp.ok:
-                return _json(app,{"ok":False,"error":str(data.get("message") or data.get("error") or "Mercado Pago rechazó la autorización.")},409 if mp.status_code<500 else 502)
+                mp_message = str(data.get("message") or data.get("error") or "Mercado Pago rechazó la autorización.")
+                mp_cause = data.get("cause") if isinstance(data.get("cause"), list) else []
+                mp_codes = {str(item.get("code")) for item in mp_cause if isinstance(item, dict)}
+                if "2059" in mp_codes or "application_fee" in mp_message.lower():
+                    app.logger.warning(
+                        "MP MARKETPLACE TOKEN REJECTED provider=%s mp_user_id=%s status=%s",
+                        provider_id, seller.get("mp_user_id"), mp.status_code
+                    )
+                    return _json(app, {
+                        "ok": False,
+                        "error": "Mercado Pago rechazó la comisión Marketplace. Desconecta y vuelve a conectar la cuenta del prestador para renovar su autorización OAuth."
+                    }, 409)
+                return _json(app,{"ok":False,"error":mp_message},409 if mp.status_code<500 else 502)
             payment_id=str(data.get("id") or ""); status=str(data.get("status") or "").lower(); detail=str(data.get("status_detail") or "").lower()
             if status=="authorized" and payment_id:
                 st=requests.post(f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_actualizar_estado_pago",headers=_db_headers(),
