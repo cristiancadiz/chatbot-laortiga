@@ -657,7 +657,13 @@
       const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');
       const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));latestCreatedRequest=d.solicitud;
       $('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent='Tu solicitud fue creada con los datos que entregaste a Jaime.';$('#requestCard').style.display='none';$('#trackingCard').style.display='none';$('#providerChoice').style.display='none';
-      setTimeout(()=>{go('home');loadAvailableProviders();startProviderSearchPolling()},120);$('#providerBrowser').style.display='none';$('#providerCandidates').innerHTML='';
+      setTimeout(async()=>{
+        stopJaimeVoice();
+        const overlay=$('#jaimeReadyOverlay');if(overlay)overlay.style.display='block';
+        await loadAvailableProviders(true);
+        speakJaime('OK. Ahora puedes seleccionar uno de estos profesionales cercanos o puedes esperar que encuentre otro.');
+        startProviderSearchPolling();
+      },180);$('#providerBrowser').style.display='none';$('#providerCandidates').innerHTML='';
       go('request');
      }catch(err){alert(err.message);if(button){button.disabled=false;button.textContent='Enviar solicitud'}}
   }
@@ -733,7 +739,7 @@
     }
   }
 
-  async function loadAvailableProviders(){
+  async function loadAvailableProviders(showReady=false){
     const req=latestCreatedRequest;if(!req)return alert('No encontré la solicitud recién creada. Revísala en Mis solicitudes.');
     const browser=$('#providerBrowser'),box=$('#providerCandidates');browser.style.display='block';box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando profesionales compatibles…</div>';
     try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/prestadores-disponibles?token=${encodeURIComponent(req.token)}`,{headers,cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude cargar los profesionales');if(d.ya_asignada){box.innerHTML='<div class="empty">Esta solicitud ya tiene un profesional asignado.</div>';return}renderAvailableProviders(Array.isArray(d.prestadores)?d.prestadores:[])}catch(err){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}
@@ -753,7 +759,10 @@
           addMessage('Encontré un nuevo profesional disponible para tu solicitud.','assistant',true);
         }
         providerSearchCount=items.length;
-        renderAvailableProviders(items);
+        renderAvailableProviders(items);if(showReady){
+        const src=$('#providerCandidates'),dst=$('#jaimeReadyProviders');
+        if(src&&dst){dst.innerHTML=src.innerHTML;dst.querySelectorAll('[data-provider-id]').forEach(btn=>btn.addEventListener('click',()=>{const p=items.find(x=>x.id===btn.dataset.providerId);if(p)chooseAvailableProvider(p,btn)}))}
+      }
         if(items.length)$('#providerBrowser').style.display='block';
       }catch(_){}
     },15000);
@@ -776,6 +785,12 @@
       button.textContent='✓ Avisos activados';
     }catch(err){alert(err.message);button.disabled=false;button.textContent=original}
   }
+
+  const jaimeWaitMoreBtn=$('#jaimeWaitMoreBtn');
+  if(jaimeWaitMoreBtn)jaimeWaitMoreBtn.addEventListener('click',()=>{
+    const overlay=$('#jaimeReadyOverlay');if(overlay)overlay.style.display='none';
+    go('home');loadAvailableProviders();startProviderSearchPolling();
+  });
 
   async function chooseAvailableProvider(provider,button){
     const req=latestCreatedRequest;if(!req)return;if(!confirm(`¿Solicitar este trabajo a ${provider.nombre||'este profesional'}?`))return;const original=button.textContent;button.disabled=true;button.textContent='Asignando…';
@@ -1473,5 +1488,14 @@ async function loadProvider(){
 
   // V7.33.1: Documentación queda compacta en la barra superior; la tarjeta se abre solo al tocar el botón.
 </script>
+<div id="jaimeReadyOverlay" style="display:none;position:fixed;inset:0;z-index:9999;background:#fff;padding:28px 20px;overflow:auto">
+  <div style="max-width:620px;margin:10vh auto 0;text-align:center">
+    <div style="font-size:48px;margin-bottom:12px">✓</div>
+    <h2 style="margin:0 0 10px">OK, tu solicitud está lista</h2>
+    <p style="margin:0 0 24px">Ahora puedes seleccionar uno de estos profesionales cercanos o esperar a que Jaime encuentre otro.</p>
+    <div id="jaimeReadyProviders"></div>
+    <button type="button" id="jaimeWaitMoreBtn" class="secondary" style="margin-top:18px">Esperar que Jaime encuentre otro</button>
+  </div>
+</div>
 </body>
 </html>
