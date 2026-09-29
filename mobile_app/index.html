@@ -544,13 +544,28 @@
   $$('[data-go]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.go)));
   $$('[data-start]').forEach(b=>b.addEventListener('click',()=>{ setService(b.dataset.start); go('request'); }));
 
-  function setService(value){service=SERVICE_META[value]?value:'otro';$('#serviceSelect').value=service;const flete=service==='flete',reciclaje=service==='reciclaje',belleza=service==='belleza',salud=service==='salud',limpieza=service==='limpieza';$('#destinationField').hidden=!flete;$('#destination').required=flete;$('#materialsField').hidden=!reciclaje;$('#beautyServiceField').hidden=!belleza;$('#beautyService').required=belleza;$('#healthServiceField').hidden=!salud;$('#healthService').required=salud;$('#cleaningServiceField').hidden=!limpieza;$('#detailsLabel').textContent=flete?'¿Qué necesitas trasladar?':reciclaje?'¿Qué materiales necesitas retirar?':belleza?'Cuéntanos los detalles y si prefieres domicilio o local':salud?'Cuéntanos qué atención necesitas y si la prefieres a domicilio u online':limpieza&&$('#cleaningService').value==='limpieza_zapatillas'?'Cuéntanos sobre las zapatillas':'Describe lo que necesitas';$('#details').placeholder=limpieza&&$('#cleaningService').value==='limpieza_zapatillas'?'Ej.: limpieza de un par de zapatillas blancas de cuero…':SERVICE_META[service].prompt;}
-  $('#cleaningService').addEventListener('change',()=>setService(service));
-  $('#serviceSelect').addEventListener('change',e=>setService(e.target.value));
+  function setService(value){
+    service=SERVICE_META[value]?value:'otro';
+    const serviceSelect=$('#serviceSelect');if(serviceSelect)serviceSelect.value=service;
+    const flete=service==='flete',reciclaje=service==='reciclaje',salud=service==='salud',limpieza=service==='limpieza';
+    const destinationField=$('#destinationField'),destination=$('#destination'),materialsField=$('#materialsField');
+    const healthField=$('#healthServiceField'),health=$('#healthService'),cleaningField=$('#cleaningServiceField');
+    if(destinationField)destinationField.hidden=!flete;
+    if(destination)destination.required=flete;
+    if(materialsField)materialsField.hidden=!reciclaje;
+    if(healthField)healthField.hidden=!salud;
+    if(health)health.required=salud;
+    if(cleaningField)cleaningField.hidden=!limpieza;
+    const detailsLabel=$('#detailsLabel'),details=$('#details'),cleaning=$('#cleaningService');
+    if(detailsLabel)detailsLabel.textContent=flete?'¿Qué necesitas trasladar?':reciclaje?'¿Qué materiales necesitas retirar?':salud?'Cuéntanos qué atención necesitas y si la prefieres a domicilio u online':limpieza&&cleaning?.value==='limpieza_zapatillas'?'Cuéntanos sobre las zapatillas':'Describe lo que necesitas';
+    if(details)details.placeholder=limpieza&&cleaning?.value==='limpieza_zapatillas'?'Ej.: limpieza de un par de zapatillas blancas de cuero…':(SERVICE_META[service]?.prompt||'Describe lo que necesitas');
+  }
+  if($('#cleaningService'))$('#cleaningService').addEventListener('change',()=>setService(service));
+  if($('#serviceSelect'))$('#serviceSelect').addEventListener('change',e=>setService(e.target.value));
 
   function renderPhotoPreview(){const box=$('#photoPreview');box.innerHTML='';requestPhotos.forEach((file,index)=>{const item=document.createElement('div'),img=document.createElement('img'),remove=document.createElement('button'),url=URL.createObjectURL(file);item.className='photo-item';img.src=url;img.alt=`Foto ${index+1}`;img.onload=()=>URL.revokeObjectURL(url);remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Eliminar foto');remove.addEventListener('click',()=>{requestPhotos.splice(index,1);renderPhotoPreview()});item.append(img,remove);box.append(item)})}
   function addSelectedPhotos(event){const selected=[...event.target.files],available=5-requestPhotos.length;if(selected.length>available)alert(`Solo puedes agregar ${available} foto${available===1?'':'s'} más.`);for(const file of selected.slice(0,available)){if(!['image/jpeg','image/png','image/webp'].includes(file.type)){alert(`${file.name}: formato no compatible.`);continue}if(file.size>8*1024*1024){alert(`${file.name}: supera el máximo de 8 MB.`);continue}requestPhotos.push(file)}event.target.value='';renderPhotoPreview()}
-  $('#requestCamera').addEventListener('change',addSelectedPhotos);
+  if($('#requestCamera'))$('#requestCamera').addEventListener('change',addSelectedPhotos);
 
   async function communeFromCoordinates(lat,lon){
     try{
@@ -687,7 +702,7 @@
       providerSearchCount=-1;
       go('request');
       const overlay=$('#jaimeReadyOverlay');
-      if(overlay)overlay.style.display='block';
+      if(overlay){overlay.style.display='block';overlay.style.pointerEvents='auto'};
       const ready=$('#jaimeReadyProviders');
       if(ready)ready.innerHTML='<div class="empty"><span class="spinner"></span> Buscando profesionales cerca de ti…</div>';
       speakJaime('OK. Tu solicitud está lista. Ahora puedes seleccionar uno de estos profesionales cercanos o puedes esperar que encuentre otro.');
@@ -743,6 +758,9 @@
     };
     try{rec.start()}catch(e){activeSpeechRecognition=null;button.classList.remove('listening');button.textContent='🎙️';alert('No pude iniciar el micrófono. Intenta nuevamente.')}
   }
+
+  window.addEventListener('error',e=>{console.error('LLAMA A JAIME UI ERROR',e.error||e.message);});
+  window.addEventListener('unhandledrejection',e=>{console.error('LLAMA A JAIME PROMISE ERROR',e.reason);});
 
   const homeVoiceBtn=$('#homeVoiceBtn'),homeNeedInput=$('#homeNeedInput');
 
@@ -802,7 +820,7 @@
   $('#chatForm').addEventListener('submit',e=>{e.preventDefault();const m=$('#chatInput').value.trim();if(!m)return;$('#chatInput').value='';ask(m)});
   $$('.chips .chip').forEach(b=>b.addEventListener('click',()=>ask(b.textContent)));
 
-  $('#requestForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submitRequest'),note=$('#formNotice');btn.disabled=true;btn.innerHTML='<span class="spinner"></span> Publicando';note.style.display='none';const materials=$$('#requestMaterials input:checked').map(x=>x.value);const profile=clientProfile()||{};const nombre=($('#name').value||profile.nombre||'').trim(),telefono=(profile.telefono||$('#phone').value||'').trim(),email=($('#email').value||profile.email||'').trim(),comuna=($('#commune').value||profile.comuna||'').trim();if(!pendingLocation&&profile.latitud!=null&&profile.longitud!=null)pendingLocation={latitud:profile.latitud,longitud:profile.longitud,precision_m:profile.precision_m||0};if(!pendingLocation){note.textContent='Activa tu ubicación GPS antes de publicar la solicitud.';note.className='notice error';note.style.display='block';btn.disabled=false;btn.textContent='Publicar solicitud';return}if(!nombre||!telefono||!comuna){note.textContent='Completa nombre, teléfono y comuna la primera vez.';note.className='notice error';note.style.display='block';btn.disabled=false;btn.textContent='Publicar solicitud';return}saveClientProfile({nombre,telefono,email,comuna,...pendingLocation});const payload={tipo:service,subtipo:service==='belleza'?$('#beautyService').value:(service==='salud'?$('#healthService').value:(service==='limpieza'?$('#cleaningService').value:'')),nombre,telefono,email,comuna,direccion_origen:'Ubicación GPS',direccion_destino:$('#destination').value,detalles:$('#details').value,materiales:materials,fecha_preferida:$('#schedule').value,acepta_terminos:$('#requestConsent').checked,acepta_privacidad:$('#requestConsent').checked,...pendingLocation};
+  $('#requestForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submitRequest'),note=$('#formNotice');btn.disabled=true;btn.innerHTML='<span class="spinner"></span> Publicando';note.style.display='none';const materials=$$('#requestMaterials input:checked').map(x=>x.value);const profile=clientProfile()||{};const nombre=($('#name').value||profile.nombre||'').trim(),telefono=(profile.telefono||$('#phone').value||'').trim(),email=($('#email').value||profile.email||'').trim(),comuna=($('#commune').value||profile.comuna||'').trim();if(!pendingLocation&&profile.latitud!=null&&profile.longitud!=null)pendingLocation={latitud:profile.latitud,longitud:profile.longitud,precision_m:profile.precision_m||0};if(!pendingLocation){note.textContent='Activa tu ubicación GPS antes de publicar la solicitud.';note.className='notice error';note.style.display='block';btn.disabled=false;btn.textContent='Publicar solicitud';return}if(!nombre||!telefono||!comuna){note.textContent='Completa nombre, teléfono y comuna la primera vez.';note.className='notice error';note.style.display='block';btn.disabled=false;btn.textContent='Publicar solicitud';return}saveClientProfile({nombre,telefono,email,comuna,...pendingLocation});const payload={tipo:service,subtipo:service==='belleza'?($('#beautyService')?.value||''):(service==='salud'?$('#healthService').value:(service==='limpieza'?$('#cleaningService').value:'')),nombre,telefono,email,comuna,direccion_origen:'Ubicación GPS',direccion_destino:$('#destination').value,detalles:$('#details').value,materiales:materials,fecha_preferida:$('#schedule').value,acepta_terminos:$('#requestConsent').checked,acepta_privacidad:$('#requestConsent').checked,...pendingLocation};
     try{const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));let photoWarning='',uploadedCount=requestPhotos.length;if(requestPhotos.length){btn.innerHTML='<span class="spinner"></span> Subiendo fotos';const form=new FormData();form.append('token',d.solicitud.token);requestPhotos.forEach(file=>form.append('fotos',file,file.name));try{const photoResponse=await fetch(`/app/api/solicitudes/${encodeURIComponent(d.solicitud.codigo)}/fotos`,{method:'POST',headers:{'X-App-Session':session},body:form});const photoData=await photoResponse.json();if(!photoResponse.ok)throw new Error(photoData.error||'No pude subir las fotos')}catch(photoError){photoWarning='La solicitud quedó publicada, pero algunas fotos no se pudieron guardar. Puedes continuar igualmente.'}}$('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent=photoWarning||(uploadedCount?`${uploadedCount} foto${uploadedCount===1?'':'s'} guardada${uploadedCount===1?'':'s'} de forma privada.`:'Guarda este código para consultar el estado.');latestCreatedRequest=d.solicitud;requestPhotos=[];renderPhotoPreview();$('#requestLocationBtn').textContent='✓ GPS activo';$('#requestLocationStatus').textContent='Ubicación guardada para tu próxima solicitud. Puedes actualizarla cuando quieras.';renderClientSession();$('#requestCard').style.display='none';$('#trackingCard').style.display='block';$('#providerChoice').style.display='block';$('#providerBrowser').style.display='none';$('#providerCandidates').innerHTML='';}
     catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{btn.disabled=false;btn.textContent='Publicar solicitud'}
   });
@@ -906,7 +924,7 @@
 
   const jaimeWaitMoreBtn=$('#jaimeWaitMoreBtn');
   if(jaimeWaitMoreBtn)jaimeWaitMoreBtn.addEventListener('click',()=>{
-    const overlay=$('#jaimeReadyOverlay');if(overlay)overlay.style.display='none';
+    const overlay=$('#jaimeReadyOverlay');if(overlay){overlay.style.display='none';overlay.style.pointerEvents='none'};
     go('home');loadAvailableProviders();startProviderSearchPolling();
   });
 
@@ -919,7 +937,7 @@
       const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude asignar al profesional');
       if(providerSearchTimer){clearInterval(providerSearchTimer);providerSearchTimer=null}
       $('#providerChoice').style.display='none';
-      const overlay=$('#jaimeReadyOverlay');if(overlay)overlay.style.display='none';
+      const overlay=$('#jaimeReadyOverlay');if(overlay){overlay.style.display='none';overlay.style.pointerEvents='none'};
       button.textContent='✓';
       await openConversation('cliente',{public_id:req.codigo,token:req.token});
     }catch(err){
@@ -1611,14 +1629,41 @@ async function loadProvider(){
 
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
   $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
-  if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js',{scope:'/app/'}).catch(()=>{});
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('/app/sw.js?v=775',{scope:'/app/'}).then(reg=>reg.update()).catch(()=>{});
+  }
   fetch('/app/api/config').then(r=>r.json()).then(d=>{if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
   const initialParams=new URLSearchParams(location.search),initialView=initialParams.get('view'),resetToken=initialParams.get('reset_token');if(['provider','status'].includes(initialView))go(initialView);if(resetToken){go('provider');$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerForgot').hidden=true;$('#providerForgot').style.display='none';$('#providerReset').hidden=false;$('#providerReset').style.display='block';}
 })();
 
+
+  // V7.76: respaldo global de interacción. Captura clics aunque un listener previo falle.
+  document.addEventListener('click',e=>{
+    const serviceBtn=e.target.closest?.('[data-start]');
+    if(serviceBtn){
+      e.preventDefault();
+      const value=serviceBtn.dataset.start||'otro';
+      setService(value);
+      go('request');
+      return;
+    }
+    const photoLabel=e.target.closest?.('.photo-picker');
+    if(photoLabel){
+      const input=photoLabel.querySelector('input[type="file"]');
+      if(input && e.target!==input){e.preventDefault();input.click()}
+      return;
+    }
+  },true);
+
+  // Al volver a Inicio no debe quedar ninguna capa de búsqueda sobre las categorías.
+  document.querySelectorAll('[data-go="home"]').forEach(btn=>btn.addEventListener('click',()=>{
+    const overlay=$('#jaimeReadyOverlay');
+    if(overlay){overlay.style.display='none';overlay.style.pointerEvents='none'}
+  },true));
+
   // V7.33.1: Documentación queda compacta en la barra superior; la tarjeta se abre solo al tocar el botón.
 </script>
-<div id="jaimeReadyOverlay" style="display:none;position:fixed;inset:0;z-index:9999;background:#f6f8f7;overflow:auto">
+<div id="jaimeReadyOverlay" style="display:none;pointer-events:none;position:fixed;inset:0;z-index:9999;background:#f6f8f7;overflow:auto">
   <div style="max-width:620px;margin:0 auto;padding:20px 16px 90px">
     <div style="background:#fff;border:1px solid #e4e9e6;border-radius:18px;padding:16px;margin-bottom:12px">
       <strong style="font-size:18px">✓ Solicitud lista</strong>
