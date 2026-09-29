@@ -610,7 +610,7 @@
   }
   function addMessage(content, role, speak=false){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'){const audio=document.createElement('button');audio.type='button';audio.className='jaime-audio-btn';audio.setAttribute('aria-label','Escuchar respuesta');audio.title='Escuchar respuesta';audio.textContent='🔊';audio.addEventListener('click',()=>speakJaime(display));el.append(audio)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; if(role!=='user'&&speak)speakJaime(display); }
 
-  let aiRequestAdvancing=false;
+  let aiRequestAdvancing=false, jaimeRequestFinalized=false;
   async function prepareAIRequest(button){
     if(aiRequestAdvancing)return;
     const original=button?.textContent||'';if(button){button.disabled=true;button.innerHTML='<span class="spinner"></span> Preparando'}
@@ -634,7 +634,10 @@
         }
       }
       aiRequestAdvancing=true;
+      jaimeRequestFinalized=true;
       stopJaimeVoice();
+      $('#chatInput').disabled=true;
+      if($('#chatVoiceBtn'))$('#chatVoiceBtn').disabled=true;
       const draft={...(d.solicitud||{})};
       if(p.nombre&&!draft.nombre)draft.nombre=p.nombre;
       if(p.telefono&&!draft.telefono)draft.telefono=p.telefono;
@@ -642,8 +645,8 @@
       if(p.latitud!=null&&draft.latitud==null)draft.latitud=p.latitud;
       if(p.longitud!=null&&draft.longitud==null)draft.longitud=p.longitud;
       const advanced=await publishAIRequest(draft,null,null,true);
-      if(!advanced)aiRequestAdvancing=false;
-    }catch(err){aiRequestAdvancing=false;addMessage(err.message||'No pude preparar la solicitud.','assistant')}finally{if(button){button.disabled=false;button.textContent=original}}
+      if(!advanced){aiRequestAdvancing=false;jaimeRequestFinalized=false;$('#chatInput').disabled=false;if($('#chatVoiceBtn'))$('#chatVoiceBtn').disabled=false}
+    }catch(err){aiRequestAdvancing=false;jaimeRequestFinalized=false;$('#chatInput').disabled=false;if($('#chatVoiceBtn'))$('#chatVoiceBtn').disabled=false;addMessage(err.message||'No pude preparar la solicitud.','assistant')}finally{if(button){button.disabled=false;button.textContent=original}}
   }
 
   function renderAIRequestConfirmation(draft){
@@ -673,6 +676,8 @@
       const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));latestCreatedRequest=d.solicitud;
       $('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent='Tu solicitud fue creada con los datos que entregaste a Jaime.';$('#requestCard').style.display='none';$('#trackingCard').style.display='none';$('#providerChoice').style.display='none';
       stopJaimeVoice();
+      history=[];sessionStorage.removeItem('llamaAJaimeHistory');
+      providerSearchCount=-1;
       go('request');
       const overlay=$('#jaimeReadyOverlay');
       if(overlay)overlay.style.display='block';
@@ -734,9 +739,11 @@
   $$('.schedule-quick button').forEach(b=>b.addEventListener('click',()=>{const v=b.dataset.schedule||'';$$('.schedule-quick button').forEach(x=>x.classList.toggle('active',x===b));$('#schedule').value=v;if(!v)$('#schedule').focus()}));
 
   history.forEach(m=>addMessage(m.content,m.role));
-  async function ask(message){ addMessage(message,'user'); const prior=history.slice(-8); history.push({role:'user',content:message}); $('#chatInput').disabled=true; const waiting=document.createElement('div'); waiting.className='message bot'; waiting.innerHTML='<span class="spinner"></span> Pensando…'; $('#chatBox').append(waiting); $('#chatBox').scrollTop=$('#chatBox').scrollHeight;
-    try{ const p=clientProfile()||{};const known=[p.nombre&&`Nombre: ${p.nombre}`,p.telefono&&`Teléfono: ${p.telefono}`,p.comuna&&`Comuna: ${p.comuna}`].filter(Boolean).join(' · ');const aiMessage=known?`[DATOS YA GUARDADOS: ${known}. GPS: ${p.latitud!=null&&p.longitud!=null?'activo':'pendiente'}. No vuelvas a pedir nombre, teléfono, comuna, dirección de origen ni ubicación si ya están disponibles. El GPS guardado reemplaza pedir una dirección de origen escrita. Deduce el tipo de servicio desde lo que cuenta el usuario y pregunta solo información indispensable del trabajo. Cuando tengas lo suficiente, no le digas que pulse “crear solicitud” ni que confirme: la app avanzará automáticamente.]\n${message}`:message; const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message:aiMessage,service,history:prior})}); const d=await r.json(); waiting.remove(); if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant',true); setTimeout(()=>prepareAIRequest(null),220); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
-    catch(e){waiting.remove();addMessage(e.message||'No pude conectar. Intenta nuevamente.','assistant')} finally{$('#chatInput').disabled=false;$('#chatInput').focus()}
+  async function ask(message){
+    if(jaimeRequestFinalized||aiRequestAdvancing)return;
+    addMessage(message,'user'); const prior=history.slice(-8); history.push({role:'user',content:message}); $('#chatInput').disabled=true; const waiting=document.createElement('div'); waiting.className='message bot'; waiting.innerHTML='<span class="spinner"></span> Pensando…'; $('#chatBox').append(waiting); $('#chatBox').scrollTop=$('#chatBox').scrollHeight;
+    try{ const p=clientProfile()||{};const known=[p.nombre&&`Nombre: ${p.nombre}`,p.telefono&&`Teléfono: ${p.telefono}`,p.comuna&&`Comuna: ${p.comuna}`].filter(Boolean).join(' · ');const aiMessage=known?`[DATOS YA GUARDADOS: ${known}. GPS: ${p.latitud!=null&&p.longitud!=null?'activo':'pendiente'}. No vuelvas a pedir nombre, teléfono, comuna, dirección de origen ni ubicación si ya están disponibles. El GPS guardado reemplaza pedir una dirección de origen escrita. Deduce el tipo de servicio desde lo que cuenta el usuario y pregunta solo información indispensable del trabajo. Cuando tengas lo suficiente, no le digas que pulse “crear solicitud” ni que confirme: la app avanzará automáticamente.]\n${message}`:message; const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message:aiMessage,service,history:prior})}); const d=await r.json(); waiting.remove(); if(jaimeRequestFinalized||aiRequestAdvancing)return; if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant',true); setTimeout(()=>{if(!jaimeRequestFinalized&&!aiRequestAdvancing)prepareAIRequest(null)},220); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
+    catch(e){waiting.remove();addMessage(e.message||'No pude conectar. Intenta nuevamente.','assistant')} finally{if(!jaimeRequestFinalized&&!aiRequestAdvancing){$('#chatInput').disabled=false;$('#chatInput').focus()}}
   }
   $('#chatForm').addEventListener('submit',e=>{e.preventDefault();const m=$('#chatInput').value.trim();if(!m)return;$('#chatInput').value='';ask(m)});
   $$('.chips .chip').forEach(b=>b.addEventListener('click',()=>ask(b.textContent)));
@@ -770,10 +777,35 @@
     }
   }
 
+  function renderReadyProviders(items){
+    const dst=$('#jaimeReadyProviders');if(!dst)return;
+    if(!items.length){
+      dst.innerHTML='<div class="empty"><strong>No encontré uno disponible todavía.</strong><br>Jaime seguirá buscando y te avisará cuando aparezca uno compatible.<br><button type="button" id="readyNotifyBtn" class="secondary" style="margin-top:12px">🔔 Activar avisos</button></div>';
+      const nb=$('#readyNotifyBtn');if(nb)nb.addEventListener('click',()=>enableSearchNotifications(nb));
+      return;
+    }
+    dst.innerHTML='';
+    items.forEach(p=>{
+      const card=document.createElement('article');card.className='provider-candidate';
+      const rep=p.reputacion||{},avg=Number(rep.promedio||0),reviews=Number(rep.evaluaciones||0);
+      const where=p.distancia_km!=null?`Aprox. ${escapeHtml(Number(p.distancia_km).toFixed(1))} km de tu ubicación`:'Disponible en tu zona';
+      card.innerHTML=`<div class="provider-candidate-main"><strong>${escapeHtml(p.nombre||'Profesional')}</strong><div class="provider-candidate-rating">${reviews?`⭐ ${avg.toFixed(1)} · ${reviews} evaluación${reviews===1?'':'es'}`:'⭐ Profesional nuevo'}</div><div class="provider-candidate-meta">${where}</div></div><button type="button" class="primary">Seleccionar</button>`;
+      card.querySelector('button').addEventListener('click',e=>chooseAvailableProvider(p,e.currentTarget));
+      dst.append(card);
+    });
+  }
+
   async function loadAvailableProviders(showReady=false){
     const req=latestCreatedRequest;if(!req)return alert('No encontré la solicitud recién creada. Revísala en Mis solicitudes.');
     const browser=$('#providerBrowser'),box=$('#providerCandidates');browser.style.display='block';box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando profesionales compatibles…</div>';
-    try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/prestadores-disponibles?token=${encodeURIComponent(req.token)}`,{headers,cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude cargar los profesionales');if(d.ya_asignada){box.innerHTML='<div class="empty">Esta solicitud ya tiene un profesional asignado.</div>';return}renderAvailableProviders(Array.isArray(d.prestadores)?d.prestadores:[])}catch(err){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}
+    try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/prestadores-disponibles?token=${encodeURIComponent(req.token)}`,{headers,cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude cargar los profesionales');if(d.ya_asignada){box.innerHTML='<div class="empty">Esta solicitud ya tiene un profesional asignado.</div>';if(showReady)renderReadyProviders([]);return}
+      const items=Array.isArray(d.prestadores)?d.prestadores:[];
+      renderAvailableProviders(items);
+      if(showReady)renderReadyProviders(items);
+    }catch(err){
+      box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`;
+      if(showReady){const dst=$('#jaimeReadyProviders');if(dst)dst.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}
+    }
   }
 
   let providerSearchTimer=null,providerSearchCount=-1;
@@ -790,25 +822,8 @@
           addMessage('Encontré un nuevo profesional disponible para tu solicitud.','assistant',true);
         }
         providerSearchCount=items.length;
-        renderAvailableProviders(items);if(showReady){
-        const dst=$('#jaimeReadyProviders');
-        if(dst){
-          if(!items.length){
-            dst.innerHTML='<div class="empty"><strong>No encontré uno disponible todavía.</strong><br>Estoy buscando nuevos profesionales y te avisaré por la app cuando encuentre lo que necesitas.<br><button type="button" id="readyNotifyBtn" class="secondary" style="margin-top:12px">🔔 Activar avisos</button></div>';
-            const nb=$('#readyNotifyBtn');if(nb)nb.addEventListener('click',()=>enableSearchNotifications(nb));
-          }else{
-            dst.innerHTML='';
-            items.forEach(p=>{
-              const card=document.createElement('article');card.className='provider-candidate';
-              const name=escapeHtml(p.nombre||'Profesional');
-              const where=p.distancia_km!=null?`Aprox. ${escapeHtml(Number(p.distancia_km).toFixed(1))} km de tu ubicación`:'Disponible en tu zona';
-              card.innerHTML=`<div class="provider-candidate-main"><strong>${name}</strong><div class="provider-candidate-meta">${where}</div></div><button type="button" class="primary">Seleccionar</button>`;
-              card.querySelector('button').addEventListener('click',e=>chooseAvailableProvider(p,e.currentTarget));
-              dst.append(card);
-            });
-          }
-        }
-      }
+        renderAvailableProviders(items);
+        if($('#jaimeReadyOverlay')&&$('#jaimeReadyOverlay').style.display!=='none')renderReadyProviders(items);
         if(items.length)$('#providerBrowser').style.display='block';
       }catch(_){}
     },15000);
@@ -1545,4 +1560,3 @@ async function loadProvider(){
 </div>
 </body>
 </html>
-
