@@ -657,7 +657,7 @@
       const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');
       const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));latestCreatedRequest=d.solicitud;
       $('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent='Tu solicitud fue creada con los datos que entregaste a Jaime.';$('#requestCard').style.display='none';$('#trackingCard').style.display='none';$('#providerChoice').style.display='none';
-      setTimeout(()=>{if(typeof loadProviders==='function')loadProviders();go('providers')},120);$('#providerBrowser').style.display='none';$('#providerCandidates').innerHTML='';
+      setTimeout(()=>{go('home');loadAvailableProviders();startProviderSearchPolling()},120);$('#providerBrowser').style.display='none';$('#providerCandidates').innerHTML='';
       go('request');
      }catch(err){alert(err.message);if(button){button.disabled=false;button.textContent='Enviar solicitud'}}
   }
@@ -718,11 +718,15 @@
   function providerTags(p){const tags=[...(Array.isArray(p.especialidades)?p.especialidades:[]),...(Array.isArray(p.roles)?p.roles:[])];return [...new Set(tags.filter(Boolean))].slice(0,5)}
   function renderAvailableProviders(items){
     const box=$('#providerCandidates');box.innerHTML='';
-    if(!items.length){box.innerHTML='<div class="empty">Estoy buscando nuevos profesionales y te notificaré por la app cuando encuentre lo que necesitas.</div>';return}
+    if(!items.length){
+      box.innerHTML='<div class="empty"><strong>Estoy buscando nuevos profesionales.</strong><br>Te avisaré en esta app cuando encuentre lo que necesitas.<br><button type="button" id="searchNotifyBtn" class="secondary" style="margin-top:12px">🔔 Activar avisos</button></div>';
+      const nb=$('#searchNotifyBtn');if(nb)nb.addEventListener('click',()=>enableSearchNotifications(nb));
+      return
+    }
     for(const p of items){
       const card=document.createElement('article');card.className='provider-candidate';
       const rep=p.reputacion||{},avg=Number(rep.promedio||0),reviews=Number(rep.evaluaciones||0),jobs=Number(p.trabajos_completados||0),tags=providerTags(p);
-      card.innerHTML=`<div class="provider-candidate-avatar">${p.foto_url?`<img src="${escapeHtml(p.foto_url)}" alt="Foto de ${escapeHtml(p.nombre||'profesional')}">`:escapeHtml(providerInitial(p.nombre))}</div><div class="provider-candidate-main"><div class="provider-candidate-title"><strong>${escapeHtml(p.nombre||'Profesional')}</strong>${p.verificado?'<span class="verified-badge">✓ Verificado</span>':''}</div><div class="provider-candidate-rating">${reviews?`⭐ ${avg.toFixed(1)} · ${reviews} evaluación${reviews===1?'':'es'}`:'⭐ Profesional nuevo'} · ${jobs} trabajo${jobs===1?'':'s'} completado${jobs===1?'':'s'}</div><div class="provider-candidate-meta">Cobertura declarada: ${escapeHtml((p.comunas||[]).slice(0,3).join(', ')||'según solicitud')}${p.radio_km?` · radio ${escapeHtml(String(p.radio_km))} km`:''}</div>${tags.length?`<div class="provider-candidate-tags">${tags.map(x=>`<span>${escapeHtml(x)}</span>`).join('')}</div>`:''}<div class="provider-candidate-actions"><button type="button" class="view-profile">Ver perfil</button><button type="button" class="choose-provider">Solicitar a este profesional</button></div><div class="provider-detail" hidden><strong>Perfil profesional</strong><br>${reviews?`Calificación: ${avg.toFixed(1)}/5 con ${reviews} evaluación${reviews===1?'':'es'}.`:'Aún no tiene evaluaciones.'}<br>Trabajos completados: ${jobs}.<br>${p.miembro_desde?`Miembro desde ${escapeHtml(new Date(p.miembro_desde).toLocaleDateString('es-CL'))}.`:''}</div></div>`;
+      card.innerHTML=`<div class="provider-candidate-avatar">${p.foto_url?`<img src="${escapeHtml(p.foto_url)}" alt="Foto de ${escapeHtml(p.nombre||'profesional')}">`:escapeHtml(providerInitial(p.nombre))}</div><div class="provider-candidate-main"><div class="provider-candidate-title"><strong>${escapeHtml(p.nombre||'Profesional')}</strong>${p.verificado?'<span class="verified-badge">✓ Verificado</span>':''}</div><div class="provider-candidate-rating">${reviews?`⭐ ${avg.toFixed(1)} · ${reviews} evaluación${reviews===1?'':'es'}`:'⭐ Profesional nuevo'} · ${jobs} trabajo${jobs===1?'':'s'} completado${jobs===1?'':'s'}</div><div class="provider-candidate-meta">${p.distancia_km!=null?`Aprox. ${escapeHtml(Number(p.distancia_km).toFixed(1))} km de tu ubicación`:`Disponible en tu zona`}${p.radio_km?` · cobertura ${escapeHtml(String(p.radio_km))} km`:''}</div>${tags.length?`<div class="provider-candidate-tags">${tags.map(x=>`<span>${escapeHtml(x)}</span>`).join('')}</div>`:''}<div class="provider-candidate-actions"><button type="button" class="view-profile">Ver perfil</button><button type="button" class="choose-provider">Solicitar a este profesional</button></div><div class="provider-detail" hidden><strong>Perfil profesional</strong><br>${reviews?`Calificación: ${avg.toFixed(1)}/5 con ${reviews} evaluación${reviews===1?'':'es'}.`:'Aún no tiene evaluaciones.'}<br>Trabajos completados: ${jobs}.<br>${p.miembro_desde?`Miembro desde ${escapeHtml(new Date(p.miembro_desde).toLocaleDateString('es-CL'))}.`:''}</div></div>`;
       card.querySelector('.view-profile').addEventListener('click',e=>{const detail=card.querySelector('.provider-detail');detail.hidden=!detail.hidden;e.currentTarget.textContent=detail.hidden?'Ver perfil':'Ocultar perfil'});
       card.querySelector('.choose-provider').addEventListener('click',e=>chooseAvailableProvider(p,e.currentTarget));
       box.append(card);
@@ -733,6 +737,44 @@
     const req=latestCreatedRequest;if(!req)return alert('No encontré la solicitud recién creada. Revísala en Mis solicitudes.');
     const browser=$('#providerBrowser'),box=$('#providerCandidates');browser.style.display='block';box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando profesionales compatibles…</div>';
     try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/prestadores-disponibles?token=${encodeURIComponent(req.token)}`,{headers,cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude cargar los profesionales');if(d.ya_asignada){box.innerHTML='<div class="empty">Esta solicitud ya tiene un profesional asignado.</div>';return}renderAvailableProviders(Array.isArray(d.prestadores)?d.prestadores:[])}catch(err){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}
+  }
+
+  let providerSearchTimer=null,providerSearchCount=-1;
+  function startProviderSearchPolling(){
+    if(providerSearchTimer)clearInterval(providerSearchTimer);
+    providerSearchTimer=setInterval(async()=>{
+      if(!latestCreatedRequest)return;
+      try{
+        const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(latestCreatedRequest.codigo)}/prestadores-disponibles?token=${encodeURIComponent(latestCreatedRequest.token)}`,{headers,cache:'no-store'});
+        const d=await r.json();if(!r.ok||d.ya_asignada)return;
+        const items=Array.isArray(d.prestadores)?d.prestadores:[];
+        if(providerSearchCount>=0&&items.length>providerSearchCount){
+          stopJaimeVoice();
+          addMessage('Encontré un nuevo profesional disponible para tu solicitud.','assistant',true);
+        }
+        providerSearchCount=items.length;
+        renderAvailableProviders(items);
+        if(items.length)$('#providerBrowser').style.display='block';
+      }catch(_){}
+    },15000);
+  }
+
+  async function enableSearchNotifications(button){
+    const req=latestCreatedRequest;
+    if(!req||!('serviceWorker'in navigator)||!('PushManager'in window)){alert('Este dispositivo no admite notificaciones push.');return}
+    const original=button.textContent;button.disabled=true;button.textContent='Activando…';
+    try{
+      const permission=await Notification.requestPermission();
+      if(permission!=='granted')throw new Error('Debes permitir las notificaciones para que Jaime pueda avisarte.');
+      const keyResponse=await fetch('/app/api/push/public-key'),keyData=await keyResponse.json();
+      if(!keyResponse.ok)throw new Error('Las notificaciones aún no están configuradas.');
+      const registration=await navigator.serviceWorker.ready;
+      let subscription=await registration.pushManager.getSubscription();
+      if(!subscription)subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(keyData.public_key)});
+      const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/push/subscribe`,{method:'POST',headers,body:JSON.stringify({token:req.token,subscription:subscription.toJSON()})});
+      const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude activar los avisos');
+      button.textContent='✓ Avisos activados';
+    }catch(err){alert(err.message);button.disabled=false;button.textContent=original}
   }
 
   async function chooseAvailableProvider(provider,button){
