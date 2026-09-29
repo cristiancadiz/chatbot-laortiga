@@ -249,7 +249,7 @@
   [hidden]{display:none !important;}
 
 /* V7.46 · Identidad y ubicación del cliente visibles arriba, sin chat separado */
-.home-client-strip{display:flex;align-items:center;gap:10px;margin:10px 0 8px;padding:9px 11px;border:1px solid var(--line);border-radius:16px;background:#fff;box-shadow:0 5px 16px rgba(18,61,43,.05)}
+.home-client-strip{display:flex;align-items:center;gap:10px;cursor:pointer;margin:10px 0 8px;padding:9px 11px;border:1px solid var(--line);border-radius:16px;background:#fff;box-shadow:0 5px 16px rgba(18,61,43,.05)}
 .home-client-avatar{width:36px;height:36px;flex:0 0 36px;border-radius:50%;display:grid;place-items:center;background:#e7f2cf;color:var(--forest);font-weight:900}
 .home-client-copy{min-width:0;flex:1}.home-client-copy strong,.home-client-copy span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.home-client-copy strong{font-size:14px}.home-client-copy span{margin-top:1px;font-size:12px;color:var(--muted)}
 .home-client-gps{width:36px;height:36px;flex:0 0 36px;border:0;border-radius:12px;background:#eef6df;font-size:17px}
@@ -263,11 +263,11 @@
   <header class="top"><img class="brand-logo" src="/app/assets/logo-llama-a-jaime-final-v534.png" alt="Llama a Jaime"><span class="status-dot" title="Servicio activo"></span></header>
   <main>
     <section class="view active" id="home">
-      <div class="home-client-strip" id="homeClientStrip" hidden>
+      <div class="home-client-strip" id="homeClientStrip">
         <div class="home-client-avatar" id="homeClientInitial">C</div>
         <div class="home-client-copy">
-          <strong id="homeClientName">Cliente</strong>
-          <span id="homeClientLocation">📍 Ubicación guardada</span>
+          <strong id="homeClientName">Configura tu perfil</strong>
+          <span id="homeClientLocation">📍 Agrega tu ubicación</span>
         </div>
         <button type="button" class="home-client-gps" id="homeClientGps" aria-label="Actualizar ubicación">📍</button>
       </div>
@@ -341,6 +341,18 @@
           <div class="provider-candidates" id="providerCandidates"></div>
         </div>
       </section>
+    </section>
+
+    <section class="view" id="profile">
+      <div class="page-head"><h1>Mi perfil</h1><p>Guarda tus datos una vez y pide servicios más rápido.</p></div>
+      <div class="form-card">
+        <div class="field"><label for="profileName">Nombre</label><input id="profileName" autocomplete="name" placeholder="Tu nombre"></div>
+        <div class="field"><label for="profilePhone">Teléfono</label><input id="profilePhone" type="tel" autocomplete="tel" placeholder="+56 9..."></div>
+        <div class="field"><label for="profileCommune">Comuna</label><input id="profileCommune" autocomplete="address-level2" placeholder="Ej. Viña del Mar"></div>
+        <button class="secondary" type="button" id="profileUseGps">📍 Usar mi ubicación actual</button>
+        <button class="primary" type="button" id="profileSave">Guardar perfil</button>
+        <div class="notice" id="profileNotice"></div>
+      </div>
     </section>
 
     <section class="view" id="provider">
@@ -471,7 +483,7 @@
       <form class="conversation-compose" id="conversationForm"><input id="conversationInput" maxlength="2000" placeholder="Escribe un mensaje…" autocomplete="off"><button type="submit">Enviar</button></form>
     </div>
   </section>
-  <nav class="nav"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button data-go="request"><b>＋</b>Solicitar</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="status"><b>◷</b>Estado</button></nav>
+  <nav class="nav"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="status"><b>◷</b>Estado</button><button data-go="profile"><b>●</b>Perfil</button></nav>
 </div>
 <script src="https://sdk.mercadopago.com/js/v2"></script>
 <!-- V7.40 · PANELES PLEGABLES + FINALIZAR SOLO TRAS PAGO AUTORIZADO -->
@@ -504,7 +516,7 @@
   const CLIENT_SESSION_KEY='llamaAJaimeClientProfileV1';
   function clientProfile(){try{return JSON.parse(localStorage.getItem(CLIENT_SESSION_KEY)||'null')}catch{return null}}
   function saveClientProfile(profile){localStorage.setItem(CLIENT_SESSION_KEY,JSON.stringify({...profile,updated_at:new Date().toISOString()}));renderClientSession()}
-  function renderClientSession(){const p=clientProfile(),card=$('#clientSessionCard'),fields=$('#clientSessionFields'),home=$('#homeClientStrip');if(!card||!fields)return;if(!p||!p.nombre){card.hidden=true;fields.hidden=false;if(home)home.hidden=true;return}card.hidden=false;fields.hidden=true;if(home){home.hidden=false;$('#homeClientName').textContent=p.nombre;$('#homeClientLocation').textContent='📍 '+(p.comuna||'Ubicación guardada');$('#homeClientInitial').textContent=(p.nombre||'C').trim().charAt(0).toUpperCase()}$('#clientSessionName').textContent=p.nombre;$('#clientSessionCommune').textContent='📍 '+(p.comuna||'Ubicación guardada');$('#name').value=p.nombre||'';$('#phone').value=p.telefono||'';$('#email').value=p.email||'';$('#commune').value=p.comuna||'';if(p.latitud!=null&&p.longitud!=null)pendingLocation={latitud:p.latitud,longitud:p.longitud,precision_m:p.precision_m||0};}
+  function renderClientSession(){const p=clientProfile(),card=$('#clientSessionCard'),fields=$('#clientSessionFields'),home=$('#homeClientStrip');if(!card||!fields)return;if(!p||!p.nombre){card.hidden=true;fields.hidden=false;if(home){home.hidden=false;$('#homeClientName').textContent='Configura tu perfil';$('#homeClientLocation').textContent='📍 Agrega tu ubicación';$('#homeClientInitial').textContent='C'}return}card.hidden=false;fields.hidden=true;if(home){home.hidden=false;$('#homeClientName').textContent=p.nombre;$('#homeClientLocation').textContent='📍 '+(p.comuna||'Ubicación guardada');$('#homeClientInitial').textContent=(p.nombre||'C').trim().charAt(0).toUpperCase()}$('#clientSessionName').textContent=p.nombre;$('#clientSessionCommune').textContent='📍 '+(p.comuna||'Ubicación guardada');$('#name').value=p.nombre||'';$('#phone').value=p.telefono||'';$('#email').value=p.email||'';$('#commune').value=p.comuna||'';if($('#profileName'))$('#profileName').value=p.nombre||'';if($('#profilePhone'))$('#profilePhone').value=p.telefono||'';if($('#profileCommune'))$('#profileCommune').value=p.comuna||'';if(p.latitud!=null&&p.longitud!=null)pendingLocation={latitud:p.latitud,longitud:p.longitud,precision_m:p.precision_m||0};}
   function hydrateClientProfile(){renderClientSession()}
   hydrateClientProfile();
 
@@ -521,6 +533,13 @@
   $('#requestCamera').addEventListener('change',addSelectedPhotos);
 
   function currentPosition(){return new Promise((resolve,reject)=>{if(!('geolocation'in navigator)){reject(new Error('Este dispositivo no permite obtener la ubicación.'));return}navigator.geolocation.getCurrentPosition(position=>resolve({latitud:position.coords.latitude,longitud:position.coords.longitude,precision_m:position.coords.accuracy}),error=>reject(new Error(error.code===1?'Debes permitir el acceso a tu ubicación.':'No pude obtener tu ubicación. Intenta nuevamente.')),{enableHighAccuracy:true,timeout:15000,maximumAge:60000})})}
+  const homeClientStrip=$('#homeClientStrip');
+  if(homeClientStrip)homeClientStrip.addEventListener('click',(e)=>{if(e.target.closest('#homeClientGps'))return;go('profile')});
+  const profileSave=$('#profileSave');
+  if(profileSave)profileSave.addEventListener('click',()=>{const nombre=$('#profileName').value.trim(),telefono=$('#profilePhone').value.trim(),comuna=$('#profileCommune').value.trim(),n=$('#profileNotice');if(!nombre){n.className='notice error';n.textContent='Escribe tu nombre.';n.style.display='block';return}const prev=clientProfile()||{};saveClientProfile({...prev,nombre,telefono,comuna});renderClientSession();n.className='notice success';n.textContent='Perfil guardado.';n.style.display='block'});
+  const profileUseGps=$('#profileUseGps');
+  if(profileUseGps)profileUseGps.addEventListener('click',async()=>{const original=profileUseGps.textContent;profileUseGps.disabled=true;profileUseGps.textContent='Obteniendo ubicación…';try{const loc=await currentPosition(),prev=clientProfile()||{};pendingLocation=loc;saveClientProfile({...prev,...loc,nombre:$('#profileName').value.trim()||prev.nombre||'',telefono:$('#profilePhone').value.trim()||prev.telefono||'',comuna:$('#profileCommune').value.trim()||prev.comuna||''});renderClientSession();const n=$('#profileNotice');n.className='notice success';n.textContent='Ubicación actualizada.';n.style.display='block'}catch(error){alert(error.message)}finally{profileUseGps.disabled=false;profileUseGps.textContent=original}});
+
   const homeClientGps=$('#homeClientGps');
   if(homeClientGps)homeClientGps.addEventListener('click',async()=>{const p=clientProfile();if(!p){go('request');return}const original=homeClientGps.textContent;homeClientGps.disabled=true;homeClientGps.textContent='…';try{const loc=await currentPosition();pendingLocation=loc;saveClientProfile({...p,...loc});homeClientGps.textContent='✓';setTimeout(()=>{homeClientGps.textContent='📍'},900)}catch(error){alert(error.message);homeClientGps.textContent=original}finally{homeClientGps.disabled=false}});
 
