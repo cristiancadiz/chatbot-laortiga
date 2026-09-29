@@ -3088,6 +3088,87 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             app.logger.exception("PAYMENT STATUS ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude consultar el estado del pago."}, 502)
 
+    @app.post(f"{api_base}/solicitudes/<public_id>/cancelar")
+    def mobile_cancel_request(public_id):
+        """Cancela una solicitud del cliente y libera una autorización de Mercado Pago si existe."""
+        if not _allow("cancel-request", limit=10, window_seconds=3600):
+            return _json(app, {"ok": False, "error": "Intenta nuevamente en unos minutos."}, 429)
+        body = request.get_json(silent=True) or {}
+        reason = _clean(body.get("motivo"), 80).lower()
+        allowed_reasons = {"ya_no_lo_necesito", "cambio_de_planes", "problema_con_prestador", "acordamos_cancelar", "otro"}
+        if reason not in allowed_reasons:
+            return _json(app, {"ok": False, "error": "Selecciona un motivo válido para cancelar."}, 400)
+        try:
+            request_row = _client_auth(public_id, body.get("token"))
+            if not request_row:
+                return _json(app, {"ok": False, "error": "Acceso inválido para cancelar esta solicitud."}, 401)
+            current_state = str(request_row.get("estado") or "").lower()
+            payment_state = str(request_row.get("pago_estado") or "pendiente").lower()
+            if current_state in {"cancelada", "cancelado"}:
+                return _json(app, {"ok": True, "ya_cancelada": True, "estado": "cancelada", "pago_estado": payment_state})
+            if request_row.get("servicio_finalizado_at") or current_state in {"finalizada", "finalizado", "completada", "completado"}:
+                return _json(app, {"ok": False, "error": "El servicio ya fue finalizado. Si existe un problema, usa Reportar un problema."}, 409)
+            if payment_state in {"pagado", "liberado", "reembolsado", "disputado"}:
+                return _json(app, {"ok": False, "error": "Este pago ya fue procesado y la solicitud requiere revisión antes de cancelarse."}, 409)
+
+            # Si hay fondos reservados, primero liberamos la autorización en Mercado Pago.
+            if payment_state == "autorizado":
+                payment_id = str(request_row.get("pago_referencia_externa") or "").strip()
+                provider_id = request_row.get("prestador_id")
+                seller = _mp_provider_credentials(provider_id) if provider_id else None
+                if not payment_id or not seller or not seller.get("mp_access_token"):
+                    return _json(app, {"ok": False, "error": "No pude localizar la reserva de Mercado Pago. No se canceló la solicitud."}, 409)
+                h = _mp_headers_with_token(seller["mp_access_token"])
+                h["X-Idempotency-Key"] = f"lj-cancel-{request_row['id']}"
+                mp = requests.put(
+                    f"https://api.mercadopago.com/v1/payments/{payment_id}",
+                    headers=h, json={"status": "cancelled"}, timeout=25,
+                )
+                data = mp.json() if mp.content else {}
+                mp_status = str(data.get("status") or "").lower()
+                if not mp.ok or mp_status != "cancelled":
+                    app.logger.warning("MP CANCEL AUTH FAILED %s %s", mp.status_code, data)
+                    return _json(app, {"ok": False, "error": "Mercado Pago no pudo liberar la reserva. La solicitud no fue cancelada."}, 409)
+                st = requests.post(
+                    f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_actualizar_estado_pago",
+                    headers=_db_headers(),
+                    json={"p_solicitud_id": request_row["id"], "p_estado": "pendiente", "p_monto_total": int(request_row.get("precio_servicio") or 0), "p_proveedor": "mercadopago", "p_referencia_externa": payment_id, "p_actor_tipo": "cliente"},
+                    timeout=settings["supabase_timeout"],
+                )
+                st.raise_for_status()
+
+            now = datetime.now(timezone.utc).isoformat()
+            patch = requests.patch(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
+                headers=_db_headers("return=representation"),
+                params={"id": f"eq.{request_row['id']}"},
+                json={"estado": "cancelada", "updated_at": now},
+                timeout=settings["supabase_timeout"],
+            )
+            patch.raise_for_status()
+
+            # Dejamos trazabilidad sin exigir columnas nuevas en la tabla de solicitudes.
+            Thread(target=_audit, args=("solicitud_cancelada", "cliente", None, request_row["id"], {"motivo": reason, "pago_estado_anterior": payment_state}), daemon=True).start()
+            try:
+                requests.post(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_mensajes_servicio",
+                    headers=_db_headers("return=minimal"),
+                    json={"empresa_id": settings["empresa_id"], "solicitud_id": request_row["id"], "remitente_tipo": "sistema", "contenido": "El cliente canceló esta solicitud."},
+                    timeout=settings["supabase_timeout"],
+                ).raise_for_status()
+            except Exception as exc:
+                app.logger.warning("CANCEL SYSTEM MESSAGE ERROR: %r", exc)
+            provider_id = request_row.get("prestador_id")
+            if provider_id:
+                try:
+                    _send_custom_push("nexi_app_push_suscripciones", "prestador_id", provider_id, "Solicitud cancelada", f"El cliente canceló la solicitud {request_row.get('public_id') or ''}.", "/app/?view=provider", f"cancelada-{request_row['id']}")
+                except Exception:
+                    app.logger.exception("CANCEL REQUEST PUSH ERROR")
+            return _json(app, {"ok": True, "estado": "cancelada", "reserva_liberada": payment_state == "autorizado", "message": "Solicitud cancelada correctamente."})
+        except requests.RequestException as exc:
+            app.logger.exception("CANCEL REQUEST ERROR: %r", exc)
+            return _json(app, {"ok": False, "error": "No pude cancelar la solicitud."}, 502)
+
     @app.post(f"{api_base}/solicitudes/<public_id>/finalizar")
     def mobile_finish_service(public_id):
         """Finaliza un servicio autenticando al cliente o al prestador asignado."""
