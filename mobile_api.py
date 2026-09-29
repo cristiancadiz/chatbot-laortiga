@@ -2830,16 +2830,26 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 mp_message = str(data.get("message") or data.get("error") or "Mercado Pago rechazó la autorización.")
                 mp_cause = data.get("cause") if isinstance(data.get("cause"), list) else []
                 mp_codes = {str(item.get("code")) for item in mp_cause if isinstance(item, dict)}
+                # Diagnóstico seguro: registra la respuesta de Mercado Pago sin tokens,
+                # credenciales ni datos de tarjeta. Esto permite identificar la causa
+                # exacta del 400 (application_fee, KYC, capture, configuración, etc.).
+                safe_mp_error = {
+                    "error": data.get("error"),
+                    "message": data.get("message"),
+                    "status": data.get("status"),
+                    "cause": mp_cause,
+                }
+                app.logger.warning(
+                    "MP AUTHORIZE REJECTED provider=%s mp_user_id=%s http_status=%s response=%s",
+                    provider_id, seller.get("mp_user_id"), mp.status_code, safe_mp_error
+                )
                 if "2059" in mp_codes or "application_fee" in mp_message.lower():
-                    app.logger.warning(
-                        "MP MARKETPLACE TOKEN REJECTED provider=%s mp_user_id=%s status=%s",
-                        provider_id, seller.get("mp_user_id"), mp.status_code
-                    )
                     return _json(app, {
                         "ok": False,
-                        "error": "Mercado Pago rechazó la comisión Marketplace. Desconecta y vuelve a conectar la cuenta del prestador para renovar su autorización OAuth."
+                        "error": mp_message,
+                        "mp_codes": sorted(mp_codes),
                     }, 409)
-                return _json(app,{"ok":False,"error":mp_message},409 if mp.status_code<500 else 502)
+                return _json(app,{"ok":False,"error":mp_message,"mp_codes":sorted(mp_codes)},409 if mp.status_code<500 else 502)
             payment_id=str(data.get("id") or ""); status=str(data.get("status") or "").lower(); detail=str(data.get("status_detail") or "").lower()
             if status=="authorized" and payment_id:
                 st=requests.post(f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_actualizar_estado_pago",headers=_db_headers(),
