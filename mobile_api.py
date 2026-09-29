@@ -731,7 +731,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return False
         if request_row.get("tipo") == "reciclaje" and request_materials and materials and not (request_materials & materials):
             return False
-        if request_row.get("tipo") == "belleza" and request_row.get("subtipo") not in specialties:
+        if request_row.get("tipo") == "belleza" and request_row.get("subtipo") and request_row.get("subtipo") not in specialties:
             return False
         if request_row.get("tipo") == "salud" and request_row.get("subtipo") not in specialties:
             return False
@@ -1010,7 +1010,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "Extrae exclusivamente datos explícitos de la conversación para una solicitud de servicios en Chile. "
             "No inventes ni completes datos ausentes. Devuelve SOLO JSON válido, sin markdown, con estas claves: "
             "tipo, subtipo, nombre, telefono, email, comuna, direccion_origen, direccion_destino, detalles, materiales, fecha_preferida. "
-            "materiales debe ser una lista. Usa cadena vacía para datos ausentes. tipo debe ser uno de hogar, limpieza, flete, jardineria, belleza, salud, reciclaje, otro. Si tipo es salud, subtipo debe ser kinesiologia, enfermeria, psicologia o terapia_ocupacional. "
+            "materiales debe ser una lista. Usa cadena vacía para datos ausentes. tipo debe ser uno de hogar, limpieza, flete, jardineria, belleza, salud, reciclaje, otro. "
+            "Para belleza, subtipo es opcional: si el usuario no lo especifica, déjalo vacío y continúa. Si tipo es salud, subtipo debe ser kinesiologia, enfermeria, psicologia o terapia_ocupacional. "
             "Si el servicio seleccionado ayuda a clasificar, úsalo, pero no inventes datos personales."
         )
         context = f"Servicio seleccionado: {service}\nConversación:\n" + "\n".join(transcript)
@@ -1043,8 +1044,6 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             for key, label in (("detalles", "detalle del servicio"),):
                 if not draft.get(key):
                     missing.append(label)
-            if draft["tipo"] == "belleza" and draft.get("subtipo") not in BEAUTY_TYPES:
-                missing.append("tipo de servicio de belleza")
             if draft["tipo"] == "salud" and draft.get("subtipo") not in HEALTH_TYPES:
                 missing.append("profesional de salud")
             if draft["tipo"] == "limpieza" and draft.get("subtipo") and draft.get("subtipo") not in CLEANING_TYPES:
@@ -1084,7 +1083,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         if service_type not in SERVICE_TYPES:
             return _json(app, {"ok": False, "error": "Selecciona una categoría de servicio."}, 400)
         if service_type == "belleza" and subtype not in BEAUTY_TYPES:
-            return _json(app, {"ok": False, "error": "Selecciona el servicio de belleza que necesitas."}, 400)
+            subtype = ""
         if service_type == "salud" and subtype not in HEALTH_TYPES:
             return _json(app, {"ok": False, "error": "Selecciona el profesional de salud que necesitas."}, 400)
         if service_type == "limpieza" and subtype and subtype not in CLEANING_TYPES:
