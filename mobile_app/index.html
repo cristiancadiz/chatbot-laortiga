@@ -615,7 +615,7 @@
     if(aiRequestAdvancing)return;
     const original=button?.textContent||'';if(button){button.disabled=true;button.innerHTML='<span class="spinner"></span> Preparando'}
     try{
-      const p=clientProfile()||{};const knownContext={role:'user',content:`DATOS FIJOS DEL CLIENTE YA GUARDADOS. Nombre: ${p.nombre||'pendiente'}. Teléfono: ${p.telefono||'pendiente'}. Comuna: ${p.comuna||'pendiente'}. GPS/origen: ${p.latitud!=null&&p.longitud!=null?'activo y guardado':'pendiente'}. REGLAS: no pedir nuevamente teléfono, comuna, dirección de origen ni ubicación si ya están disponibles. La dirección exacta de origen se obtiene del GPS privado. Pregunta únicamente datos indispensables del trabajo que todavía falten. Si ya hay información suficiente, devuelve la solicitud lista sin pedir al usuario que pulse, confirme o diga “crear solicitud”.`};const r=await fetch('/app/api/chat/preparar-solicitud',{method:'POST',headers,body:JSON.stringify({service,history:[knownContext,...history]})});
+      const p=clientProfile()||{};const knownContext={role:'user',content:`DATOS FIJOS DEL CLIENTE YA GUARDADOS. Nombre: ${p.nombre||'pendiente'}. El teléfono es un dato interno del perfil: NO lo preguntes ni lo marques como faltante. Comuna: ${p.comuna||'pendiente'}. GPS/origen: ${p.latitud!=null&&p.longitud!=null?'activo y guardado':'pendiente'}. REGLAS: no pedir teléfono. No pedir nuevamente comuna, dirección de origen ni ubicación si ya están disponibles. La dirección exacta de origen se obtiene del GPS privado. Pregunta únicamente datos indispensables del trabajo que todavía falten. Si ya hay información suficiente, devuelve la solicitud lista sin pedir al usuario que pulse, confirme o diga “crear solicitud”.`};const r=await fetch('/app/api/chat/preparar-solicitud',{method:'POST',headers,body:JSON.stringify({service,history:[knownContext,...history]})});
       const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude preparar la solicitud');
       if(Array.isArray(d.faltantes)&&d.faltantes.length){
         const p=clientProfile()||{};
@@ -657,7 +657,17 @@
 
   async function publishAIRequest(draft,consent,button,automatic=false){
     if(!automatic&&consent&&!consent.checked){alert('Debes aceptar los términos y el tratamiento de datos para enviar la solicitud.');return}
-    const payload={...draft,acepta_terminos:true,acepta_privacidad:true};if(button){button.disabled=true;button.innerHTML='<span class="spinner"></span> Enviando'};
+    const p=clientProfile()||{};
+    const payload={...draft,
+      nombre:draft.nombre||p.nombre||'Cliente',
+      telefono:p.telefono||draft.telefono||'',
+      comuna:p.comuna||draft.comuna||'Ubicación GPS',
+      direccion_origen:draft.direccion_origen||(p.latitud!=null?'Ubicación GPS compartida':''),
+      latitud:draft.latitud??p.latitud,
+      longitud:draft.longitud??p.longitud,
+      precision_m:draft.precision_m??p.precision_m,
+      acepta_terminos:true,acepta_privacidad:true
+    };if(button){button.disabled=true;button.innerHTML='<span class="spinner"></span> Enviando'};
     try{
       const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');
       const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));latestCreatedRequest=d.solicitud;
@@ -672,7 +682,13 @@
       startProviderSearchPolling();
       loadAvailableProviders(true).catch(()=>{});
       return true;
-     }catch(err){alert(err.message);if(button){button.disabled=false;button.textContent='Enviar solicitud'}return false}
+     }catch(err){
+       aiRequestAdvancing=false;
+       const msg=String(err.message||'No pude crear la solicitud');
+       addMessage('No pude avanzar todavía: '+msg,'assistant',false);
+       if(button){button.disabled=false;button.textContent='Enviar solicitud'}
+       return false
+     }
   }
   // V7.45: entrada rápida y dictado por voz. La IA sigue usando los endpoints existentes.
   function speechToInput(target,button,onDone){
@@ -1529,3 +1545,4 @@ async function loadProvider(){
 </div>
 </body>
 </html>
+
