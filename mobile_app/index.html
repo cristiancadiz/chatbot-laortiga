@@ -1168,18 +1168,30 @@ $('#conversationForm').addEventListener('submit',async e=>{
   }
 });
 
-let mpCardForm=null,mpCardFormRequestId=null;
+let mpCardForm=null,mpCardFormRequestId=null,mpCardFormInitPromise=null,mpSdkInstance=null,mpSdkPublicKey=null;
 async function ensureMercadoPagoCardForm(){
   const c=conversationContext;if(!c)return;
-  if(mpCardForm&&mpCardFormRequestId===c.public_id)return;
+  if(mpCardForm)return mpCardForm;
+  if(mpCardFormInitPromise)return mpCardFormInitPromise;
   if(typeof MercadoPago==='undefined')throw new Error('No se pudo cargar Mercado Pago.');
-  const kr=await fetch('/app/api/mercadopago/public-key',{headers:{'Accept':'application/json'}}),kd=await kr.json();
-  if(!kr.ok||!kd.public_key)throw new Error(kd.error||'Falta configurar la Public Key de Mercado Pago.');
-  if(mpCardForm&&typeof mpCardForm.unmount==='function'){try{mpCardForm.unmount()}catch(_){}}
-  const amount=String(Number(window.__currentServicePrice||0));
-  const mp=new MercadoPago(kd.public_key,{locale:'es-CL'});
-  mpCardForm=mp.cardForm({amount,iframe:true,form:{id:'mpCardForm',cardNumber:{id:'form-checkout__cardNumber',placeholder:'Número de tarjeta'},expirationDate:{id:'form-checkout__expirationDate',placeholder:'MM/AA'},securityCode:{id:'form-checkout__securityCode',placeholder:'CVV'},cardholderName:{id:'form-checkout__cardholderName',placeholder:'Nombre del titular'},installments:{id:'form-checkout__installments',placeholder:'Cuotas'},identificationType:{id:'form-checkout__identificationType',placeholder:'Tipo de documento'},identificationNumber:{id:'form-checkout__identificationNumber',placeholder:'RUT / documento'},cardholderEmail:{id:'form-checkout__cardholderEmail',placeholder:'Correo'}},callbacks:{onFormMounted:error=>{if(error)console.error('MP form',error)}}});
-  mpCardFormRequestId=c.public_id;
+
+  mpCardFormInitPromise=(async()=>{
+    const kr=await fetch('/app/api/mercadopago/public-key',{headers:{'Accept':'application/json'}}),kd=await kr.json();
+    if(!kr.ok||!kd.public_key)throw new Error(kd.error||'Falta configurar la Public Key de Mercado Pago.');
+    if(!mpSdkInstance||mpSdkPublicKey!==kd.public_key){
+      mpSdkInstance=new MercadoPago(kd.public_key,{locale:'es-CL'});
+      mpSdkPublicKey=kd.public_key;
+    }
+    const amount=String(Number(window.__currentServicePrice||0));
+    const form=mpSdkInstance.cardForm({amount,iframe:true,form:{id:'mpCardForm',cardNumber:{id:'form-checkout__cardNumber',placeholder:'Número de tarjeta'},expirationDate:{id:'form-checkout__expirationDate',placeholder:'MM/AA'},securityCode:{id:'form-checkout__securityCode',placeholder:'CVV'},cardholderName:{id:'form-checkout__cardholderName',placeholder:'Nombre del titular'},installments:{id:'form-checkout__installments',placeholder:'Cuotas'},identificationType:{id:'form-checkout__identificationType',placeholder:'Tipo de documento'},identificationNumber:{id:'form-checkout__identificationNumber',placeholder:'RUT / documento'},cardholderEmail:{id:'form-checkout__cardholderEmail',placeholder:'Correo'}},callbacks:{onFormMounted:error=>{if(error)console.error('MP form',error)}}});
+    mpCardForm=form;
+    mpCardFormRequestId=c.public_id;
+    return form;
+  })();
+
+  try{return await mpCardFormInitPromise;}
+  catch(err){mpCardForm=null;mpCardFormRequestId=null;throw err;}
+  finally{mpCardFormInitPromise=null;}
 }
 async function startMercadoPagoAuthorization(){
   const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;if(!btn||!note||!c)return;
