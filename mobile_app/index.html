@@ -406,7 +406,7 @@
       </div>
 
       <div class="quote-box" id="quoteBox" hidden></div>
-      <form class="quote-form" id="quoteForm" hidden><input id="quoteAmount" inputmode="numeric" placeholder="$ Monto de la cotización" required><input id="quoteDetail" maxlength="500" placeholder="Descripción del trabajo: qué incluye, alcance, materiales, etc." required><button>Enviar cotización al cliente</button></form>
+      <form class="quote-form" id="quoteForm" hidden><input id="quoteAmount" inputmode="numeric" placeholder="$ Monto de la cotización" required><input id="quoteDetail" maxlength="500" placeholder="Descripción del trabajo: qué incluye, alcance, materiales, etc." required><button type="submit">Enviar cotización al cliente</button></form>
 
       <div class="payment-status-card" id="paymentStatusCard" hidden>
         <div class="payment-status-copy"><strong>Pago protegido con Mercado Pago</strong><span id="paymentStatusDetail">Primero acepta la cotización.</span></div><span class="payment-status-badge" id="paymentStatusBadge">Pendiente</span>
@@ -426,7 +426,7 @@
         <div class="payment-breakdown" id="paymentBreakdown" hidden><div><span>Precio del servicio</span><strong id="paymentServicePrice">—</strong></div><div><span>Comisión Llama a Jaime (12%)</span><strong id="paymentPlatformFee">—</strong></div><div><span>IVA sobre comisión (19%)</span><strong id="paymentPlatformVat">—</strong></div><div><span>Costo Mercado Pago</span><strong id="paymentGatewayFee">—</strong></div><div class="payment-net"><span>Recibes</span><strong id="paymentProviderNet">—</strong></div><small id="paymentGatewayNote">El costo de Mercado Pago se actualizará con el valor real de la transacción.</small></div>
       </div>
       <div class="finish-service-card" id="finishServiceCard" hidden><div><strong id="finishServiceTitle">¿El trabajo ya terminó?</strong><span id="finishServiceText">Confirma el cierre cuando el servicio haya sido realizado.</span></div><button id="finishServiceBtn" type="button">✓ Finalizar servicio</button><div class="notice" id="finishServiceNotice"></div></div>      <div class="conversation-messages" id="conversationMessages"></div>
-      <form class="conversation-compose" id="conversationForm"><input id="conversationInput" maxlength="2000" placeholder="Escribe un mensaje…" autocomplete="off"><button>Enviar</button></form>
+      <form class="conversation-compose" id="conversationForm"><input id="conversationInput" maxlength="2000" placeholder="Escribe un mensaje…" autocomplete="off"><button type="submit">Enviar</button></form>
     </div>
   </section>
   <nav class="nav"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button data-go="chat"><b>✦</b>IA</button><button data-go="request"><b>＋</b>Solicitar</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="status"><b>◷</b>Estado</button></nav>
@@ -797,6 +797,36 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
   $('#reportForm').addEventListener('submit',async e=>{e.preventDefault();const c=conversationContext,note=$('#reportNotice'),button=e.submitter;if(!c)return;button.disabled=true;note.style.display='none';const auth=c.actor==='cliente'?{actor:'cliente',token:c.token}:{actor:'prestador',codigo:c.codigo,token:c.token};try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/reclamos`,{method:'POST',headers,body:JSON.stringify({...auth,categoria:$('#reportCategory').value,detalle:$('#reportDescription').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude enviar el reporte');e.target.reset();note.textContent='Reporte enviado de forma privada. El equipo podrá revisarlo y suspender cuentas si corresponde.';note.className='notice';note.style.display='block'}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false}});
 
   $('#shareConversationLocation').addEventListener('click',async()=>{const c=conversationContext,button=$('#shareConversationLocation');if(!c)return;const original=button.textContent;button.disabled=true;button.textContent='Obteniendo ubicación…';try{const location=await currentPosition(),body=c.actor==='cliente'?{actor:'cliente',token:c.token,...location}:{actor:'prestador',codigo:c.codigo,token:c.token,...location};const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/ubicacion`,{method:'POST',headers,body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude compartir la ubicación');await loadConversation()}catch(error){alert(error.message)}finally{button.disabled=false;button.textContent=original}});
+
+  // V7.39 · Cotización sin recargar /app/
+  $('#quoteForm').addEventListener('submit',async e=>{
+    e.preventDefault();
+    e.stopPropagation();
+    const c=conversationContext;
+    if(!c||c.actor!=='prestador')return;
+    const form=e.currentTarget;
+    const button=e.submitter||form.querySelector('button');
+    const amount=$('#quoteAmount').value;
+    const detail=$('#quoteDetail').value.trim();
+    if(!amount||!detail)return;
+    const original=button?button.textContent:'';
+    if(button){button.disabled=true;button.textContent='Enviando…';}
+    try{
+      const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/cotizaciones`,{
+        method:'POST',
+        headers,
+        body:JSON.stringify({codigo:c.codigo,token:c.token,monto_clp:amount,detalle:detail})
+      });
+      const d=await r.json();
+      if(!r.ok||!d.ok)throw new Error(d.error||'No pude enviar la cotización');
+      form.reset();
+      await loadConversation();
+    }catch(err){
+      alert(err.message||'No pude enviar la cotización');
+    }finally{
+      if(button){button.disabled=false;button.textContent=original;}
+    }
+  });
 
   function renderQuote(quote){
     const c=conversationContext,box=$('#quoteBox'),form=$('#quoteForm');
