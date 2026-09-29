@@ -97,7 +97,7 @@
 .compact-panel-body[hidden]{display:none!important}.quote-box,.payment-status-card{padding:12px!important}.quote-box .compact-panel-body,.payment-status-card .compact-panel-body{margin-top:10px}
 
 /* V7.45 · solicitud rápida IA */
-.quick-ai-request{margin:10px 0 16px;padding:10px;border:1px solid var(--line);border-radius:18px;background:#fff}.quick-ai-row{display:flex;gap:7px;align-items:stretch}.quick-ai-row textarea{flex:1;min-height:52px;max-height:110px;resize:vertical;border:1px solid var(--line);border-radius:14px;padding:11px 12px;font:inherit}.quick-ai-action{flex:0 0 44px;border:0;border-radius:14px;background:#edf6fa;font-size:19px}.quick-ai-send{margin-top:7px;width:100%;border:0;border-radius:14px;padding:11px 13px;background:var(--leaf);color:var(--forest);font-weight:900}.quick-ai-hint{display:block;margin-top:6px;color:var(--muted);font-size:11px}.schedule-quick{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 7px}.schedule-quick button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 10px;font-weight:800;font-size:11px}.schedule-quick button.active{background:#e1f2f2;border-color:#9bcaca}.chat-compose .voice-send{pointer-events:auto!important;cursor:pointer;opacity:1!important;flex:0 0 42px;border:0;border-radius:50%;font-size:18px;background:#edf6fa}.voice-send.listening,.quick-ai-action.listening{outline:2px solid #ef7f61}.ai-friction-note{font-size:11px;color:var(--muted);margin:-2px 0 8px}
+.quick-ai-request{margin:10px 0 16px;padding:10px;border:1px solid var(--line);border-radius:18px;background:#fff}.quick-ai-row{display:flex;gap:7px;align-items:stretch}.quick-ai-row textarea{flex:1;min-height:52px;max-height:110px;resize:vertical;border:1px solid var(--line);border-radius:14px;padding:11px 12px;font:inherit}.quick-ai-action{flex:0 0 44px;border:0;border-radius:14px;background:#edf6fa;font-size:19px}.quick-ai-send{margin-top:7px;width:100%;border:0;border-radius:14px;padding:11px 13px;background:var(--leaf);color:var(--forest);font-weight:900}.quick-ai-hint{display:block;margin-top:6px;color:var(--muted);font-size:11px}.schedule-quick{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 7px}.schedule-quick button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 10px;font-weight:800;font-size:11px}.schedule-quick button.active{background:#e1f2f2;border-color:#9bcaca}.chat-compose .voice-send{flex:0 0 42px;border:0;border-radius:50%;font-size:18px;background:#edf6fa}.voice-send.listening,.quick-ai-action.listening{outline:2px solid #ef7f61}.ai-friction-note{font-size:11px;color:var(--muted);margin:-2px 0 8px}
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -536,11 +536,7 @@
   function hydrateClientProfile(){renderClientSession()}
   hydrateClientProfile();
 
-  function go(id){
-    const hv=$('#homeVoiceBtn'),cv=$('#chatVoiceBtn');
-    if(hv)hv.disabled=false;
-    if(cv)cv.disabled=false;
-    $$(".view").forEach(v=>v.classList.toggle("active",v.id===id)); $$(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.go===id)); window.scrollTo({top:0,behavior:"smooth"}); if(id==="status") loadSaved(); if(id==="provider") loadProvider(); }
+  function go(id){ $$(".view").forEach(v=>v.classList.toggle("active",v.id===id)); $$(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.go===id)); window.scrollTo({top:0,behavior:"smooth"}); if(id==="status") loadSaved(); if(id==="provider") loadProvider(); }
   $$('[data-go]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.go)));
   $$('[data-start]').forEach(b=>b.addEventListener('click',()=>{ setService(b.dataset.start); go('request'); }));
 
@@ -643,7 +639,7 @@
       stopJaimeVoice();
       const chatBox=$('#chatBox');if(chatBox)chatBox.innerHTML='';
       $('#chatInput').disabled=true;
-      if($('#chatVoiceBtn'))$('#chatVoiceBtn').disabled=false;
+      if($('#chatVoiceBtn'))$('#chatVoiceBtn').disabled=true;
       const draft={...(d.solicitud||{})};
       if(p.nombre&&!draft.nombre)draft.nombre=p.nombre;
       if(p.telefono&&!draft.telefono)draft.telefono=p.telefono;
@@ -703,49 +699,14 @@
      }
   }
   // V7.45: entrada rápida y dictado por voz. La IA sigue usando los endpoints existentes.
-  let activeSpeechRecognition=null;
-
-  function startVoiceDictation(target,button,onSend){
+  function speechToInput(target,button,onDone){
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){alert('El dictado por voz no está disponible en este navegador.');return}
-    if(activeSpeechRecognition){try{activeSpeechRecognition.abort()}catch(_){} activeSpeechRecognition=null}
-    stopJaimeVoice();
-    const rec=new SR();
-    activeSpeechRecognition=rec;
-    rec.lang='es-CL';
-    rec.interimResults=true;
-    rec.continuous=false;
-    rec.maxAlternatives=1;
-    let finalText='',lastText='';
-    button.disabled=false;
-    button.classList.add('listening');
-    button.textContent='●';
-    rec.onresult=e=>{
-      let current='';
-      for(let i=e.resultIndex;i<e.results.length;i++){
-        const part=(e.results[i]?.[0]?.transcript||'').trim();
-        if(!part)continue;
-        current+=(current?' ':'')+part;
-        if(e.results[i].isFinal)finalText+=(finalText?' ':'')+part;
-      }
-      lastText=(finalText||current).trim();
-      if(lastText)target.value=lastText;
-    };
-    rec.onerror=e=>{
-      if(e.error==='not-allowed'||e.error==='service-not-allowed')alert('Debes permitir el acceso al micrófono para hablar con Jaime.');
-    };
-    rec.onend=()=>{
-      if(activeSpeechRecognition===rec)activeSpeechRecognition=null;
-      button.classList.remove('listening');
-      button.textContent='🎙️';
-      const message=(finalText||lastText||target.value||'').trim();
-      if(message&&typeof onSend==='function')onSend(message);
-    };
-    try{rec.start()}catch(e){activeSpeechRecognition=null;button.classList.remove('listening');button.textContent='🎙️';alert('No pude iniciar el micrófono. Intenta nuevamente.')}
+    if(!SR){alert('El dictado por voz no está disponible en este navegador. Puedes escribir tu solicitud.');return}
+    stopJaimeVoice();const rec=new SR();rec.lang='es-CL';rec.interimResults=false;rec.maxAlternatives=1;button.classList.add('listening');button.textContent='●';
+    rec.onresult=e=>{const text=(e.results?.[0]?.[0]?.transcript||'').trim();if(text){target.value=(target.value.trim()?target.value.trim()+' ':'')+text;if(onDone)onDone(text)}};
+    rec.onerror=()=>{};rec.onend=()=>{button.classList.remove('listening');button.textContent='🎙️'};rec.start();
   }
-
   const homeVoiceBtn=$('#homeVoiceBtn'),homeNeedInput=$('#homeNeedInput');
-
   function resetJaimeForNewRequest(){
     jaimeRequestFinalized=false;
     aiRequestAdvancing=false;
@@ -757,38 +718,41 @@
     sessionStorage.removeItem('llamaAJaimeHistory');
   }
 
-  function sendHomeNeed(message){
-    const m=(message||homeNeedInput.value||'').trim();
+  function sendHomeNeed(){
+    const m=homeNeedInput.value.trim();
     if(!m){homeNeedInput.focus();return}
     resetJaimeForNewRequest();
     homeNeedInput.value='';
     go('chat');
     setTimeout(()=>ask(m),0);
   }
-
   if(homeVoiceBtn)homeVoiceBtn.addEventListener('click',()=>{
     resetJaimeForNewRequest();
-    startVoiceDictation(homeNeedInput,homeVoiceBtn,message=>sendHomeNeed(message));
+    if(!('webkitSpeechRecognition' in window||'SpeechRecognition' in window)){alert('Tu navegador no permite dictado por voz.');return}
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;stopJaimeVoice();const rec=new SR();
+    rec.lang='es-CL';rec.interimResults=false;rec.maxAlternatives=1;
+    homeVoiceBtn.disabled=true;homeVoiceBtn.textContent='…';
+    rec.onresult=e=>{homeNeedInput.value=e.results[0][0].transcript||''};
+    rec.onerror=()=>{homeVoiceBtn.disabled=false;homeVoiceBtn.textContent='🎙️'};
+    rec.onend=()=>{homeVoiceBtn.disabled=false;homeVoiceBtn.textContent='🎙️';if(homeNeedInput.value.trim())sendHomeNeed()};
+    rec.start();
   });
-
   if(homeNeedInput){
     homeNeedInput.addEventListener('input',()=>stopJaimeVoice());
     homeNeedInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendHomeNeed()}});
   }
-
   const chatVoiceBtn=$('#chatVoiceBtn');
   if($('#chatInput'))$('#chatInput').addEventListener('input',()=>stopJaimeVoice());
   if(chatVoiceBtn)chatVoiceBtn.addEventListener('click',()=>{
     if(jaimeRequestFinalized)resetJaimeForNewRequest();
     const input=$('#chatInput');
-    input.disabled=false;
-    chatVoiceBtn.disabled=false;
-    startVoiceDictation(input,chatVoiceBtn,message=>{
+    speechToInput(input,chatVoiceBtn,()=>{
+      const m=input.value.trim();
+      if(!m)return;
       input.value='';
-      ask(message);
+      ask(m);
     });
   });
-
   $$('.schedule-quick button').forEach(b=>b.addEventListener('click',()=>{const v=b.dataset.schedule||'';$$('.schedule-quick button').forEach(x=>x.classList.toggle('active',x===b));$('#schedule').value=v;if(!v)$('#schedule').focus()}));
 
   history.forEach(m=>addMessage(m.content,m.role));
