@@ -475,7 +475,7 @@
       <div class="location-panel" id="conversationLocations"><div class="location-card" id="clientLocationCard"><strong>Ubicación del cliente</strong><span>No compartida</span></div><div class="location-card" id="providerLocationCard"><strong>Ubicación del prestador</strong><span>No compartida</span></div><button class="share-location" id="shareConversationLocation">📍 Compartir o actualizar mi ubicación</button></div>
       <div class="photo-gallery" id="conversationPhotos" hidden></div>
       <button class="report-toggle" id="reportToggle" type="button">Reportar un problema de seguridad</button>
-      <form class="report-form" id="reportForm" hidden><select id="reportCategory" required><option value="">Selecciona un motivo</option><option value="seguridad">Seguridad</option><option value="estafa">Posible estafa</option><option value="trato">Trato inapropiado</option><option value="cobro">Problema con el cobro</option><option value="servicio">Problema con el servicio</option><option value="contenido">Contenido inapropiado</option><option value="otro">Otro</option></select><textarea id="reportDescription" required minlength="10" maxlength="2000" placeholder="Describe lo ocurrido. No incluyas claves ni datos bancarios."></textarea><button type="submit">Enviar reporte privado</button><div class="notice" id="reportNotice"></div></form>
+      <form class="report-form" id="reportForm" hidden><select id="reportCategory" required><option value="">Selecciona un motivo</option><option value="seguridad">Seguridad</option><option value="estafa">Posible estafa</option><option value="trato">Trato inapropiado</option><option value="cobro">Problema con el cobro</option><option value="servicio">Problema con el servicio</option><option value="contenido">Contenido inapropiado</option><option value="otro">Otro</option></select><textarea id="reportDescription" required minlength="10" maxlength="2000" placeholder="Describe lo ocurrido. No incluyas claves ni datos bancarios."></textarea><button type="submit">Enviar reporte privado</button><div class="notice" id="reportNotice"></div></form><div id="cancelRequestBox" hidden style="margin-top:10px"><button type="button" class="report-toggle" id="cancelRequestToggle">Cancelar solicitud</button><form class="report-form" id="cancelRequestForm" hidden><select id="cancelRequestReason" required><option value="">¿Por qué quieres cancelar?</option><option value="ya_no_lo_necesito">Ya no necesito el servicio</option><option value="cambio_de_planes">Cambio de planes</option><option value="problema_con_prestador">Problema con el prestador</option><option value="acordamos_cancelar">Acordamos cancelar</option><option value="otro">Otro</option></select><button type="submit">Confirmar cancelación</button><div class="notice" id="cancelRequestNotice"></div></form></div>
       </div>
 
       <div class="quote-box" id="quoteBox" hidden></div>
@@ -513,7 +513,7 @@
   <nav class="nav nav-jaime"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button class="nav-jaime-ai" data-go="chat" aria-label="Hablar con Jaime"><b>✦</b>Jaime</button><button data-go="status"><b>◷</b>Estado</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="profile"><b>●</b>Perfil</button></nav>
 </div>
 <script src="https://sdk.mercadopago.com/js/v2"></script>
-<!-- V7.83 · MERCADO PAGO SDK CARGA SEGURA + PAGO SIN CARRERA -->
+<!-- V7.84 · CANCELAR SOLICITUD + LIBERAR RESERVA MP -->
 <script>
 (() => {
   const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -1039,7 +1039,7 @@
     }catch{}
   }
 
-  async function openConversation(actor,data){clearInterval(conversationTimer);conversationContext={actor,public_id:data.public_id,token:data.token,codigo:data.codigo||''};$('#conversationModal').hidden=false;$('#conversationTitle').textContent=actor==='cliente'?'Tu solicitud':'Cliente y cotización';$('#conversationSubtitle').textContent=data.public_id;$('#clientNotifyBtn').hidden=actor!=='cliente';$('#shareConversationLocation').textContent=actor==='cliente'?'📍 Compartir ubicación con el prestador':'📍 Compartir ubicación con el cliente';$('#reportToggle').hidden=true;$('#reportForm').hidden=true;$('#reportForm').reset();$('#reportNotice').style.display='none';$('#conversationMessages').innerHTML='<div class="empty"> Abriendo conversación…</div>';await loadConversation();if(actor==='cliente'){await loadPublicProviderProfile();await loadProviderReview();}conversationTimer=setInterval(()=>loadConversation(true),5000)}
+  async function openConversation(actor,data){clearInterval(conversationTimer);conversationContext={actor,public_id:data.public_id,token:data.token,codigo:data.codigo||''};$('#conversationModal').hidden=false;$('#conversationTitle').textContent=actor==='cliente'?'Tu solicitud':'Cliente y cotización';$('#conversationSubtitle').textContent=data.public_id;$('#clientNotifyBtn').hidden=actor!=='cliente';$('#shareConversationLocation').textContent=actor==='cliente'?'📍 Compartir ubicación con el prestador':'📍 Compartir ubicación con el cliente';$('#reportToggle').hidden=true;$('#reportForm').hidden=true;$('#reportForm').reset();$('#reportNotice').style.display='none';$('#cancelRequestForm').hidden=true;$('#cancelRequestNotice').style.display='none';$('#conversationMessages').innerHTML='<div class="empty"> Abriendo conversación…</div>';await loadConversation();if(actor==='cliente'){await loadPublicProviderProfile();await loadProviderReview();}conversationTimer=setInterval(()=>loadConversation(true),5000)}
   function closeConversation(){clearInterval(conversationTimer);conversationTimer=null;conversationContext=null;$('#reportForm').hidden=true;$('#conversationModal').hidden=true}
   $('#closeConversation').addEventListener('click',closeConversation);
 
@@ -1051,6 +1051,10 @@ if(d.actor==='cliente'||d.actor==='prestador'){
 }
 const box=$('#conversationMessages'),hasProvider=!!d.prestador;if(!silent)box.innerHTML='';renderPhotoGallery(d.fotos,$('#conversationPhotos'));renderLocations(d.ubicaciones);$('#reportToggle').hidden=!hasProvider;const sol=d.solicitud||{},paymentCard=$('#paymentStatusCard'),paymentBadge=$('#paymentStatusBadge'),paymentDetail=$('#paymentStatusDetail');
 const paymentState=String(sol.pago_estado||'pendiente').toLowerCase();
+const requestState=String(sol.estado||'').toLowerCase();
+const cancelBox=$('#cancelRequestBox');
+const canCancelRequest=c.actor==='cliente' && !['cancelada','cancelado','finalizada','finalizado','completada','completado'].includes(requestState) && !['pagado','liberado','reembolsado','disputado'].includes(paymentState) && !sol.servicio_finalizado_at;
+cancelBox.hidden=!canCancelRequest;
 const paymentLabels={pendiente:'Pendiente',autorizado:'Autorizado',pagado:'Pagado',liberado:'Liberado',reembolsado:'Reembolsado',disputado:'Disputado'};
 const paymentDetails={
   pendiente:'Aún no hay un pago confirmado.',
@@ -1259,6 +1263,24 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
   });
 
   $('#reportToggle').addEventListener('click',()=>{$('#reportForm').hidden=!$('#reportForm').hidden;$('#reportNotice').style.display='none'});
+  $('#cancelRequestToggle').addEventListener('click',()=>{const form=$('#cancelRequestForm');form.hidden=!form.hidden;});
+  $('#cancelRequestForm').addEventListener('submit',async e=>{
+    e.preventDefault();
+    const c=conversationContext,button=e.submitter,note=$('#cancelRequestNotice'),motivo=$('#cancelRequestReason').value;
+    if(!c||c.actor!=='cliente'||!motivo)return;
+    if(!confirm('¿Cancelar esta solicitud? Si hay fondos reservados, primero intentaremos liberarlos en Mercado Pago.'))return;
+    button.disabled=true;note.style.display='none';
+    try{
+      const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/cancelar`,{method:'POST',headers,body:JSON.stringify({token:c.token,motivo})});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||'No pude cancelar la solicitud');
+      note.textContent=d.reserva_liberada?'Solicitud cancelada y reserva de Mercado Pago liberada.':'Solicitud cancelada correctamente.';note.className='notice';note.style.display='block';
+      await loadConversation();
+      await loadSaved();
+      setTimeout(()=>{closeConversation();go('status');},700);
+    }catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false}
+  });
+
   $('#reportForm').addEventListener('submit',async e=>{e.preventDefault();const c=conversationContext,note=$('#reportNotice'),button=e.submitter;if(!c)return;button.disabled=true;note.style.display='none';const auth=c.actor==='cliente'?{actor:'cliente',token:c.token}:{actor:'prestador',codigo:c.codigo,token:c.token};try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/reclamos`,{method:'POST',headers,body:JSON.stringify({...auth,categoria:$('#reportCategory').value,detalle:$('#reportDescription').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude enviar el reporte');e.target.reset();note.textContent='Reporte enviado de forma privada. El equipo podrá revisarlo y suspender cuentas si corresponde.';note.className='notice';note.style.display='block'}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false}});
 
   $('#shareConversationLocation').addEventListener('click',async()=>{const c=conversationContext,button=$('#shareConversationLocation');if(!c)return;const original=button.textContent;button.disabled=true;button.textContent='Obteniendo ubicación…';try{const location=await currentPosition(),body=c.actor==='cliente'?{actor:'cliente',token:c.token,...location}:{actor:'prestador',codigo:c.codigo,token:c.token,...location};const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/ubicacion`,{method:'POST',headers,body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude compartir la ubicación');await loadConversation()}catch(error){alert(error.message)}finally{button.disabled=false;button.textContent=original}});
@@ -1695,7 +1717,7 @@ async function loadProvider(){
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
   $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
   if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('/app/sw.js?v=775',{scope:'/app/'}).then(reg=>reg.update()).catch(()=>{});
+    navigator.serviceWorker.register('/app/sw.js?v=784',{scope:'/app/'}).then(reg=>reg.update()).catch(()=>{});
   }
   fetch('/app/api/config').then(r=>r.json()).then(d=>{if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
   const initialParams=new URLSearchParams(location.search),initialView=initialParams.get('view'),resetToken=initialParams.get('reset_token');if(['provider','status'].includes(initialView))go(initialView);if(resetToken){go('provider');$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerForgot').hidden=true;$('#providerForgot').style.display='none';$('#providerReset').hidden=false;$('#providerReset').style.display='block';}
