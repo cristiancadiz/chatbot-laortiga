@@ -288,6 +288,44 @@ def _norm(value):
     return re.sub(r"[^a-z0-9]+", " ", "".join(c for c in text if not unicodedata.combining(c))).strip()
 
 
+
+def _classify_request_type(text, current_type=""):
+    """Corrige categorías evidentes sin depender solo de la clasificación generativa."""
+    n = _norm(text)
+    rules = (
+        ("limpieza", (
+            r"\blimpi", r"\baseo\b", r"\blavar\b", r"\blavado\b", r"\bzapatill",
+            r"\balfombr", r"\btapiz", r"\bvidrio", r"\bventana",
+        )),
+        ("flete", (r"\bflete\b", r"\bmudanz", r"\btraslad", r"\btransport", r"\bretirar .*mueble")),
+        ("jardineria", (r"\bjardin", r"\bpoda\b", r"\bpasto\b", r"\briego\b", r"\bpaisaj")),
+        ("reciclaje", (r"\brecicl", r"\bcarton\b", r"\bplastico\b", r"\bvidrio para recic")),
+        ("belleza", (r"\bpeluquer", r"\bbarber", r"\bmanicure\b", r"\bpedicure\b", r"\bmaquill", r"\bdepil")),
+        ("salud", (r"\bkinesi", r"\benfermer", r"\bpsicolog", r"\bterapia ocupacional")),
+        ("hogar", (r"\belectric", r"\bgasfiter", r"\bcarpinter", r"\bcerrajer", r"\brepar", r"\binstal", r"\barmar .*mueble")),
+    )
+    for category, patterns in rules:
+        if any(re.search(p, n) for p in patterns):
+            return category
+    return current_type if current_type in SERVICE_TYPES else "otro"
+
+
+def _clean_request_detail(value, fallback=""):
+    """Deja solo la necesidad del cliente y elimina comentarios de IA sobre datos faltantes."""
+    text = _clean(value, 2000) or _clean(fallback, 2000)
+    if not text:
+        return ""
+    # La ficha del profesional no debe contener razonamientos/preguntas de Jaime.
+    stop_patterns = (
+        r"\s+(?:falta|faltan)\s+(?:especificar|indicar|definir|confirmar|saber)\b.*$",
+        r"\s+(?:se\s+)?(?:requiere|necesita)\s+(?:especificar|indicar|confirmar)\b.*$",
+        r"\s+(?:debe|deberia|debería|hay que)\s+(?:especificar|indicar|confirmar)\b.*$",
+    )
+    for pattern in stop_patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+    return text.rstrip(" .,:;-") + ("." if text else "")
+
+
 def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dispatch=None):
     app_dir = settings["app_dir"]
     api_base = "/app/api"
@@ -1012,6 +1050,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "tipo, subtipo, nombre, telefono, email, comuna, direccion_origen, direccion_destino, detalles, materiales, fecha_preferida. "
             "materiales debe ser una lista. Usa cadena vacía para datos ausentes. tipo debe ser uno de hogar, limpieza, flete, jardineria, belleza, salud, reciclaje, otro. "
             "Para belleza, subtipo es opcional: si el usuario no lo especifica, déjalo vacío y continúa. Si tipo es salud, subtipo debe ser kinesiologia, enfermeria, psicologia o terapia_ocupacional. "
+            "Clasifica por la necesidad real del usuario, aunque la pantalla haya partido en otra categoría. "
+            "Si pide limpiar, lavar, asear o limpieza de zapatillas, tipo debe ser limpieza. "
+            "En detalles escribe SOLO lo que el cliente necesita. No agregues frases como 'falta especificar', "
+            "'falta indicar', 'se requiere más información' ni preguntas o recomendaciones para completar la solicitud. "
             "Si el servicio seleccionado ayuda a clasificar, úsalo, pero no inventes datos personales."
         )
         context = f"Servicio seleccionado: {service}\nConversación:\n" + "\n".join(transcript)
@@ -1038,6 +1080,15 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             draft["detalles"] = _clean(draft.get("detalles"), 2000)
             draft["fecha_preferida"] = _clean(draft.get("fecha_preferida"), 120)
             draft["materiales"] = _list_clean(draft.get("materiales"), item_limit=120, max_items=30)
+            user_text = " ".join(
+                _clean(item.get("content"), 1500)
+                for item in history
+                if isinstance(item, dict) and item.get("role") == "user"
+            )
+            draft["tipo"] = _classify_request_type(user_text or draft.get("detalles"), draft["tipo"])
+            draft["detalles"] = _clean_request_detail(draft.get("detalles"), user_text)
+            if draft["tipo"] == "limpieza" and "zapatill" in _norm(user_text + " " + draft["detalles"]):
+                draft["subtipo"] = "limpieza_zapatillas"
             missing = []
             # Los datos de identidad y ubicación pertenecen al perfil/GPS de la app.
             # Jaime solo debe pedir información necesaria para entender el trabajo.
@@ -1072,6 +1123,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         details = _clean(body.get("detalles"), 2000)
         schedule = _clean(body.get("fecha_preferida"), 120)
         materials = _list_clean(body.get("materiales"), item_limit=120, max_items=30)
+        service_type = _classify_request_type(details, service_type)
+        details = _clean_request_detail(details)
+        if service_type == "limpieza" and "zapatill" in _norm(details):
+            subtype = "limpieza_zapatillas"
         accepts_terms = body.get("acepta_terminos") is True
         accepts_privacy = body.get("acepta_privacidad") is True
         location = None
