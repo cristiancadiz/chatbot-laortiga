@@ -491,7 +491,7 @@
             <button type="button" class="primary" id="showMercadoPagoFormBtn">Pagar con Mercado Pago</button>
           </div>
           <div id="mpCardFields" class="mp-card-fields" hidden>
-            <div id="mpCardForm" class="mp-reserve-form">
+            <form id="mpCardForm" class="mp-reserve-form">
               <input id="form-checkout__cardNumber" placeholder="Número de tarjeta" autocomplete="cc-number">
               <div class="grid2"><input id="form-checkout__expirationDate" placeholder="MM/AA" autocomplete="cc-exp"><input id="form-checkout__securityCode" placeholder="CVV" autocomplete="cc-csc"></div>
               <input id="form-checkout__cardholderName" placeholder="Nombre del titular" autocomplete="cc-name">
@@ -499,8 +499,8 @@
               <select id="form-checkout__installments" aria-label="Cuotas"></select>
               <select id="form-checkout__identificationType" aria-label="Tipo de documento"></select><input id="form-checkout__identificationNumber" placeholder="RUT / documento">
               <input id="form-checkout__cardholderEmail" type="email" placeholder="Correo del pagador" autocomplete="email">
-              <button type="button" class="primary" id="mercadoPagoBtn" onclick="startMercadoPagoAuthorization()">Autorizar y reservar fondos</button>
-            </div>
+              <button type="submit" class="primary" id="mercadoPagoBtn">Autorizar y reservar fondos</button>
+            </form>
           </div>
           <div class="notice" id="mercadoPagoNotice"></div>
         </div>
@@ -1206,6 +1206,33 @@ function loadMercadoPagoSdk(){
   }).catch(err=>{mpSdkLoadPromise=null;throw err;});
   return mpSdkLoadPromise;
 }
+async function submitMercadoPagoAuthorization(data){
+  const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;if(!btn||!note||!c)return;
+  const original='Autorizar y reservar fondos';
+  btn.disabled=true;btn.textContent='Autorizando…';note.style.display='block';note.className='notice';note.textContent='Mercado Pago está reservando los fondos…';
+  try{
+    const missing=[];
+    if(!data.token)missing.push('token de tarjeta');
+    if(!data.paymentMethodId)missing.push('medio de pago');
+    if(!data.issuerId)missing.push('banco emisor');
+    if(!data.installments)missing.push('cuotas');
+    if(!data.cardholderEmail)missing.push('correo');
+    if(!data.identificationType)missing.push('tipo de documento');
+    if(!data.identificationNumber)missing.push('documento');
+    if(missing.length)throw new Error('Datos incompletos: '+missing.join(', ')+'.');
+    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago/autorizar`,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({token:c.token,card_token:data.token,payment_method_id:data.paymentMethodId,issuer_id:data.issuerId,installments:Number(data.installments||1),payer:{email:data.cardholderEmail,identification:{type:data.identificationType,number:data.identificationNumber}}})});
+    let d={};
+    try{d=await r.json();}catch(_){throw new Error(`El servidor respondió ${r.status} sin JSON válido.`);}
+    if(!r.ok||!d.ok)throw new Error(d.error||d.message||`Mercado Pago rechazó la autorización (${r.status}).`);
+    note.className='notice success';note.textContent=d.status==='authorized'?'✓ Fondos reservados. El prestador puede realizar el trabajo. El cobro se hará cuando confirmes que terminó.':(d.message||'Autorización en proceso.');
+    mpPaymentUiActive=false;
+    await loadConversation(true);
+  }catch(err){
+    console.error('MP autorización',err);
+    note.className='notice error';note.style.display='block';note.textContent='Mercado Pago: '+mpErrorText(err);
+    btn.disabled=false;btn.textContent=original;
+  }
+}
 async function ensureMercadoPagoCardForm(){
   const c=conversationContext;if(!c)return;
   if(mpCardForm&&mpCardFormRequestId===c.public_id)return mpCardForm;
@@ -1213,14 +1240,53 @@ async function ensureMercadoPagoCardForm(){
 
   mpCardFormInitPromise=(async()=>{
     const MercadoPagoCtor=await loadMercadoPagoSdk();
-    const kr=await fetch('/app/api/mercadopago/public-key',{headers:{'Accept':'application/json'}}),kd=await kr.json();
+    const kr=await fetch('/app/api/mercadopago/public-key',{headers:{'Accept':'application/json'}});
+    let kd={};try{kd=await kr.json();}catch(_){throw new Error(`Public Key respondió ${kr.status} sin JSON válido.`);}
     if(!kr.ok||!kd.public_key)throw new Error(kd.error||'Falta configurar la Public Key de Mercado Pago.');
     if(!mpSdkInstance||mpSdkPublicKey!==kd.public_key){
       mpSdkInstance=new MercadoPagoCtor(kd.public_key,{locale:'es-CL'});
       mpSdkPublicKey=kd.public_key;
     }
     const amount=String(Number(window.__currentServicePrice||0));
-    const form=mpSdkInstance.cardForm({amount,iframe:true,form:{id:'mpCardForm',cardNumber:{id:'form-checkout__cardNumber',placeholder:'Número de tarjeta'},expirationDate:{id:'form-checkout__expirationDate',placeholder:'MM/AA'},securityCode:{id:'form-checkout__securityCode',placeholder:'CVV'},cardholderName:{id:'form-checkout__cardholderName',placeholder:'Nombre del titular'},issuer:{id:'form-checkout__issuer',placeholder:'Banco emisor'},installments:{id:'form-checkout__installments',placeholder:'Cuotas'},identificationType:{id:'form-checkout__identificationType',placeholder:'Tipo de documento'},identificationNumber:{id:'form-checkout__identificationNumber',placeholder:'RUT / documento'},cardholderEmail:{id:'form-checkout__cardholderEmail',placeholder:'Correo'}},callbacks:{onFormMounted:error=>{if(error){console.error('MP form',error);const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent='Mercado Pago: '+mpErrorText(error);}}}}});
+    const form=mpSdkInstance.cardForm({
+      amount,iframe:true,
+      form:{
+        id:'mpCardForm',
+        cardNumber:{id:'form-checkout__cardNumber',placeholder:'Número de tarjeta'},
+        expirationDate:{id:'form-checkout__expirationDate',placeholder:'MM/AA'},
+        securityCode:{id:'form-checkout__securityCode',placeholder:'CVV'},
+        cardholderName:{id:'form-checkout__cardholderName',placeholder:'Nombre del titular'},
+        issuer:{id:'form-checkout__issuer',placeholder:'Banco emisor'},
+        installments:{id:'form-checkout__installments',placeholder:'Cuotas'},
+        identificationType:{id:'form-checkout__identificationType',placeholder:'Tipo de documento'},
+        identificationNumber:{id:'form-checkout__identificationNumber',placeholder:'RUT / documento'},
+        cardholderEmail:{id:'form-checkout__cardholderEmail',placeholder:'Correo'}
+      },
+      callbacks:{
+        onFormMounted:error=>{
+          if(error){
+            console.error('MP form mounted',error);
+            const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent='Mercado Pago [montaje]: '+mpErrorText(error);}
+          }
+        },
+        onSubmit:event=>{
+          event.preventDefault();
+          try{
+            const data=form.getCardFormData();
+            console.log('MP CardForm submit',{paymentMethodId:data.paymentMethodId,issuerId:data.issuerId,installments:data.installments,hasToken:!!data.token,hasEmail:!!data.cardholderEmail,identificationType:data.identificationType,hasIdentification:!!data.identificationNumber});
+            submitMercadoPagoAuthorization(data);
+          }catch(err){
+            console.error('MP tokenización/submit',err);
+            const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent='Mercado Pago [tokenización]: '+mpErrorText(err);}
+            const b=$('#mercadoPagoBtn');if(b){b.disabled=false;b.textContent='Autorizar y reservar fondos';}
+          }
+        },
+        onFetching:resource=>{
+          console.log('Mercado Pago fetching:',resource);
+          return ()=>{};
+        }
+      }
+    });
     mpCardForm=form;
     mpCardFormRequestId=c.public_id;
     return form;
@@ -1231,18 +1297,19 @@ async function ensureMercadoPagoCardForm(){
   finally{mpCardFormInitPromise=null;}
 }
 async function startMercadoPagoAuthorization(){
-  const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;if(!btn||!note||!c)return;
-  const original=btn.textContent;btn.disabled=true;btn.textContent='Autorizando…';note.style.display='block';note.textContent='Mercado Pago está reservando los fondos…';
+  const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice');if(!btn||!note)return;
   try{
     await ensureMercadoPagoCardForm();
-    const data=mpCardForm.getCardFormData();
-    if(!data.token)throw new Error('Revisa los datos de la tarjeta.');
-    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago/autorizar`,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({token:c.token,card_token:data.token,payment_method_id:data.paymentMethodId,issuer_id:data.issuerId||null,installments:Number(data.installments||1),payer:{email:data.cardholderEmail,identification:{type:data.identificationType,number:data.identificationNumber}}})});
-    const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'No fue posible reservar los fondos.');
-    note.className='notice success';note.textContent=d.status==='authorized'?'✓ Fondos reservados. El prestador puede realizar el trabajo. El cobro se hará cuando confirmes que terminó.':(d.message||'Autorización en proceso.');
-    mpPaymentUiActive=false;
-    await loadConversation(true);
-  }catch(err){note.className='notice error';note.style.display='block';note.textContent='Mercado Pago: '+mpErrorText(err);btn.disabled=false;btn.textContent=original;}
+    // El token lo genera Mercado Pago en el submit real del formulario.
+    const formEl=$('#mpCardForm');
+    if(!formEl)throw new Error('No se encontró el formulario de Mercado Pago.');
+    if(typeof formEl.requestSubmit==='function')formEl.requestSubmit();
+    else formEl.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+  }catch(err){
+    console.error('MP inicio autorización',err);
+    note.className='notice error';note.style.display='block';note.textContent='Mercado Pago [inicio]: '+mpErrorText(err);
+    btn.disabled=false;btn.textContent='Autorizar y reservar fondos';
+  }
 }
 window.startMercadoPagoAuthorization=startMercadoPagoAuthorization;
 
