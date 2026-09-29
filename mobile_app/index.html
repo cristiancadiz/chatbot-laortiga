@@ -95,6 +95,9 @@
 .compact-panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;background:transparent;border:0;padding:0;cursor:pointer;text-align:left;color:inherit}
 .compact-panel-head strong{font-size:14px}.compact-panel-head .compact-chevron{font-size:18px;line-height:1;transition:transform .18s ease}.compact-panel-head[aria-expanded="true"] .compact-chevron{transform:rotate(180deg)}
 .compact-panel-body[hidden]{display:none!important}.quote-box,.payment-status-card{padding:12px!important}.quote-box .compact-panel-body,.payment-status-card .compact-panel-body{margin-top:10px}
+
+/* V7.45 · solicitud rápida IA */
+.quick-ai-request{margin:10px 0 16px;padding:10px;border:1px solid var(--line);border-radius:18px;background:#fff}.quick-ai-row{display:flex;gap:7px;align-items:stretch}.quick-ai-row textarea{flex:1;min-height:52px;max-height:110px;resize:vertical;border:1px solid var(--line);border-radius:14px;padding:11px 12px;font:inherit}.quick-ai-action{flex:0 0 44px;border:0;border-radius:14px;background:#edf6fa;font-size:19px}.quick-ai-send{margin-top:7px;width:100%;border:0;border-radius:14px;padding:11px 13px;background:var(--leaf);color:var(--forest);font-weight:900}.quick-ai-hint{display:block;margin-top:6px;color:var(--muted);font-size:11px}.schedule-quick{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 7px}.schedule-quick button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 10px;font-weight:800;font-size:11px}.schedule-quick button.active{background:#e1f2f2;border-color:#9bcaca}.chat-compose .voice-send{flex:0 0 42px;border:0;border-radius:50%;font-size:18px;background:#edf6fa}.voice-send.listening,.quick-ai-action.listening{outline:2px solid #ef7f61}.ai-friction-note{font-size:11px;color:var(--muted);margin:-2px 0 8px}
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -255,7 +258,8 @@
       <div class="home-ai-hero">
         <h1>¿Qué necesitas?</h1>
         <p>Cuéntaselo a Jaime con tus palabras. La IA te hará las preguntas necesarias y te ayudará a preparar tu solicitud.</p>
-        <button class="home-ai-button" type="button" data-go="chat">💬 Hablar con Jaime <span aria-hidden="true">→</span></button>
+        <div class="quick-ai-request"><div class="quick-ai-row"><textarea id="homeNeedInput" maxlength="800" placeholder="Ej.: mi lavadora no centrifuga y hace un ruido raro"></textarea><button class="quick-ai-action" id="homeVoiceBtn" type="button" aria-label="Hablar">🎙️</button></div><button class="quick-ai-send" id="homeNeedBtn" type="button">Buscar a alguien →</button><small class="quick-ai-hint">Escribe o habla como quieras. Jaime ordenará la solicitud por ti.</small></div>
+        <button class="home-ai-button" type="button" data-go="chat">💬 Conversar con Jaime <span aria-hidden="true">→</span></button>
       </div>
 
       <div class="home-services-head">
@@ -285,7 +289,7 @@
       <div class="page-head"><h1>Habla con Jaime</h1><p>Pregunta libremente o prepara tu solicitud.</p></div>
       <div class="chips"><button class="chip">Necesito arreglar algo en casa</button><button class="chip">Busco un flete</button><button class="chip">¿Cómo funciona?</button></div>
       <div class="chat-box" id="chatBox"><div class="message bot">¡Hola! Soy Jaime 👋. Cuéntame qué servicio necesitas y te ayudaré a preparar tu solicitud.</div></div>
-      <form class="chat-compose" id="chatForm"><textarea id="chatInput" rows="1" maxlength="1500" placeholder="Escribe tu pregunta…"></textarea><button class="send" aria-label="Enviar">↑</button></form>
+      <form class="chat-compose" id="chatForm"><textarea id="chatInput" rows="1" maxlength="1500" placeholder="Escribe o cuéntale a Jaime qué necesitas…"></textarea><button class="voice-send" id="chatVoiceBtn" type="button" aria-label="Hablar">🎙️</button><button class="send" aria-label="Enviar">↑</button></form>
     </section>
 
     <section class="view" id="request">
@@ -302,7 +306,7 @@
           <div class="field" id="materialsField" hidden><label>Materiales para reciclar</label><div class="checks" id="requestMaterials"><label class="check-pill"><input type="checkbox" value="Cartón"><span>Cartón</span></label><label class="check-pill"><input type="checkbox" value="Papel"><span>Papel</span></label><label class="check-pill"><input type="checkbox" value="Plástico"><span>Plástico</span></label><label class="check-pill"><input type="checkbox" value="Vidrio"><span>Vidrio</span></label><label class="check-pill"><input type="checkbox" value="Metales"><span>Metales</span></label><label class="check-pill"><input type="checkbox" value="Textil"><span>Textil</span></label><label class="check-pill"><input type="checkbox" value="Electrónicos"><span>Electrónicos</span></label><label class="check-pill"><input type="checkbox" value="Aceite"><span>Aceite</span></label><label class="check-pill"><input type="checkbox" value="Otros"><span>Otros</span></label></div></div>
           <div class="field"><label>Fotografías (opcional)</label><label class="photo-picker">📷 Tomar foto<input id="requestCamera" type="file" accept="image/*" capture="environment"><small>Puedes tomar hasta 5 fotos, una por una</small></label><div class="photo-preview" id="photoPreview"></div></div>
           <div class="field"><label for="details" id="detailsLabel">Describe lo que necesitas</label><textarea id="details" required placeholder="Ej.: necesito instalar una repisa en el living…"></textarea></div>
-          <div class="field"><label for="schedule">Fecha u horario preferido (opcional)</label><input id="schedule" placeholder="Ej.: sábado por la mañana"></div>
+          <div class="field"><label for="schedule">¿Cuándo lo necesitas?</label><div class="schedule-quick"><button type="button" data-schedule="Lo antes posible">⚡ Ahora</button><button type="button" data-schedule="Hoy">Hoy</button><button type="button" data-schedule="Mañana">Mañana</button><button type="button" data-schedule="">Elegir</button></div><input id="schedule" placeholder="Ej.: sábado por la mañana"><div class="ai-friction-note">Puedes dejarlo vacío si eres flexible.</div></div>
           <details class="legal-box"><summary>Seguridad, privacidad y responsabilidades</summary><p>Tu teléfono, fotos y ubicación exacta no se muestran a prestadores antes de que uno tome la solicitud. Usamos el GPS para simplificar la solicitud; la ubicación exacta es privada entre las partes asignadas y la app no realiza seguimiento en segundo plano.</p><p>El prestador responde por la ejecución, el precio acordado, daños y accidentes del servicio. Llama a Jaime administra la plataforma, la privacidad, los reportes y las suspensiones, pero no presta directamente el servicio. No publiques emergencias ni trabajos riesgosos.</p></details>
           <label class="consent"><input id="requestTerms" type="checkbox" required><span>Acepto los términos de uso y entiendo las responsabilidades del servicio.</span></label>
           <label class="consent"><input id="requestPrivacy" type="checkbox" required><span>Autorizo el tratamiento privado de mis datos para gestionar esta solicitud.</span></label>
@@ -536,6 +540,21 @@
       go('request');
     }catch(err){alert(err.message);button.disabled=false;button.textContent='Enviar solicitud'}
   }
+  // V7.45: entrada rápida y dictado por voz. La IA sigue usando los endpoints existentes.
+  function speechToInput(target,button,onDone){
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){alert('El dictado por voz no está disponible en este navegador. Puedes escribir tu solicitud.');return}
+    const rec=new SR();rec.lang='es-CL';rec.interimResults=false;rec.maxAlternatives=1;button.classList.add('listening');button.textContent='●';
+    rec.onresult=e=>{const text=(e.results?.[0]?.[0]?.transcript||'').trim();if(text){target.value=(target.value.trim()?target.value.trim()+' ':'')+text;if(onDone)onDone(text)}};
+    rec.onerror=()=>{};rec.onend=()=>{button.classList.remove('listening');button.textContent='🎙️'};rec.start();
+  }
+  const homeVoiceBtn=$('#homeVoiceBtn'),homeNeedInput=$('#homeNeedInput'),homeNeedBtn=$('#homeNeedBtn');
+  if(homeVoiceBtn)homeVoiceBtn.addEventListener('click',()=>speechToInput(homeNeedInput,homeVoiceBtn));
+  if(homeNeedBtn)homeNeedBtn.addEventListener('click',()=>{const m=homeNeedInput.value.trim();if(!m){homeNeedInput.focus();return}go('chat');setTimeout(()=>ask(m),0)});
+  if(homeNeedInput)homeNeedInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();homeNeedBtn.click()}});
+  const chatVoiceBtn=$('#chatVoiceBtn');if(chatVoiceBtn)chatVoiceBtn.addEventListener('click',()=>speechToInput($('#chatInput'),chatVoiceBtn));
+  $$('.schedule-quick button').forEach(b=>b.addEventListener('click',()=>{const v=b.dataset.schedule||'';$$('.schedule-quick button').forEach(x=>x.classList.toggle('active',x===b));$('#schedule').value=v;if(!v)$('#schedule').focus()}));
+
   history.forEach(m=>addMessage(m.content,m.role));
   async function ask(message){ addMessage(message,'user'); const prior=history.slice(-8); history.push({role:'user',content:message}); $('#chatInput').disabled=true; const waiting=document.createElement('div'); waiting.className='message bot'; waiting.innerHTML='<span class="spinner"></span> Pensando…'; $('#chatBox').append(waiting); $('#chatBox').scrollTop=$('#chatBox').scrollHeight;
     try{ const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message,service,history:prior})}); const d=await r.json(); waiting.remove(); if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant'); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
