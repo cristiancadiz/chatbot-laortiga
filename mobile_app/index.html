@@ -87,6 +87,11 @@
     .quote-mp-note{display:block;margin-top:8px;color:#69756e;font-size:11px;line-height:1.35}
 
 .mp-reserve-form{display:grid;gap:9px;width:100%}.mp-reserve-form input,.mp-reserve-form select{width:100%;border:1px solid var(--line);border-radius:12px;padding:11px;background:white}.mp-reserve-form p{margin:0 0 4px}.mp-reserve-form small{color:var(--muted);font-weight:500}
+
+/* V7.40 · paneles compactos de cotización/pago */
+.compact-panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;background:transparent;border:0;padding:0;cursor:pointer;text-align:left;color:inherit}
+.compact-panel-head strong{font-size:14px}.compact-panel-head .compact-chevron{font-size:18px;line-height:1;transition:transform .18s ease}.compact-panel-head[aria-expanded="true"] .compact-chevron{transform:rotate(180deg)}
+.compact-panel-body[hidden]{display:none!important}.quote-box,.payment-status-card{padding:12px!important}.quote-box .compact-panel-body,.payment-status-card .compact-panel-body{margin-top:10px}
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -409,10 +414,12 @@
       <form class="quote-form" id="quoteForm" hidden><input id="quoteAmount" inputmode="numeric" placeholder="$ Monto de la cotización" required><input id="quoteDetail" maxlength="500" placeholder="Descripción del trabajo: qué incluye, alcance, materiales, etc." required><button type="submit">Enviar cotización al cliente</button></form>
 
       <div class="payment-status-card" id="paymentStatusCard" hidden>
-        <div class="payment-status-copy"><strong>Pago protegido con Mercado Pago</strong><span id="paymentStatusDetail">Primero acepta la cotización.</span></div><span class="payment-status-badge" id="paymentStatusBadge">Pendiente</span>
+        <button type="button" class="compact-panel-head" id="paymentPanelToggle" aria-expanded="false"><span><strong>🛡️ Pago protegido</strong> · <span class="payment-status-badge" id="paymentStatusBadge">Pendiente</span></span><span class="compact-chevron">⌄</span></button>
+        <div class="compact-panel-body" id="paymentPanelBody" hidden>
+        <div class="payment-status-copy"><span id="paymentStatusDetail">Primero acepta la cotización.</span></div>
         <div class="payment-client-action" id="paymentClientAction" hidden>
           <div id="mpCardForm" class="mp-reserve-form">
-            <p><strong>Autorizar pago</strong><br><small>Mercado Pago reservará el monto. El cobro se realizará cuando el prestador marque el trabajo terminado y tú confirmes la finalización.</small></p>
+            <p><strong>🛡️ Tu pago está protegido</strong><br><small>Paga de forma segura con Mercado Pago. El monto quedará protegido mientras se realiza el servicio. El cobro se completará cuando el prestador marque el trabajo terminado y tú confirmes la finalización. <strong>Si el trabajo no se completa, podrás solicitar la devolución íntegra del monto pagado</strong>, sujeta a la validación del estado del servicio y las condiciones aplicables.</small></p>
             <input id="form-checkout__cardNumber" placeholder="Número de tarjeta" autocomplete="cc-number">
             <div class="grid2"><input id="form-checkout__expirationDate" placeholder="MM/AA" autocomplete="cc-exp"><input id="form-checkout__securityCode" placeholder="CVV" autocomplete="cc-csc"></div>
             <input id="form-checkout__cardholderName" placeholder="Nombre del titular" autocomplete="cc-name">
@@ -424,6 +431,7 @@
           <div class="notice" id="mercadoPagoNotice"></div>
         </div>
         <div class="payment-breakdown" id="paymentBreakdown" hidden><div><span>Precio del servicio</span><strong id="paymentServicePrice">—</strong></div><div><span>Comisión Llama a Jaime (12%)</span><strong id="paymentPlatformFee">—</strong></div><div><span>IVA sobre comisión (19%)</span><strong id="paymentPlatformVat">—</strong></div><div><span>Costo Mercado Pago</span><strong id="paymentGatewayFee">—</strong></div><div class="payment-net"><span>Recibes</span><strong id="paymentProviderNet">—</strong></div><small id="paymentGatewayNote">El costo de Mercado Pago se actualizará con el valor real de la transacción.</small></div>
+        </div>
       </div>
       <div class="finish-service-card" id="finishServiceCard" hidden><div><strong id="finishServiceTitle">¿El trabajo ya terminó?</strong><span id="finishServiceText">Confirma el cierre cuando el servicio haya sido realizado.</span></div><button id="finishServiceBtn" type="button">✓ Finalizar servicio</button><div class="notice" id="finishServiceNotice"></div></div>      <div class="conversation-messages" id="conversationMessages"></div>
       <form class="conversation-compose" id="conversationForm"><input id="conversationInput" maxlength="2000" placeholder="Escribe un mensaje…" autocomplete="off"><button type="submit">Enviar</button></form>
@@ -432,11 +440,14 @@
   <nav class="nav"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button data-go="chat"><b>✦</b>IA</button><button data-go="request"><b>＋</b>Solicitar</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="status"><b>◷</b>Estado</button></nav>
 </div>
 <script src="https://sdk.mercadopago.com/js/v2"></script>
+<!-- V7.40 · PANELES PLEGABLES + FINALIZAR SOLO TRAS PAGO AUTORIZADO -->
 <script>
 (() => {
   const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
   const conversationActionsToggle=$('#conversationActionsToggle'),conversationTools=$('#conversationTools');
   if(conversationActionsToggle&&conversationTools){conversationActionsToggle.addEventListener('click',()=>{const open=conversationTools.classList.toggle('open');conversationActionsToggle.setAttribute('aria-expanded',open?'true':'false');conversationActionsToggle.textContent=open?'× Cerrar acciones':'＋ Acciones';});}
+  const paymentPanelToggle=$('#paymentPanelToggle'),paymentPanelBody=$('#paymentPanelBody');
+  if(paymentPanelToggle&&paymentPanelBody){paymentPanelToggle.addEventListener('click',()=>{const open=paymentPanelBody.hidden;paymentPanelBody.hidden=!open;paymentPanelToggle.setAttribute('aria-expanded',open?'true':'false');});}
   const session = localStorage.appSession || (localStorage.appSession = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
   const headers = {"Content-Type":"application/json","X-App-Session":session};
   const SERVICE_META = {
@@ -682,13 +693,14 @@ if(hasProvider){
   }
 }
 const finishCard=$('#finishServiceCard'),finishBtn=$('#finishServiceBtn'),finishNote=$('#finishServiceNotice');
-finishCard.hidden=!hasProvider;
-if(hasProvider&&sol.servicio_finalizado_at){
+const paymentReady=['autorizado','pagado'].includes(paymentState);
+finishCard.hidden=!(hasProvider&&paymentReady);
+if(hasProvider&&paymentReady&&sol.servicio_finalizado_at){
   finishCard.classList.add('done');finishBtn.hidden=true;
   $('#finishServiceTitle').textContent='✓ Servicio finalizado';
   $('#finishServiceText').textContent='El cliente confirmó que recibió el servicio.';
   finishNote.style.display='none';
-}else if(hasProvider&&c.actor==='prestador'){
+}else if(hasProvider&&paymentReady&&c.actor==='prestador'){
   finishCard.classList.remove('done');
   if(sol.prestador_declaro_finalizado_at){
     finishBtn.hidden=true;
@@ -699,7 +711,7 @@ if(hasProvider&&sol.servicio_finalizado_at){
     $('#finishServiceTitle').textContent='¿Terminaste el trabajo?';
     $('#finishServiceText').textContent='Indica que terminaste para solicitar la confirmación del cliente.';
   }
-}else if(hasProvider&&c.actor==='cliente'){
+}else if(hasProvider&&paymentReady&&c.actor==='cliente'){
   finishCard.classList.remove('done');
   if(sol.prestador_declaro_finalizado_at){
     finishBtn.hidden=false;finishBtn.textContent='✓ Confirmar servicio recibido';
@@ -845,8 +857,11 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     const title=quote.estado==='aceptada'?`✓ Cotización aceptada · ${escapeHtml(price)}`:`Cotización · ${escapeHtml(price)}`;
     const actions=(c&&c.actor==='cliente'&&quote.estado==='pendiente')?`<div class="quote-actions"><button class="quote-accept" data-quote-action="aceptar">Aceptar cotización</button><button class="quote-reject" data-quote-action="rechazar">Rechazar</button></div>`:'';
     const status=(c&&c.actor==='prestador'&&quote.estado==='pendiente')?'<small>Esperando respuesta del cliente.</small>':'';
-    box.innerHTML=`<h3>${title}</h3><div class="quote-description"><strong>Descripción:</strong><br>${description}</div>${economy}${status}${actions}`;
+    const expanded=quote.estado==='pendiente'&&c&&c.actor==='cliente';
+    box.innerHTML=`<button type="button" class="compact-panel-head quote-panel-toggle" aria-expanded="${expanded?'true':'false'}"><strong>${title}</strong><span class="compact-chevron">⌄</span></button><div class="compact-panel-body quote-panel-body" ${expanded?'':'hidden'}><div class="quote-description"><strong>Descripción:</strong><br>${description}</div>${economy}${status}${actions}</div>`;
     if(quote.estado==='aceptada')form.hidden=true;
+    const quoteToggle=box.querySelector('.quote-panel-toggle'),quoteBody=box.querySelector('.quote-panel-body');
+    if(quoteToggle&&quoteBody)quoteToggle.addEventListener('click',()=>{const open=quoteBody.hidden;quoteBody.hidden=!open;quoteToggle.setAttribute('aria-expanded',open?'true':'false')});
     $$('[data-quote-action]').forEach(b=>b.addEventListener('click',()=>answerQuote(quote.id,b.dataset.quoteAction,b)));
   }
 
