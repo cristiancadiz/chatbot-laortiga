@@ -1312,12 +1312,16 @@ async function startMercadoPagoAuthorization(){
   }
 }
 window.startMercadoPagoAuthorization=startMercadoPagoAuthorization;
-const mercadoPagoActionBtn=$('#mercadoPagoBtn');
-if(mercadoPagoActionBtn){
-  mercadoPagoActionBtn.addEventListener('click',()=>{
-    startMercadoPagoAuthorization();
-  });
-}
+// El bloque de conversación se vuelve a renderizar periódicamente, por lo que el botón
+// #mercadoPagoBtn puede ser reemplazado después de registrar listeners directos.
+// Delegamos el click al documento para que funcione también sobre botones recién renderizados.
+document.addEventListener('click',event=>{
+  const mercadoPagoActionBtn=event.target.closest?.('#mercadoPagoBtn');
+  if(!mercadoPagoActionBtn)return;
+  event.preventDefault();
+  event.stopPropagation();
+  startMercadoPagoAuthorization();
+});
 
 $('#finishServiceBtn').addEventListener('click',async()=>{
     const c=conversationContext,btn=$('#finishServiceBtn'),note=$('#finishServiceNotice');if(!c)return;
@@ -1798,7 +1802,7 @@ async function loadProvider(){
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
   $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
   if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('/app/sw.js?v=788',{scope:'/app/'}).then(reg=>reg.update()).catch(()=>{});
+    navigator.serviceWorker.register('/app/sw.js?v=789',{scope:'/app/'}).then(reg=>reg.update()).catch(()=>{});
   }
   fetch('/app/api/config').then(r=>r.json()).then(d=>{if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
   const initialParams=new URLSearchParams(location.search),initialView=initialParams.get('view'),resetToken=initialParams.get('reset_token');if(['provider','status'].includes(initialView))go(initialView);if(resetToken){go('provider');$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerForgot').hidden=true;$('#providerForgot').style.display='none';$('#providerReset').hidden=false;$('#providerReset').style.display='block';}
