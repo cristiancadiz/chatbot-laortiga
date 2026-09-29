@@ -266,6 +266,9 @@
 
 .profile-auto-data{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;margin:8px 0 12px;border:1px solid var(--line);border-radius:14px;background:#f7faf7}.profile-auto-data span{font-size:12px;color:var(--muted);font-weight:800}.profile-auto-data strong{font-size:13px;text-align:right}.profile-location-result{font-size:12px;color:var(--muted);font-weight:700;margin:7px 2px 14px}
 
+
+.jaime-audio-btn{border:0;background:transparent;padding:5px 7px;margin-left:6px;border-radius:10px;cursor:pointer;font-size:15px;vertical-align:middle;opacity:.72}.jaime-audio-btn:hover,.jaime-audio-btn:focus{background:rgba(0,0,0,.06);opacity:1}.message.bot .jaime-audio-btn{float:right;margin-top:-3px}
+
 </style>
 
 </head>
@@ -562,7 +565,17 @@
   $('#requestLocationBtn').addEventListener('click',async()=>{const button=$('#requestLocationBtn'),status=$('#requestLocationStatus');button.disabled=true;status.textContent='Obteniendo ubicación…';try{pendingLocation=await currentPosition();status.textContent='Detectando comuna…';const comuna=await communeFromCoordinates(pendingLocation.latitud,pendingLocation.longitud);const current=clientProfile()||{};saveClientProfile({...current,nombre:$('#name').value.trim()||current.nombre||'Cliente',telefono:$('#phone').value.trim()||current.telefono||'',email:$('#email').value.trim()||current.email||'',comuna:comuna||current.comuna||'Ubicación GPS',...pendingLocation});if($('#commune'))$('#commune').value=comuna||current.comuna||'Ubicación GPS';button.textContent='✓ GPS activo';status.textContent=comuna?`📍 ${comuna} · precisión aproximada ±${Math.round(pendingLocation.precision_m||0)} m.`:`Ubicación GPS guardada · precisión aproximada ±${Math.round(pendingLocation.precision_m||0)} m.`}catch(error){status.textContent=error.message}finally{button.disabled=false}});
 
   function plainAssistantText(content){return String(content||'').replace(/\*\*(.*?)\*\*/gs,'$1').replace(/__(.*?)__/gs,'$1').replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,'$1$2').replace(/`([^`\n]+)`/g,'$1').replace(/^\s{0,3}#{1,6}\s*/gm,'').replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'$1 ($2)').trim()}
-  function addMessage(content, role){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'&&/crear solicitud/i.test(display)){const button=document.createElement('button');button.type='button';button.className='chat-request-cta';button.textContent='Revisar y enviar solicitud';button.addEventListener('click',()=>prepareAIRequest(button));el.append(button)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; }
+  function speakJaime(text){
+    if(!('speechSynthesis' in window)||!text)return;
+    window.speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(plainAssistantText(text));
+    u.lang='es-CL';u.rate=1;u.pitch=1;
+    const voices=window.speechSynthesis.getVoices();
+    const preferred=voices.find(v=>/^es-CL/i.test(v.lang))||voices.find(v=>/^es/i.test(v.lang));
+    if(preferred)u.voice=preferred;
+    window.speechSynthesis.speak(u);
+  }
+  function addMessage(content, role, speak=false){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'){const audio=document.createElement('button');audio.type='button';audio.className='jaime-audio-btn';audio.setAttribute('aria-label','Escuchar respuesta');audio.title='Escuchar respuesta';audio.textContent='🔊';audio.addEventListener('click',()=>speakJaime(display));el.append(audio)} if(role!=='user'&&/crear solicitud/i.test(display)){const button=document.createElement('button');button.type='button';button.className='chat-request-cta';button.textContent='Revisar y enviar solicitud';button.addEventListener('click',()=>prepareAIRequest(button));el.append(button)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; if(role!=='user'&&speak)speakJaime(display); }
 
   async function prepareAIRequest(button){
     const original=button.textContent;button.disabled=true;button.innerHTML='<span class="spinner"></span> Preparando';
@@ -610,7 +623,7 @@
 
   history.forEach(m=>addMessage(m.content,m.role));
   async function ask(message){ addMessage(message,'user'); const prior=history.slice(-8); history.push({role:'user',content:message}); $('#chatInput').disabled=true; const waiting=document.createElement('div'); waiting.className='message bot'; waiting.innerHTML='<span class="spinner"></span> Pensando…'; $('#chatBox').append(waiting); $('#chatBox').scrollTop=$('#chatBox').scrollHeight;
-    try{ const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message,service,history:prior})}); const d=await r.json(); waiting.remove(); if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant'); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
+    try{ const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message,service,history:prior})}); const d=await r.json(); waiting.remove(); if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant',true); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
     catch(e){waiting.remove();addMessage(e.message||'No pude conectar. Intenta nuevamente.','assistant')} finally{$('#chatInput').disabled=false;$('#chatInput').focus()}
   }
   $('#chatForm').addEventListener('submit',e=>{e.preventDefault();const m=$('#chatInput').value.trim();if(!m)return;$('#chatInput').value='';ask(m)});
