@@ -513,7 +513,7 @@
   <nav class="nav nav-jaime"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button class="nav-jaime-ai" data-go="chat" aria-label="Hablar con Jaime"><b>✦</b>Jaime</button><button data-go="status"><b>◷</b>Estado</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="profile"><b>●</b>Perfil</button></nav>
 </div>
 <script src="https://sdk.mercadopago.com/js/v2"></script>
-<!-- V7.40 · PANELES PLEGABLES + FINALIZAR SOLO TRAS PAGO AUTORIZADO -->
+<!-- V7.83 · MERCADO PAGO SDK CARGA SEGURA + PAGO SIN CARRERA -->
 <script>
 (() => {
   const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -1168,18 +1168,44 @@ $('#conversationForm').addEventListener('submit',async e=>{
   }
 });
 
-let mpCardForm=null,mpCardFormRequestId=null,mpCardFormInitPromise=null,mpSdkInstance=null,mpSdkPublicKey=null;
+let mpCardForm=null,mpCardFormRequestId=null,mpCardFormInitPromise=null,mpSdkInstance=null,mpSdkPublicKey=null,mpSdkLoadPromise=null;
+function loadMercadoPagoSdk(){
+  if(typeof window.MercadoPago==='function')return Promise.resolve(window.MercadoPago);
+  if(mpSdkLoadPromise)return mpSdkLoadPromise;
+  mpSdkLoadPromise=new Promise((resolve,reject)=>{
+    let script=document.querySelector('script[src="https://sdk.mercadopago.com/js/v2"]');
+    const finish=()=>{
+      if(typeof window.MercadoPago==='function')resolve(window.MercadoPago);
+      else reject(new Error('No se pudo cargar Mercado Pago. Revisa tu conexión e inténtalo nuevamente.'));
+    };
+    if(!script){
+      script=document.createElement('script');
+      script.src='https://sdk.mercadopago.com/js/v2';
+      script.async=true;
+      document.head.appendChild(script);
+    }
+    if(typeof window.MercadoPago==='function'){resolve(window.MercadoPago);return;}
+    script.addEventListener('load',finish,{once:true});
+    script.addEventListener('error',()=>reject(new Error('No se pudo descargar Mercado Pago. Revisa tu conexión e inténtalo nuevamente.')),{once:true});
+    const started=Date.now();
+    const timer=setInterval(()=>{
+      if(typeof window.MercadoPago==='function'){clearInterval(timer);resolve(window.MercadoPago);}
+      else if(Date.now()-started>10000){clearInterval(timer);finish();}
+    },100);
+  }).catch(err=>{mpSdkLoadPromise=null;throw err;});
+  return mpSdkLoadPromise;
+}
 async function ensureMercadoPagoCardForm(){
   const c=conversationContext;if(!c)return;
-  if(mpCardForm)return mpCardForm;
+  if(mpCardForm&&mpCardFormRequestId===c.public_id)return mpCardForm;
   if(mpCardFormInitPromise)return mpCardFormInitPromise;
-  if(typeof MercadoPago==='undefined')throw new Error('No se pudo cargar Mercado Pago.');
 
   mpCardFormInitPromise=(async()=>{
+    const MercadoPagoCtor=await loadMercadoPagoSdk();
     const kr=await fetch('/app/api/mercadopago/public-key',{headers:{'Accept':'application/json'}}),kd=await kr.json();
     if(!kr.ok||!kd.public_key)throw new Error(kd.error||'Falta configurar la Public Key de Mercado Pago.');
     if(!mpSdkInstance||mpSdkPublicKey!==kd.public_key){
-      mpSdkInstance=new MercadoPago(kd.public_key,{locale:'es-CL'});
+      mpSdkInstance=new MercadoPagoCtor(kd.public_key,{locale:'es-CL'});
       mpSdkPublicKey=kd.public_key;
     }
     const amount=String(Number(window.__currentServicePrice||0));
