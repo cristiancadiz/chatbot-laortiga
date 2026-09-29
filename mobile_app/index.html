@@ -113,6 +113,11 @@
       cursor:default;
     }
 
+
+    .home-voice-only{text-align:center;padding:12px 0 4px}
+    .home-main-mic{width:82px!important;height:82px!important;border-radius:50%!important;font-size:34px!important;margin:0 auto 10px!important;display:flex!important;align-items:center;justify-content:center}
+    .home-voice-only .quick-ai-hint{font-size:12px;margin-top:4px}
+
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -298,7 +303,7 @@
       <div class="home-ai-hero">
         <h1>¿Qué necesitas?</h1>
         <p>Cuéntaselo a Jaime con tus palabras.</p>
-        <div class="quick-ai-request"><div class="quick-ai-row"><button class="quick-ai-action quick-ai-mic-first" id="homeVoiceBtn" type="button" aria-label="Hablar">🎙️</button><textarea id="homeNeedInput" maxlength="800" placeholder="Ej.: mi lavadora no centrifuga y hace un ruido raro"></textarea></div><small class="quick-ai-hint">Escribe o habla como quieras. Jaime ordenará la solicitud por ti.</small></div>
+        <div class="quick-ai-request home-voice-only"><button class="quick-ai-action quick-ai-mic-first home-main-mic" id="homeVoiceBtn" type="button" aria-label="Solicitar por voz">🎙️</button><textarea id="homeNeedInput" maxlength="800" aria-hidden="true" tabindex="-1" style="position:absolute;opacity:0;pointer-events:none;width:1px;height:1px"></textarea><small class="quick-ai-hint">Toca el micrófono y cuéntale a Jaime qué necesitas.</small></div>
       </div>
 
       <div class="home-services-head">
@@ -582,13 +587,29 @@
   function addSelectedPhotos(event){const selected=[...event.target.files],available=5-requestPhotos.length;if(selected.length>available)alert(`Solo puedes agregar ${available} foto${available===1?'':'s'} más.`);for(const file of selected.slice(0,available)){if(!['image/jpeg','image/png','image/webp'].includes(file.type)){alert(`${file.name}: formato no compatible.`);continue}if(file.size>8*1024*1024){alert(`${file.name}: supera el máximo de 8 MB.`);continue}requestPhotos.push(file)}event.target.value='';renderPhotoPreview()}
   if($('#requestCamera'))$('#requestCamera').addEventListener('change',addSelectedPhotos);
 
+
+  const CHILE_COMUNAS=['Algarrobo','Alhué','Alto Biobío','Alto del Carmen','Alto Hospicio','Ancud','Andacollo','Angol','Antofagasta','Antuco','Arauco','Arica','Buin','Bulnes','Cabildo','Cabo de Hornos','Cabrero','Calama','Calbuco','Caldera','Calera de Tango','Calle Larga','Camarones','Camiña','Canela','Cañete','Carahue','Cartagena','Casablanca','Castro','Catemu','Cauquenes','Cerrillos','Cerro Navia','Chaitén','Chanco','Chañaral','Chépica','Chiguayante','Chile Chico','Chillán','Chillán Viejo','Chimbarongo','Cholchol','Chonchi','Cisnes','Cobquecura','Cochamó','Cochrane','Codegua','Coelemu','Coihueco','Coinco','Colbún','Colchane','Colina','Collipulli','Coltauco','Combarbalá','Concepción','Conchalí','Concón','Constitución','Contulmo','Copiapó','Coquimbo','Coronel','Corral','Coyhaique','Cunco','Curacautín','Curacaví','Curanilahue','Curarrehue','Curepto','Curicó','Dalcahue','Diego de Almagro','Doñihue','El Bosque','El Carmen','El Monte','El Quisco','El Tabo','Empedrado','Ercilla','Estación Central','Florida','Freire','Freirina','Fresia','Frutillar','Futaleufú','Futrono','Galvarino','General Lagos','Gorbea','Graneros','Guaitecas','Hijuelas','Hualaihué','Hualañé','Hualpén','Hualqui','Huara','Huasco','Huechuraba','Illapel','Independencia','Iquique','Isla de Maipo','Isla de Pascua','Juan Fernández','La Calera','La Cisterna','La Cruz','La Estrella','La Florida','La Granja','La Higuera','La Ligua','La Pintana','La Reina','La Serena','La Unión','Lago Ranco','Lago Verde','Laguna Blanca','Laja','Lampa','Lanco','Las Cabras','Las Condes','Lautaro','Lebu','Licantén','Limache','Linares','Litueche','Llaillay','Llanquihue','Lo Barnechea','Lo Espejo','Lo Prado','Lolol','Loncoche','Longaví','Lonquimay','Los Álamos','Los Andes','Los Ángeles','Los Lagos','Los Muermos','Los Sauces','Los Vilos','Lota','Lumaco','Machalí','Macul','Máfil','Maipú','Malloa','Marchigüe','María Elena','María Pinto','Mariquina','Maule','Maullín','Mejillones','Melipeuco','Melipilla','Molina','Monte Patria','Mostazal','Mulchén','Nacimiento','Nancagua','Natales','Navidad','Negrete','Ninhue','Nogales','Nueva Imperial','Ñiquén','Ñuñoa',"O'Higgins",'Olivar','Ollagüe','Olmué','Osorno','Padre Hurtado','Padre Las Casas','Paihuano','Paillaco','Paine','Palena','Palmilla','Panguipulli','Panquehue','Papudo','Paredones','Parral','Pedro Aguirre Cerda','Pelarco','Pelluhue','Pemuco','Pencahue','Penco','Peñaflor','Peñalolén','Peralillo','Perquenco','Petorca','Peumo','Pica','Pichidegua','Pichilemu','Pinto','Pirque','Pitrufquén','Placilla','Portezuelo','Porvenir','Primavera','Providencia','Puchuncaví','Pucón','Pudahuel','Puente Alto','Puerto Montt','Puerto Octay','Puerto Varas','Pumanque','Punitaqui','Punta Arenas','Puqueldón','Purén','Purranque','Putaendo','Putre','Puyehue','Queilén','Quellón','Quemchi','Quilaco','Quilicura','Quilleco','Quillón','Quillota','Quilpué','Quinchao','Quinta de Tilcoco','Quinta Normal','Quintero','Quirihue','Rancagua','Ránquil','Rauco','Recoleta','Renaico','Renca','Rengo','Requínoa','Retiro','Rinconada','Río Bueno','Río Claro','Río Hurtado','Río Ibáñez','Río Negro','Río Verde','Romeral','Saavedra','Sagrada Familia','Salamanca','San Antonio','San Bernardo','San Carlos','San Clemente','San Esteban','San Fabián','San Felipe','San Fernando','San Gregorio','San Ignacio','San Javier','San Joaquín','San José de Maipo','San Juan de la Costa','San Miguel','San Nicolás','San Pablo','San Pedro','San Pedro de Atacama','San Pedro de la Paz','San Rafael','San Ramón','San Rosendo','San Vicente','Santa Bárbara','Santa Cruz','Santa Juana','Santa María','Santiago','Santo Domingo','Sierra Gorda','Talagante','Talca','Talcahuano','Taltal','Temuco','Teno','Teodoro Schmidt','Tierra Amarilla','Tiltil','Timaukel','Tirúa','Tocopilla','Toltén','Tomé','Torres del Paine','Tortel','Traiguén','Trehuaco','Tucapel','Valdivia','Vallenar','Valparaíso','Vichuquén','Victoria','Vicuña','Vilcún','Villa Alegre','Villa Alemana','Villarrica','Viña del Mar','Vitacura','Yerbas Buenas','Yumbel','Yungay','Zapallar'];
+  const normalizeCommune=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  const CHILE_COMUNA_MAP=new Map(CHILE_COMUNAS.map(c=>[normalizeCommune(c),c]));
+  function validChileCommune(value){
+    if(!value)return '';
+    let raw=String(value).replace(/^comuna\s+de\s+/i,'').replace(/^municipalidad\s+de\s+/i,'').trim();
+    return CHILE_COMUNA_MAP.get(normalizeCommune(raw))||'';
+  }
+
   async function communeFromCoordinates(lat,lon){
     try{
-      const url=`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&zoom=14&addressdetails=1&accept-language=es`;
+      const url=`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&zoom=18&addressdetails=1&accept-language=es`;
       const r=await fetch(url,{headers:{'Accept':'application/json'}});
       if(!r.ok)throw new Error('No pude identificar la comuna');
       const d=await r.json(),a=d.address||{};
-      return (a.city_district||a.municipality||a.city||a.town||a.village||a.county||'').trim();
+      // Nunca usar county/state/province: en Chile pueden devolver "Provincia de Maipo".
+      const candidates=[a.municipality,a.city,a.town,a.village,a.suburb,a.city_district,a.neighbourhood];
+      for(const candidate of candidates){
+        const comuna=validChileCommune(candidate);
+        if(comuna)return comuna;
+      }
+      return '';
     }catch(_){return ''}
   }
 
