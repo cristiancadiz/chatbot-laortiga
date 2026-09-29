@@ -121,6 +121,12 @@
 
     .mp-secure-field{min-height:44px;border:1px solid #d8dee4;border-radius:10px;background:#fff;padding:11px 12px;box-sizing:border-box;}
     .mp-secure-field iframe{width:100%!important;height:22px!important;border:0!important;}
+
+    /* V7.93 · Historial cliente + Ayuda */
+    .request-summary{display:grid;gap:3px}.request-summary strong{font-size:14px}.request-summary .request-status{font-size:12px;font-weight:800;color:var(--forest)}.request-summary .request-meta{font-size:12px;color:var(--muted)}
+    .request-groups{display:grid;gap:18px}.request-group-head{display:flex;align-items:center;justify-content:space-between;margin:2px 2px 8px}.request-group-head h2{font-size:17px;margin:0}.request-count{min-width:26px;padding:3px 8px;border-radius:999px;background:#e8f1d5;text-align:center;font-size:11px;font-weight:900;color:var(--forest)}
+    .saved.completed{border-color:#cfe1b3;background:#fbfdf7}.saved.cancelled{opacity:.78}.saved .saved-row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.saved .saved-arrow{font-size:18px;color:var(--muted)}
+    .help-card{margin-top:14px}.help-card details{border-top:1px solid var(--line);padding:12px 0}.help-card details:first-of-type{border-top:0}.help-card summary{cursor:pointer;font-weight:800;color:var(--forest)}.help-card details p{margin:8px 0 0;color:var(--muted);font-size:13px}.support-mail{display:block;text-align:center;text-decoration:none;margin-top:12px;border-radius:15px;padding:13px 16px;background:var(--forest);color:#fff;font-weight:900}
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -385,6 +391,14 @@
         <button class="primary" type="button" id="profileSave">Guardar perfil</button>
         <div class="notice" id="profileNotice"></div>
       </div>
+      <div class="form-card help-card" id="helpSupport">
+        <div class="page-head" style="padding:0 0 8px"><h1 style="font-size:21px">❓ Ayuda y soporte</h1><p>Resuelve dudas sobre solicitudes, pagos y seguridad.</p></div>
+        <details><summary>¿Cómo funciona Llama a Jaime?</summary><p>Cuéntale a Jaime qué necesitas, publica la solicitud, revisa profesionales disponibles y coordina el servicio desde la conversación.</p></details>
+        <details><summary>Solicitudes y profesionales</summary><p>En Estado puedes revisar tus solicitudes en curso, completadas y canceladas. Toca cualquiera para abrir su conversación e información.</p></details>
+        <details><summary>Pagos y cotizaciones</summary><p>Revisa y acepta la cotización dentro de la conversación. El estado del pago se muestra junto a la cotización cuando corresponde.</p></details>
+        <details><summary>Seguridad y reportes</summary><p>Dentro de cada conversación puedes reportar de forma privada problemas de seguridad, cobro, trato o servicio.</p></details>
+        <a class="support-mail" href="mailto:soporte@nexia.tech.com?subject=Ayuda%20Llama%20a%20Jaime">✉ Contactar a soporte</a>
+      </div>
     </section>
 
     <section class="view" id="provider">
@@ -462,8 +476,8 @@
     </section>
 
     <section class="view" id="status">
-      <div class="page-head"><h1>Mis solicitudes</h1><p>Consulta el estado de lo que publicaste desde este dispositivo.</p></div>
-      <div class="saved-list" id="savedList"></div>
+      <div class="page-head"><h1>Mis solicitudes</h1><p>Todo tu historial, ordenado por estado.</p></div>
+      <div class="request-groups" id="savedList"></div>
     </section>
   </main>
   <section class="conversation-modal" id="conversationModal" hidden>
@@ -518,7 +532,7 @@
   <nav class="nav nav-jaime"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button class="nav-jaime-ai" data-go="chat" aria-label="Hablar con Jaime"><b>✦</b>Jaime</button><button data-go="status"><b>◷</b>Estado</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="profile"><b>●</b>Perfil</button></nav>
 </div>
 <script src="https://sdk.mercadopago.com/js/v2"></script>
-<!-- V7.92 · COMENTARIOS VISIBLES · MERCADO PAGO CARDFORM IFRAME OFICIAL -->
+<!-- V7.93 · AYUDA + HISTORIAL CLIENTE · COMENTARIOS VISIBLES · MERCADO PAGO CARDFORM IFRAME OFICIAL -->
 <script>
 (() => {
   const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -978,7 +992,52 @@
     }
   }
 
-  async function loadSaved(){const box=$('#savedList'),items=JSON.parse(localStorage.requests||'[]');if(!items.length){box.innerHTML='<div class="empty">Aún no has creado solicitudes desde este dispositivo.</div>';return}box.innerHTML='';for(const item of items){const meta=SERVICE_META[item.tipo]||SERVICE_META.otro,el=document.createElement('button');el.className='saved';el.innerHTML=`<strong>${escapeHtml(meta.label)} · ${escapeHtml(item.codigo)}</strong><span>Consultando estado… · Toca para conversar</span>`;el.addEventListener('click',()=>openConversation('cliente',{public_id:item.codigo,token:item.token}));box.append(el);try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(item.codigo)}?token=${encodeURIComponent(item.token)}`,{headers});const d=await r.json();el.querySelector('span').textContent=r.ok?`${d.solicitud.estado} · Toca para conversar y revisar precios`:(d.error||'Sin información');}catch{el.querySelector('span').textContent='Sin conexión'}}}
+  function clientRequestGroup(state){
+    const s=String(state||'').toLowerCase();
+    if(['finalizada','finalizado','completada','completado'].includes(s))return 'completed';
+    if(['cancelada','cancelado','rechazada','rechazado'].includes(s))return 'cancelled';
+    return 'active';
+  }
+  function clientRequestStatusLabel(state){
+    const s=String(state||'').toLowerCase();
+    const labels={publicada:'Publicada',revisando:'Buscando profesional',asignada:'Profesional asignado',asignado:'Profesional asignado',aceptada:'Cotización aceptada',aceptado:'Cotización aceptada',en_servicio:'Servicio en curso',finalizada:'Completada',finalizado:'Completada',completada:'Completada',completado:'Completada',cancelada:'Cancelada',cancelado:'Cancelada'};
+    return labels[s]||String(state||'En curso').replaceAll('_',' ');
+  }
+  function clientRequestDate(value){
+    if(!value)return '';
+    const d=new Date(value);if(Number.isNaN(d.getTime()))return '';
+    return d.toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'});
+  }
+  async function loadSaved(){
+    const box=$('#savedList'),items=JSON.parse(localStorage.requests||'[]');
+    if(!items.length){box.innerHTML='<div class="empty">Aún no has creado solicitudes desde este dispositivo.</div>';return}
+    box.innerHTML='<div class="empty"><span class="spinner"></span><br>Ordenando tus solicitudes…</div>';
+    const records=await Promise.all(items.map(async item=>{
+      try{
+        const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(item.codigo)}?token=${encodeURIComponent(item.token)}`,{headers,cache:'no-store'}),d=await r.json();
+        return {...item,_ok:r.ok,_data:r.ok?d.solicitud:null,_error:r.ok?'':(d.error||'Sin información')};
+      }catch{return {...item,_ok:false,_data:null,_error:'Sin conexión'}}
+    }));
+    const groups={active:[],completed:[],cancelled:[]};
+    records.forEach(x=>groups[clientRequestGroup(x._data?.estado||x.estado)].push(x));
+    const sections=[['active','En curso'],['completed','Completadas'],['cancelled','Canceladas']];
+    box.innerHTML='';
+    for(const [key,title] of sections){
+      const rows=groups[key];if(!rows.length)continue;
+      const section=document.createElement('section');
+      section.innerHTML=`<div class="request-group-head"><h2>${title}</h2><span class="request-count">${rows.length}</span></div><div class="saved-list"></div>`;
+      const list=section.querySelector('.saved-list');
+      for(const item of rows){
+        const d=item._data||item,meta=SERVICE_META[d.tipo||item.tipo]||SERVICE_META.otro,el=document.createElement('button');
+        const status=item._ok?clientRequestStatusLabel(d.estado):item._error;
+        const details=[d.comuna||'',d.fecha_preferida?`Para ${escapeHtml(String(d.fecha_preferida))}`:'',clientRequestDate(d.created_at)].filter(Boolean).join(' · ');
+        el.className=`saved ${key==='completed'?'completed':key==='cancelled'?'cancelled':''}`;
+        el.innerHTML=`<div class="saved-row"><div class="request-summary"><strong>${escapeHtml(meta.label)} · ${escapeHtml(item.codigo)}</strong><span class="request-status">${escapeHtml(status)}</span>${details?`<span class="request-meta">${details}</span>`:''}<span class="request-meta">Toca para ver conversación y detalles</span></div><span class="saved-arrow">›</span></div>`;
+        el.addEventListener('click',()=>openConversation('cliente',{public_id:item.codigo,token:item.token}));list.append(el);
+      }
+      box.append(section);
+    }
+  }
 
   function providerAuth(){try{return JSON.parse(localStorage.providerAuth||'null')}catch{return null}}
   function providerMaterials(){return $$('#providerMaterials input:checked').map(x=>x.value)}
@@ -1800,7 +1859,7 @@ async function loadProvider(){
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
   $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
   if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('/app/sw.js?v=792',{scope:'/app/'}).then(reg=>reg.update()).catch(()=>{});
+    navigator.serviceWorker.register('/app/sw.js?v=793',{scope:'/app/'}).then(reg=>reg.update()).catch(()=>{});
   }
   fetch('/app/api/config').then(r=>r.json()).then(d=>{if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
   const initialParams=new URLSearchParams(location.search),initialView=initialParams.get('view'),resetToken=initialParams.get('reset_token');if(['provider','status'].includes(initialView))go(initialView);if(resetToken){go('provider');$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerForgot').hidden=true;$('#providerForgot').style.display='none';$('#providerReset').hidden=false;$('#providerReset').style.display='block';}
