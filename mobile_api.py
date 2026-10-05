@@ -327,6 +327,7 @@ def _clean_request_detail(value, fallback=""):
 
 
 def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dispatch=None):
+    deferred_payments = os.getenv("JAIME_PAYMENT_MODEL", "deferred_10_days") == "deferred_10_days"
     app_dir = settings["app_dir"]
     api_base = "/app/api"
 
@@ -405,6 +406,40 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "Accept": "application/json",
         }
 
+    def _mp_payout_headers(body_bytes):
+        """Headers de Payouts. En producción MP exige firma Ed25519 del body exacto."""
+        headers = _mp_headers()
+        headers["X-Idempotency-Key"] = str(uuid.uuid4())
+        test_mode = str(os.getenv("MERCADOPAGO_PAYOUT_TEST_MODE") or "false").strip().lower() in {"1","true","yes","si"}
+        if test_mode:
+            headers["X-test-token"] = "true"
+            headers["X-enforce-signature"] = "false"
+            return headers
+        private_pem = str(os.getenv("MERCADOPAGO_PAYOUT_PRIVATE_KEY_PEM") or "").strip()
+        if not private_pem:
+            raise RuntimeError("Falta MERCADOPAGO_PAYOUT_PRIVATE_KEY_PEM para firmar Payouts productivos.")
+        private_pem = private_pem.replace("\\n", "\n").encode("utf-8")
+        try:
+            from cryptography.hazmat.primitives import serialization
+            import base64 as _b64
+            key = serialization.load_pem_private_key(private_pem, password=None)
+            signature = key.sign(body_bytes)
+            headers["X-signature"] = _b64.b64encode(signature).decode("ascii")
+            headers["X-enforce-signature"] = "true"
+            return headers
+        except Exception as exc:
+            raise RuntimeError(f"No pude firmar el Payout de Mercado Pago: {exc}") from exc
+
+    def _provider_payout_email(provider_id):
+        response = requests.get(
+            f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores", headers=_db_headers(),
+            params={"select":"id,email", "id":f"eq.{provider_id}", "empresa_id":f"eq.{settings['empresa_id']}", "limit":"1"},
+            timeout=settings["supabase_timeout"],
+        )
+        response.raise_for_status()
+        rows = response.json() if response.content else []
+        return str((rows[0] if rows else {}).get("email") or "").strip().lower()
+
     def _mp_validate_signature(data_id):
         """Valida x-signature usando el mismo esquema de la integración anterior."""
         secret = _mp_webhook_secret()
@@ -458,6 +493,75 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 except (TypeError, ValueError):
                     pass
         return max(0, int(round(total)))
+
+    def _payout_due_rows():
+        now_iso=datetime.now(timezone.utc).isoformat()
+        response=requests.get(f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",headers=_db_headers(),
+            params={"select":"*","empresa_id":f"eq.{settings['empresa_id']}","pago_estado":"in.(pagado,liberado)","cliente_confirmo_finalizado_at":"not.is.null","prestador_declaro_finalizado_at":"not.is.null","transferencia_prestador_at":"is.null","transferencia_prestador_referencia":"is.null","order":"cliente_confirmo_finalizado_at.asc","limit":"5000"},timeout=settings["supabase_timeout"]); response.raise_for_status()
+        due=[]
+        for row in (response.json() if response.content else []):
+            confirmed=str(row.get("cliente_confirmo_finalizado_at") or "")
+            try: release_at=datetime.fromisoformat(confirmed.replace("Z","+00:00"))+timedelta(days=10)
+            except Exception: continue
+            if release_at>datetime.now(timezone.utc): continue
+            claims=requests.get(f"{settings['supabase_url']}/rest/v1/nexi_app_reclamos",headers=_db_headers(),params={"select":"id","solicitud_id":f"eq.{row['id']}","estado":"in.(abierto,en_revision)","limit":"1"},timeout=settings["supabase_timeout"]); claims.raise_for_status()
+            if claims.json(): continue
+            due.append(row)
+        return due
+
+    @app.post(f"{api_base}/payouts/procesar-vencidos")
+    def mobile_process_due_payouts():
+        """Dispersa saldos 10 días después de la confirmación de ambas partes. Diseñado para un cron diario."""
+        secret=str(os.getenv("LLAMA_JAIME_PAYOUT_CRON_SECRET") or "").strip()
+        auth=str(request.headers.get("Authorization") or "").strip()
+        if not secret or not hmac.compare_digest(auth, f"Bearer {secret}"):
+            return _json(app,{"ok":False,"error":"No autorizado."},401)
+        try:
+            rows=_payout_due_rows()
+            grouped={}
+            for row in rows:
+                provider_id=str(row.get("prestador_id") or "")
+                net=int(row.get("neto_prestador") or 0)
+                if not provider_id or net<=0: continue
+                email=_provider_payout_email(provider_id)
+                if not email: continue
+                item=grouped.setdefault(provider_id,{"email":email,"amount":0,"rows":[]})
+                item["amount"]+=net; item["rows"].append(row)
+            providers=list(grouped.items()); results=[]
+            for offset in range(0,len(providers),1000):
+                chunk=providers[offset:offset+1000]
+                transactions=[]
+                for provider_id,item in chunk:
+                    transactions.append({"type":"account","description":"Liquidacion Llama a Jaime","account":{"email":item["email"]},"amount":{"currency":"CLP","value":item["amount"]},"external_reference":f"LJ-PROV-{provider_id}-{datetime.now(timezone.utc).date().isoformat()}"})
+                if not transactions: continue
+                payload={"external_reference":f"LJ-PAYOUT-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{offset//1000+1}","description":"Liquidaciones Llama a Jaime - 10 dias","transactions":transactions}
+                notification=_mp_notification_url()
+                if notification: payload["config"]={"notification_url":notification}
+                body_bytes=json.dumps(payload,separators=(",",":"),ensure_ascii=False).encode("utf-8")
+                headers=_mp_payout_headers(body_bytes)
+                response=requests.post("https://api.mercadopago.com/v1/payouts",headers=headers,data=body_bytes,timeout=30)
+                data=response.json() if response.content else {}
+                if not response.ok:
+                    app.logger.warning("MP PAYOUT REJECTED status=%s response=%s",response.status_code,data)
+                    results.append({"ok":False,"status":response.status_code,"error":data}); continue
+                payout_id=str(data.get("id") or "")
+                txs=data.get("transactions") if isinstance(data.get("transactions"),list) else []
+                for idx,(provider_id,item) in enumerate(chunk):
+                    tx=txs[idx] if idx<len(txs) and isinstance(txs[idx],dict) else {}
+                    tx_id=str(tx.get("id") or payout_id)
+                    tx_status=str(tx.get("status") or data.get("status") or "pending").lower()
+                    # Reservamos la referencia apenas MP acepta el lote para impedir dobles dispersiones
+                    # si el cron vuelve a ejecutarse mientras la transferencia sigue pendiente.
+                    for row in item["rows"]:
+                        patch_data={"transferencia_prestador_referencia":f"{payout_id}:{tx_id}"}
+                        if tx_status in {"success","approved","processed","completed"}:
+                            patch_data["transferencia_prestador_at"]=datetime.now(timezone.utc).isoformat()
+                        patch=requests.patch(f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",headers=_db_headers("return=minimal"),params={"id":f"eq.{row['id']}","transferencia_prestador_at":"is.null","transferencia_prestador_referencia":"is.null"},json=patch_data,timeout=settings["supabase_timeout"]); patch.raise_for_status()
+                results.append({"ok":True,"payout_id":payout_id,"prestadores":len(chunk)})
+            return _json(app,{"ok":True,"prestadores_elegibles":len(providers),"lotes":results})
+        except Exception as exc:
+            app.logger.exception("PAYOUT PROCESS ERROR: %r",exc)
+            return _json(app,{"ok":False,"error":"No pude procesar las liquidaciones."},500)
 
     def _admin_auth():
         """Valida el JWT de Supabase Auth y confirma que pertenezca a un admin activo."""
@@ -953,6 +1057,62 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
     def mobile_assets(filename):
         return send_from_directory(os.path.join(app_dir, "assets"), filename)
 
+
+    def _financial_projection(row):
+        def amount(key):
+            value = row.get(key)
+            return None if value is None else int(value)
+        confirmed = row.get("cliente_confirmo_finalizado_at")
+        due = None
+        if confirmed and row.get("prestador_declaro_finalizado_at"):
+            due = (datetime.fromisoformat(confirmed.replace("Z", "+00:00")) + timedelta(days=10)).isoformat()
+        claims = requests.get(f"{settings['supabase_url']}/rest/v1/nexi_app_reclamos", headers=_db_headers(),
+            params={"select":"id", "solicitud_id":f"eq.{row['id']}", "estado":"in.(abierto,en_revision)", "limit":"1"},
+            timeout=settings["supabase_timeout"])
+        claims.raise_for_status()
+        disputed = bool(claims.json()) or row.get("pago_estado") == "disputado"
+        paid_at = row.get("transferencia_prestador_at")
+        collected = row.get("pago_estado") in ("pagado", "liberado")
+        now = datetime.now(timezone.utc)
+        state = ("en_disputa" if disputed else "pagado" if paid_at else "por_cobrar" if not collected
+                 else "pendiente" if not due or datetime.fromisoformat(due) > now else "por_transferir")
+        return {"codigo":row.get("public_id"), "servicio":row.get("tipo"), "estado":state,
+            "pago_estado":row.get("pago_estado") or "pendiente", "finalizado":bool(confirmed),
+            "fecha_estimada":due, "pagado_at":paid_at, "comprobante_transferencia":row.get("transferencia_prestador_referencia"),
+            "bruto":amount("precio_servicio"), "comision":amount("comision_llama_jaime_neta"),
+            "iva_comision":amount("iva_comision_llama_jaime"), "procesamiento":amount("comision_mercado_pago"),
+            "retencion":amount("retencion_tributaria"), "neto":amount("neto_prestador"),
+            "documentos":row.get("documentos_tributarios") or [], "automatico":False}
+
+    @app.post(f"{api_base}/dinero")
+    def mobile_money():
+        body = request.get_json(silent=True) or {}
+        if not _allow("money", limit=30):
+            return _json(app, {"ok":False,"error":"Intenta más tarde."},429)
+        try:
+            rows = []
+            if body.get("actor") == "prestador":
+                provider = _provider_auth(body.get("codigo"), body.get("token"))
+                if not provider or str(provider.get("empresa_id")) != str(settings["empresa_id"]):
+                    return _json(app,{"ok":False,"error":"Acceso inválido."},401)
+                response = requests.get(f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",headers=_db_headers(),
+                    params={"select":"*","prestador_id":f"eq.{provider['id']}","empresa_id":f"eq.{settings['empresa_id']}","order":"created_at.desc","limit":"200"},timeout=settings["supabase_timeout"])
+                response.raise_for_status()
+                rows = response.json()
+            elif body.get("actor") == "cliente":
+                for item in (body.get("solicitudes") or [])[:20]:
+                    row = _client_auth(item.get("codigo"),item.get("token"))
+                    if row and str(row.get("empresa_id")) == str(settings["empresa_id"]):
+                        if not any(r["id"] == row["id"] for r in rows):
+                            rows.append(row)
+            else:
+                return _json(app,{"ok":False,"error":"Actor inválido."},400)
+            return _json(app,{"ok":True,"movimientos":[_financial_projection(r) for r in rows],
+                "alcance":"Últimos 200 servicios del prestador o 20 solicitudes guardadas del cliente.","automatico":False})
+        except (requests.RequestException, ValueError, TypeError):
+            app.logger.exception("MONEY ERROR")
+            return _json(app,{"ok":False,"error":"No pude consultar los movimientos. Intenta nuevamente."},502)
+
     @app.get(f"{api_base}/config")
     def mobile_config():
         return _json(app, {
@@ -963,6 +1123,12 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 {"id": key, "name": SERVICE_LABELS[key]}
                 for key in ("hogar", "limpieza", "flete", "jardineria", "belleza", "reciclaje", "otro")
             ],
+            "payment_model": "deferred_10_days" if deferred_payments else "legacy_capture",
+            "automatic_payouts": True,
+            "provider_release_days_after_both_confirm": 10,
+            "mercadopago_availability_plan": "10_dias",
+            "mercadopago_reference_fee_pct": 2.89,
+            "mercadopago_reference_fee_vat_pct": 19,
             "ai": bool(settings["ai_enabled"]),
             "dispatch": True,
             "push": bool(settings.get("vapid_public_key") and settings.get("vapid_private_key")),
@@ -1199,6 +1365,9 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "materiales": materials,
             "fecha_preferida": schedule or None,
             "estado": "publicada",
+            "cliente_tipo_persona": "empresa" if body.get("cliente_tipo_persona") == "empresa" else "persona",
+            "cliente_razon_social": _clean(body.get("cliente_razon_social"),180) or None,
+            "cliente_rut_tributario": _clean(body.get("cliente_rut_tributario"),20) or None,
             "canal": "app",
             "acepta_terminos": True,
             "acepta_privacidad": True,
@@ -1469,7 +1638,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "especialidades": specialties,
             "vehiculo": vehicle or None,
             "radio_km": radius,
-            "disponible": True,
+            "disponible": False,
             "activo": True,
             "estado_cuenta": "activa",
             "estado_verificacion": "pendiente",
@@ -1510,7 +1679,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 Thread(target=_match_provider, args=(created_provider,), daemon=True).start()
             return _json(app, {
                 "ok": True,
-                "prestador": {"codigo": code, "token": token, "nombre": name, "roles": roles, "especialidades": specialties, "disponible": True, "estado_verificacion": "pendiente"},
+                "prestador": {"codigo": code, "token": token, "nombre": name, "roles": roles, "especialidades": specialties, "disponible": False, "estado_verificacion": "pendiente"},
             }, 201)
         except requests.RequestException as exc:
             app.logger.exception("PROVIDER NETWORK ERROR: %r", exc)
@@ -1742,12 +1911,19 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 safe = {key: provider.get(key) for key in (
                     "public_id", "nombre", "email", "roles", "comunas", "materiales", "especialidades",
                     "vehiculo", "radio_km", "disponible", "estado_cuenta", "estado_verificacion", "verificado_at", "created_at",
-                    "mp_user_id", "mp_conectado_at"
+                    "mp_user_id", "mp_conectado_at", "tipo_persona", "razon_social", "rut_tributario"
                 )}
                 safe["mercadopago_conectado"] = bool(provider.get("mp_user_id") and provider.get("mp_conectado_at"))
                 return _json(app, {"ok": True, "prestador": safe})
 
             update = {}
+            if body.get("tipo_persona") in ("persona", "empresa"):
+                update["tipo_persona"] = body["tipo_persona"]
+            for field in ("razon_social", "rut_tributario"):
+                if field in body:
+                    update[field] = _clean(body[field], 180) or None
+            if body.get("disponible") is True and (provider.get("estado_verificacion") != "verificado" or not provider.get("especialidades") or not provider.get("comunas")):
+                return _json(app, {"ok":False,"error":"Completa especialidades, comunas y verificación antes de ofrecer servicios."},409)
             if isinstance(body.get("disponible"), bool):
                 update["disponible"] = body["disponible"]
             if "comunas" in body:
@@ -2675,13 +2851,6 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             if price <= 0:
                 return _json(app, {"ok": False, "error": "Primero debes aceptar una cotización válida."}, 409)
 
-            seller = _mp_provider_credentials(request_row["prestador_id"])
-            if not seller or not seller.get("mp_access_token") or not seller.get("mp_user_id"):
-                return _json(app, {
-                    "ok": False,
-                    "error": "El prestador debe conectar su cuenta de Mercado Pago antes de recibir pagos."
-                }, 409)
-
             payment_state = str(request_row.get("pago_estado") or "pendiente").lower()
             if payment_state in {"pagado", "liberado"}:
                 return _json(app, {"ok": False, "error": "Este servicio ya tiene un pago confirmado."}, 409)
@@ -2725,13 +2894,12 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     "solicitud_id": request_row["id"],
                     "empresa_id": request_row["empresa_id"],
                 },
-                "marketplace_fee": round(price * 0.1428, 2),  # Nexia/Llama a Jaime: 12% + IVA 19% sobre la comisión = 14,28%
                 "statement_descriptor": "LLAMA A JAIME",
             }
 
             response = requests.post(
                 "https://api.mercadopago.com/checkout/preferences",
-                headers=_mp_headers_with_token(seller["mp_access_token"]),
+                headers=_mp_headers(),
                 json=payload,
                 timeout=20,
             )
@@ -2790,95 +2958,59 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
 
     @app.post(f"{api_base}/solicitudes/<public_id>/pago/mercadopago/autorizar")
     def mobile_authorize_mercadopago_payment(public_id):
-        """Checkout API: reserva fondos con capture=false y split 1:1."""
-        if not _allow("mercadopago-authorize", limit=10, window_seconds=3600):
-            return _json(app, {"ok": False, "error": "Intenta nuevamente en unos minutos."}, 429)
-        body = request.get_json(silent=True) or {}
+        """Plan B: cobra el 100% a la cuenta NEXIA/Llama a Jaime, sin split ni application_fee."""
+        if not _allow("mercadopago-pay-nexia", limit=10, window_seconds=3600):
+            return _json(app,{"ok":False,"error":"Intenta nuevamente en unos minutos."},429)
+        body=request.get_json(silent=True) or {}
         try:
-            request_row = _client_auth(public_id, body.get("token"))
+            request_row=_client_auth(public_id,body.get("token"))
             if not request_row:
-                return _json(app, {"ok": False, "error": "Acceso inválido para autorizar esta solicitud."}, 401)
-            provider_id = request_row.get("prestador_id")
-            price = int(request_row.get("precio_servicio") or 0)
-            if not provider_id or price <= 0:
-                return _json(app, {"ok": False, "error": "Primero debes aceptar una cotización válida."}, 409)
-            q = requests.get(f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio", headers=_db_headers(),
-                params={"select":"id", "solicitud_id":f"eq.{request_row['id']}", "prestador_id":f"eq.{provider_id}",
-                        "estado":"eq.aceptada", "order":"created_at.desc", "limit":"1"}, timeout=settings["supabase_timeout"])
-            q.raise_for_status()
+                return _json(app,{"ok":False,"error":"Acceso inválido para pagar esta solicitud."},401)
+            provider_id=request_row.get("prestador_id"); price=int(request_row.get("precio_servicio") or 0)
+            if not provider_id or price<=0:
+                return _json(app,{"ok":False,"error":"Primero debes aceptar una cotización válida."},409)
+            q=requests.get(f"{settings['supabase_url']}/rest/v1/nexi_app_cotizaciones_servicio",headers=_db_headers(),
+                params={"select":"id","solicitud_id":f"eq.{request_row['id']}","prestador_id":f"eq.{provider_id}","estado":"eq.aceptada","order":"created_at.desc","limit":"1"},timeout=settings["supabase_timeout"]); q.raise_for_status()
             if not (q.json() if q.content else []):
-                return _json(app, {"ok": False, "error": "Debes aceptar la cotización antes de reservar fondos."}, 409)
-            payment_state = str(request_row.get("pago_estado") or "pendiente").lower()
-            if payment_state == "autorizado":
-                return _json(app, {"ok": False, "error": "Los fondos ya están reservados."}, 409)
-            if payment_state in {"pagado","liberado","reembolsado","disputado"}:
-                return _json(app, {"ok": False, "error": "El estado actual del pago no permite una nueva autorización."}, 409)
-            seller = _mp_provider_credentials(provider_id)
-            if not seller or not seller.get("mp_access_token"):
-                return _json(app, {"ok": False, "error": "El prestador debe conectar Mercado Pago antes de recibir pagos."}, 409)
-            card_token = str(body.get("card_token") or "").strip()
-            method = str(body.get("payment_method_id") or "").strip()
-            payer = body.get("payer") if isinstance(body.get("payer"), dict) else {}
-            email = str(payer.get("email") or "").strip()
+                return _json(app,{"ok":False,"error":"Debes aceptar la cotización antes de pagar."},409)
+            if str(request_row.get("pago_estado") or "pendiente").lower() in {"pagado","liberado"}:
+                return _json(app,{"ok":False,"error":"Este servicio ya está pagado."},409)
+            card_token=str(body.get("card_token") or "").strip(); method=str(body.get("payment_method_id") or "").strip()
+            payer=body.get("payer") if isinstance(body.get("payer"),dict) else {}; email=str(payer.get("email") or "").strip()
             if not card_token or not method or not email:
-                return _json(app, {"ok": False, "error": "Faltan datos del medio de pago."}, 400)
+                return _json(app,{"ok":False,"error":"Faltan datos del medio de pago."},400)
             payload={"transaction_amount":float(price),"token":card_token,"description":f"Servicio Llama a Jaime {public_id}",
-                     "installments":int(body.get("installments") or 1),"payment_method_id":method,
-                     "payer":{"email":email},"capture":False,"external_reference":f"LJ-{public_id}",
-                     "application_fee":round(price*0.1428,2),
-                     "metadata":{"solicitud_public_id":public_id,"solicitud_id":request_row["id"]}}
+                     "installments":int(body.get("installments") or 1),"payment_method_id":method,"payer":{"email":email},
+                     "capture":True,"external_reference":f"LJ-{public_id}",
+                     "metadata":{"solicitud_public_id":public_id,"solicitud_id":request_row["id"],"modelo_pago":"nexia_central_10_dias"}}
             if body.get("issuer_id"): payload["issuer_id"]=str(body.get("issuer_id"))
             ident=payer.get("identification") if isinstance(payer.get("identification"),dict) else None
             if ident and ident.get("type") and ident.get("number"):
                 payload["payer"]["identification"]={"type":str(ident["type"]),"number":str(ident["number"])}
-            app.logger.warning(
-                "MP PAYMENT TOKEN USED provider=%s mp_user_id=%s token_fp=%s token_len=%s",
-                provider_id, seller.get("mp_user_id"),
-                _mp_token_fingerprint(seller.get("mp_access_token")),
-                len(str(seller.get("mp_access_token") or "").strip())
-            )
-            h=_mp_headers_with_token(seller["mp_access_token"]); h["X-Idempotency-Key"]=f"lj-auth-{request_row['id']}-{price}"
+            h=_mp_headers(); h["X-Idempotency-Key"]=f"lj-pay-nexia-{request_row['id']}-{price}"
             mp=requests.post("https://api.mercadopago.com/v1/payments",headers=h,json=payload,timeout=25)
             data=mp.json() if mp.content else {}
             if not mp.ok:
-                mp_message = str(data.get("message") or data.get("error") or "Mercado Pago rechazó la autorización.")
-                mp_cause = data.get("cause") if isinstance(data.get("cause"), list) else []
-                mp_codes = {str(item.get("code")) for item in mp_cause if isinstance(item, dict)}
-                # Diagnóstico seguro: registra la respuesta de Mercado Pago sin tokens,
-                # credenciales ni datos de tarjeta. Esto permite identificar la causa
-                # exacta del 400 (application_fee, KYC, capture, configuración, etc.).
-                safe_mp_error = {
-                    "error": data.get("error"),
-                    "message": data.get("message"),
-                    "status": data.get("status"),
-                    "cause": mp_cause,
-                }
-                app.logger.warning(
-                    "MP AUTHORIZE REJECTED provider=%s mp_user_id=%s http_status=%s response=%s",
-                    provider_id, seller.get("mp_user_id"), mp.status_code, safe_mp_error
-                )
-                if "2059" in mp_codes or "application_fee" in mp_message.lower():
-                    return _json(app, {
-                        "ok": False,
-                        "error": mp_message,
-                        "mp_codes": sorted(mp_codes),
-                    }, 409)
-                return _json(app,{"ok":False,"error":mp_message,"mp_codes":sorted(mp_codes)},409 if mp.status_code<500 else 502)
+                app.logger.warning("MP NEXIA PAYMENT REJECTED solicitud=%s status=%s response=%s",request_row["id"],mp.status_code,{"error":data.get("error"),"message":data.get("message"),"cause":data.get("cause")})
+                return _json(app,{"ok":False,"error":str(data.get("message") or data.get("error") or "Mercado Pago rechazó el pago.")},409 if mp.status_code<500 else 502)
             payment_id=str(data.get("id") or ""); status=str(data.get("status") or "").lower(); detail=str(data.get("status_detail") or "").lower()
-            if status=="authorized" and payment_id:
+            if status=="approved" and payment_id:
+                fee=_mp_real_fee(data)
+                br=requests.post(f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_calcular_desglose_pago",headers=_db_headers(),
+                    json={"p_solicitud_id":request_row["id"],"p_precio_servicio":price,"p_comision_mercado_pago":fee},timeout=settings["supabase_timeout"]); br.raise_for_status()
                 st=requests.post(f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_actualizar_estado_pago",headers=_db_headers(),
-                    json={"p_solicitud_id":request_row["id"],"p_estado":"autorizado","p_monto_total":price,"p_proveedor":"mercadopago","p_referencia_externa":payment_id,"p_actor_tipo":"cliente"},
-                    timeout=settings["supabase_timeout"]); st.raise_for_status()
-                Thread(target=_audit,args=("mercadopago_fondos_reservados","cliente",None,request_row["id"],{"payment_id":payment_id,"monto":price}),daemon=True).start()
-                try: _send_custom_push("nexi_app_push_suscripciones","prestador_id",provider_id,"Fondos reservados","El cliente autorizó el pago. Ya puedes realizar el servicio.","/app/?view=provider",f"fondos-reservados-{request_row['id']}")
-                except Exception: app.logger.exception("PAYMENT AUTHORIZED PUSH ERROR")
-                return _json(app,{"ok":True,"status":status,"status_detail":detail,"payment_id":payment_id,"message":"Fondos reservados correctamente."})
-            if status=="pending": return _json(app,{"ok":True,"status":status,"status_detail":detail,"payment_id":payment_id,"message":"Mercado Pago está procesando la autorización."},202)
-            return _json(app,{"ok":False,"status":status,"status_detail":detail,"error":"No fue posible reservar los fondos."},409)
+                    json={"p_solicitud_id":request_row["id"],"p_estado":"pagado","p_monto_total":price,"p_proveedor":"mercadopago","p_referencia_externa":payment_id,"p_actor_tipo":"cliente"},timeout=settings["supabase_timeout"]); st.raise_for_status()
+                Thread(target=_audit,args=("mercadopago_pago_nexia_confirmado","cliente",None,request_row["id"],{"payment_id":payment_id,"monto":price,"comision_mercado_pago":fee,"disponibilidad_mp":"10_dias"}),daemon=True).start()
+                try: _send_custom_push("nexi_app_push_suscripciones","prestador_id",provider_id,"Pago confirmado","El cliente pagó el servicio. Tu saldo se liberará 10 días después de que ambas partes confirmen el término, si no existen controversias.","/app/?view=money",f"pago-nexia-{request_row['id']}")
+                except Exception: app.logger.exception("PAYMENT NEXIA PUSH ERROR")
+                return _json(app,{"ok":True,"status":status,"status_detail":detail,"payment_id":payment_id,"message":"Pago confirmado. Llama a Jaime administrará la liquidación al prestador."})
+            if status=="pending":
+                return _json(app,{"ok":True,"status":status,"status_detail":detail,"payment_id":payment_id,"message":"Mercado Pago está procesando el pago."},202)
+            return _json(app,{"ok":False,"status":status,"status_detail":detail,"error":"El pago no fue aprobado."},409)
         except (ValueError,TypeError):
             return _json(app,{"ok":False,"error":"Datos de pago inválidos."},400)
         except requests.RequestException as exc:
-            app.logger.exception("MP AUTHORIZE ERROR: %r",exc)
+            app.logger.exception("MP NEXIA PAYMENT ERROR: %r",exc)
             return _json(app,{"ok":False,"error":"No pude comunicarme con Mercado Pago."},502)
 
     @app.route(f"{api_base}/mercadopago/webhook", methods=["POST", "GET"])
@@ -2948,13 +3080,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 )
                 candidates_response.raise_for_status()
                 for candidate in (candidates_response.json() if candidates_response.content else []):
-                    seller = _mp_provider_credentials(candidate.get("prestador_id"))
-                    if not seller or not seller.get("mp_access_token"):
-                        continue
                     try:
                         probe = requests.get(
                             f"https://api.mercadopago.com/v1/payments/{payment_id}",
-                            headers=_mp_headers_with_token(seller["mp_access_token"]),
+                            headers=_mp_headers(),
                             timeout=12,
                         )
                         if not probe.ok:
@@ -3165,11 +3294,9 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             # Si hay fondos reservados, primero liberamos la autorización en Mercado Pago.
             if payment_state == "autorizado":
                 payment_id = str(request_row.get("pago_referencia_externa") or "").strip()
-                provider_id = request_row.get("prestador_id")
-                seller = _mp_provider_credentials(provider_id) if provider_id else None
-                if not payment_id or not seller or not seller.get("mp_access_token"):
+                if not payment_id:
                     return _json(app, {"ok": False, "error": "No pude localizar la reserva de Mercado Pago. No se canceló la solicitud."}, 409)
-                h = _mp_headers_with_token(seller["mp_access_token"])
+                h = _mp_headers()
                 h["X-Idempotency-Key"] = f"lj-cancel-{request_row['id']}"
                 mp = requests.put(
                     f"https://api.mercadopago.com/v1/payments/{payment_id}",
@@ -3234,14 +3361,13 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             if not provider_id:
                 return _json(app, {"ok": False, "error": "La solicitud aún no tiene un prestador asignado."}, 409)
 
-            if actor == "cliente" and request_row.get("prestador_declaro_finalizado_at"):
+            if not deferred_payments and actor == "cliente" and request_row.get("prestador_declaro_finalizado_at"):
                 if str(request_row.get("pago_estado") or "").lower() != "autorizado":
                     return _json(app,{"ok":False,"error":"Debes tener los fondos autorizados antes de confirmar el cierre."},409)
                 payment_id=str(request_row.get("pago_referencia_externa") or "").strip()
-                seller=_mp_provider_credentials(provider_id)
-                if not payment_id or not seller or not seller.get("mp_access_token"):
+                if not payment_id:
                     return _json(app,{"ok":False,"error":"No encontré la autorización de Mercado Pago para capturar el pago."},409)
-                h=_mp_headers_with_token(seller["mp_access_token"]); h["X-Idempotency-Key"]=f"lj-capture-{request_row['id']}"
+                h=_mp_headers(); h["X-Idempotency-Key"]=f"lj-capture-{request_row['id']}"
                 cap=requests.put(f"https://api.mercadopago.com/v1/payments/{payment_id}",headers=h,json={"capture":True},timeout=25)
                 data=cap.json() if cap.content else {}
                 if not cap.ok or str(data.get("status") or "").lower()!="approved":
@@ -3292,8 +3418,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     _send_custom_push(
                         "nexi_app_push_suscripciones", "prestador_id", provider_id,
                         "Servicio confirmado",
-                        "El cliente confirmó que recibió el servicio.",
-                        "/app/?view=provider", f"finalizado-{request_row['id']}",
+                        "El cliente confirmó el servicio. Revisa en Dinero la fecha estimada y el estado de cobro." if deferred_payments else "El cliente confirmó que recibió el servicio.",
+                        "/app/?view=money", f"finalizado-{request_row['id']}",
                     )
             except Exception:
                 app.logger.exception("FINISH SERVICE PUSH ERROR")
