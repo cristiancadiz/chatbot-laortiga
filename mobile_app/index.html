@@ -9,7 +9,7 @@
   <link rel="manifest" href="/app/manifest.webmanifest">
   <link rel="icon" type="image/png" href="/app/assets/icon-192.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/app/assets/apple-touch-icon.png">
-  <!-- LLAMA A JAIME FRONT V19.6 · CHECKOUT PRO MERCADO PAGO -->
+  <!-- LLAMA A JAIME FRONT V19.7 · JAIME BUSQUEDA DIRECTA -->
 <title>Llama a Jaime · Servicios cuando los necesitas</title>
   <style>
     :root{--forest:#073b66;--green:#08a6a6;--leaf:#ff9f1c;--cream:#f7f6f1;--gold:#ffb627;--ink:#102f49;--muted:#667783;--line:#d8e1e7;--white:#fff;--danger:#a6382f;--shadow:0 14px 38px rgba(7,59,102,.12)}
@@ -663,6 +663,16 @@
         draft.subtipo='limpieza_zapatillas';
       }
 
+      const locationAliases=[
+        [/\bvi(?:ñ|n)a(?:\s+del\s+mar)?\b/i,'Viña del Mar'],
+        [/\bvalpara(?:í|i)so\b/i,'Valparaíso'],
+        [/\bquilpu(?:é|e)\b/i,'Quilpué'],
+        [/\bvilla\s+alemana\b/i,'Villa Alemana'],
+        [/\bconc[oó]n\b/i,'Concón'],
+        [/\bsantiago\b/i,'Santiago']
+      ];
+      for(const [rx,label] of locationAliases){if(rx.test(originalNeed)){draft.comuna=label;break}}
+
       // Solo mantenemos como obligatorios los datos indispensables para poder publicar.
       // Dirección exacta, teléfono, fecha y otros detalles se pueden conversar después.
       const ignorable=new Set(['nombre','teléfono','telefono','comuna','dirección','direccion','detalle del servicio','fecha','fecha preferida']);
@@ -695,7 +705,7 @@
       const ready=$('#jaimeReadyProviders');if(ready)ready.innerHTML='<div class="empty"><span class="spinner"></span> Buscando profesionales cerca de ti…</div>';
       const msg='Perfecto. Ya publiqué tu solicitud. Estoy buscando profesionales disponibles para ti.';
       addMessage(msg,'assistant',false);speakJaime(msg);
-      startProviderSearchPolling();loadAvailableProviders(true).catch(()=>{});
+      startProviderSearchPolling();loadAvailableProviders().catch(()=>{});
      }catch(err){alert(err.message);if(button){button.disabled=false;button.textContent='Enviar solicitud'}}
   }
   // V7.45: entrada rápida y dictado por voz. La IA sigue usando los endpoints existentes.
@@ -760,43 +770,47 @@
 
   function providerInitial(name){return String(name||'P').trim().charAt(0).toUpperCase()||'P'}
   function providerTags(p){const tags=[...(Array.isArray(p.especialidades)?p.especialidades:[]),...(Array.isArray(p.roles)?p.roles:[])];return [...new Set(tags.filter(Boolean))].slice(0,5)}
-  function renderAvailableProviders(items){
-    const box=$('#providerCandidates');box.innerHTML='';
-    if(!items.length){box.innerHTML='<div class="empty">No encontramos profesionales disponibles para elegir en este momento. Tu solicitud sigue publicada y puede ser tomada mediante el sistema normal.</div>';return}
+  function renderProviderCards(container,items){
+    if(!container)return;
+    container.innerHTML='';
+    if(!items.length){
+      container.innerHTML='<div class="empty">Jaime sigue buscando profesionales disponibles. Tu solicitud queda publicada y te avisaremos cuando aparezca uno compatible.</div>';
+      return;
+    }
     for(const p of items){
       const card=document.createElement('article');card.className='provider-candidate';
       const rep=p.reputacion||{},avg=Number(rep.promedio||0),reviews=Number(rep.evaluaciones||0),jobs=Number(p.trabajos_completados||0),tags=providerTags(p);
-      card.innerHTML=`<div class="provider-candidate-avatar">${p.foto_url?`<img src="${escapeHtml(p.foto_url)}" alt="Foto de ${escapeHtml(p.nombre||'profesional')}">`:escapeHtml(providerInitial(p.nombre))}</div><div class="provider-candidate-main"><div class="provider-candidate-title"><strong>${escapeHtml(p.nombre||'Profesional')}</strong>${p.verificado?'<span class="verified-badge">✓ Verificado</span>':''}</div><div class="provider-candidate-rating">${reviews?`⭐ ${avg.toFixed(1)} · ${reviews} evaluación${reviews===1?'':'es'}`:'⭐ Profesional nuevo'} · ${jobs} trabajo${jobs===1?'':'s'} completado${jobs===1?'':'s'}</div><div class="provider-candidate-meta">Cobertura declarada: ${escapeHtml((p.comunas||[]).slice(0,3).join(', ')||'según solicitud')}${p.radio_km?` · radio ${escapeHtml(String(p.radio_km))} km`:''}</div>${tags.length?`<div class="provider-candidate-tags">${tags.map(x=>`<span>${escapeHtml(x)}</span>`).join('')}</div>`:''}<div class="provider-candidate-actions"><button type="button" class="view-profile">Ver perfil</button><button type="button" class="choose-provider">Solicitar a este profesional</button></div><div class="provider-detail" hidden><strong>Perfil profesional</strong><br>${reviews?`Calificación: ${avg.toFixed(1)}/5 con ${reviews} evaluación${reviews===1?'':'es'}.`:'Aún no tiene evaluaciones.'}<br>Trabajos completados: ${jobs}.<br>${p.miembro_desde?`Miembro desde ${escapeHtml(new Date(p.miembro_desde).toLocaleDateString('es-CL'))}.`:''}</div></div>`;
-      card.querySelector('.view-profile').addEventListener('click',e=>{const detail=card.querySelector('.provider-detail');detail.hidden=!detail.hidden;e.currentTarget.textContent=detail.hidden?'Ver perfil':'Ocultar perfil'});
-      card.querySelector('.choose-provider').addEventListener('click',e=>chooseAvailableProvider(p,e.currentTarget));
-      box.append(card);
+      card.innerHTML=`<div class="provider-candidate-avatar">${p.foto_url?`<img src="${escapeHtml(p.foto_url)}" alt="Foto de ${escapeHtml(p.nombre||'profesional')}">`:escapeHtml(providerInitial(p.nombre))}</div><div class="provider-candidate-main"><div class="provider-candidate-title"><strong>${escapeHtml(p.nombre||'Profesional')}</strong><span>${escapeHtml(p.comuna||'')}</span></div><div class="provider-candidate-meta">${avg?`★ ${avg.toFixed(1)}${reviews?` · ${reviews} evaluaciones`:''}`:'Nuevo en Jaime'}${jobs?` · ${jobs} trabajos`:''}</div>${tags.length?`<div class="provider-candidate-tags">${tags.map(t=>`<span>${escapeHtml(t)}</span>`).join('')}</div>`:''}</div>`;
+      const actions=document.createElement('div');actions.className='provider-candidate-actions';
+      const choose=document.createElement('button');choose.type='button';choose.textContent='Elegir profesional';choose.addEventListener('click',()=>chooseAvailableProvider(p,choose));
+      actions.append(choose);card.append(actions);container.append(card);
     }
   }
+  function renderAvailableProviders(items){renderProviderCards($('#providerCandidates'),items)}
+  function renderReadyProviders(items){renderProviderCards($('#jaimeReadyProviders'),items)}
 
-
-  function startProviderSearchPolling(){
-    if(providerSearchTimer)clearInterval(providerSearchTimer);
-    providerSearchTimer=setInterval(async()=>{
-      if(!latestCreatedRequest)return;
-      try{
-        const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(latestCreatedRequest.codigo)}/prestadores-disponibles?token=${encodeURIComponent(latestCreatedRequest.token)}`,{headers,cache:'no-store'});
-        const d=await r.json();if(!r.ok||d.ya_asignada)return;
-        const items=Array.isArray(d.prestadores)?d.prestadores:[];
-        if(providerSearchCount>=0&&items.length>providerSearchCount){
-          stopJaimeVoice();
-          addMessage('Encontré un nuevo profesional disponible para tu solicitud.','assistant',true);
-        }
-        providerSearchCount=items.length;
-        renderAvailableProviders(items);
-        if($('#jaimeReadyOverlay')&&$('#jaimeReadyOverlay').style.display!=='none')renderReadyProviders(items);
-        if(items.length)$('#providerBrowser').style.display='block';
-      }catch(_){}
-    },15000);
-  }
   async function loadAvailableProviders(){
     const req=latestCreatedRequest;if(!req)return alert('No encontré la solicitud recién creada. Revísala en Mis solicitudes.');
-    const browser=$('#providerBrowser'),box=$('#providerCandidates');browser.style.display='block';box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando profesionales compatibles…</div>';
-    try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/prestadores-disponibles?token=${encodeURIComponent(req.token)}`,{headers,cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude cargar los profesionales');if(d.ya_asignada){box.innerHTML='<div class="empty">Esta solicitud ya tiene un profesional asignado.</div>';return}renderAvailableProviders(Array.isArray(d.prestadores)?d.prestadores:[])}catch(err){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}
+    const browser=$('#providerBrowser'),box=$('#providerCandidates'),ready=$('#jaimeReadyProviders');
+    if(browser)browser.style.display='block';
+    if(box)box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando profesionales compatibles…</div>';
+    if(ready)ready.innerHTML='<div class="empty"><span class="spinner"></span> Jaime está buscando profesionales disponibles…</div>';
+    try{
+      const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/prestadores-disponibles?token=${encodeURIComponent(req.token)}`,{headers,cache:'no-store'});
+      const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude cargar los profesionales');
+      if(d.ya_asignada){
+        const msg='<div class="empty">Esta solicitud ya tiene un profesional asignado.</div>';
+        if(box)box.innerHTML=msg;if(ready)ready.innerHTML=msg;return;
+      }
+      const items=Array.isArray(d.prestadores)?d.prestadores:[];
+      providerSearchCount=items.length;
+      renderAvailableProviders(items);renderReadyProviders(items);
+      const msg=items.length?(items.length===1?'Encontré un profesional disponible. Puedes revisarlo y elegirlo.':`Encontré ${items.length} profesionales disponibles. Puedes elegir el que prefieras.`):'Todavía no encuentro un profesional disponible. Seguiré buscando y tu solicitud quedará publicada.';
+      addMessage(msg,'assistant',false);speakJaime(msg);
+    }catch(err){
+      const html=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`;
+      if(box)box.innerHTML=html;if(ready)ready.innerHTML=html;
+    }
   }
 
   async function chooseAvailableProvider(provider,button){
@@ -1488,7 +1502,7 @@ async function loadProvider(){
 
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
   $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
-  if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js?v=1960',{scope:'/app/'}).catch(()=>{});
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js?v=1970',{scope:'/app/'}).catch(()=>{});
   fetch('/app/api/config').then(r=>r.json()).then(d=>{deferredPaymentModel=d.payment_model!=='legacy_capture';if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
 
   let deferredPaymentModel=true, moneyActor='cliente';
@@ -1622,7 +1636,7 @@ async function loadProvider(){
   $('#moneyClient').onclick=()=>{moneyActor='cliente';loadMoney()};$('#moneyProvider').onclick=()=>{moneyActor='prestador';loadMoney()};$('#refreshMoney').onclick=loadMoney;
   renderModes();
   const initialParams=new URLSearchParams(location.search),initialView=initialParams.get('view'),resetToken=initialParams.get('reset_token');if(['provider','status','money','inbox','activity','home','profile'].includes(initialView))go(initialView);if(resetToken){go('provider');$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerForgot').hidden=true;$('#providerForgot').style.display='none';$('#providerReset').hidden=false;$('#providerReset').style.display='block';}
-$('#jaimeWaitMoreBtn')?.addEventListener('click',()=>{providerSearchCount=-1;const ready=$('#jaimeReadyProviders');if(ready)ready.innerHTML='<div class="empty"><span class="spinner"></span> Jaime sigue buscando…</div>';startProviderSearchPolling();loadAvailableProviders(true).catch(()=>{});});
+$('#jaimeWaitMoreBtn')?.addEventListener('click',()=>{providerSearchCount=-1;const ready=$('#jaimeReadyProviders');if(ready)ready.innerHTML='<div class="empty"><span class="spinner"></span> Jaime sigue buscando…</div>';startProviderSearchPolling();loadAvailableProviders().catch(()=>{});});
 })();
 
   // V7.33.1: Documentación queda compacta en la barra superior; la tarjeta se abre solo al tocar el botón.
@@ -1634,7 +1648,7 @@ $('#jaimeWaitMoreBtn')?.addEventListener('click',()=>{providerSearchCount=-1;con
       <div style="margin-top:5px;color:#66736b;font-size:13px">Jaime está buscando profesionales disponibles para ti.</div>
     </div>
     <div id="jaimeReadyProviders"><div class="empty"><span class="spinner"></span> Buscando profesionales…</div></div>
-    <button type="button" id="jaimeWaitMoreBtn" class="secondary" style="width:100%;margin-top:12px">Esperar otro profesional</button>
+    <button type="button" id="jaimeWaitMoreBtn" class="secondary" style="width:100%;margin-top:12px">Seguir buscando con Jaime</button>
   </div>
 </div>
 </body>
