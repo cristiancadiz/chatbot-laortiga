@@ -9,7 +9,7 @@
   <link rel="manifest" href="/app/manifest.webmanifest">
   <link rel="icon" type="image/png" href="/app/assets/icon-192.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/app/assets/apple-touch-icon.png">
-  <!-- LLAMA A JAIME FRONT V19.5 · JAIME RESPONDE Y BUSCA -->
+  <!-- LLAMA A JAIME FRONT V19.6 · CHECKOUT PRO MERCADO PAGO -->
 <title>Llama a Jaime · Servicios cuando los necesitas</title>
   <style>
     :root{--forest:#073b66;--green:#08a6a6;--leaf:#ff9f1c;--cream:#f7f6f1;--gold:#ffb627;--ink:#102f49;--muted:#667783;--line:#d8e1e7;--white:#fff;--danger:#a6382f;--shadow:0 14px 38px rgba(7,59,102,.12)}
@@ -499,17 +499,7 @@
 <p><strong>Pago protegido por Llama a Jaime</strong><br><small>El cliente paga a Llama a Jaime. El prestador recibe su liquidación 10 días después de la confirmación final del servicio, siempre que no exista una disputa o bloqueo.</small></p>
             <button type="button" class="primary" id="showMercadoPagoFormBtn">Pagar con Mercado Pago</button>
           </div>
-          <div id="mpCardFields" class="mp-card-fields" hidden>
-            <div id="mpCardForm" class="mp-reserve-form">
-              <input id="form-checkout__cardNumber" placeholder="Número de tarjeta" autocomplete="cc-number">
-              <div class="grid2"><input id="form-checkout__expirationDate" placeholder="MM/AA" autocomplete="cc-exp"><input id="form-checkout__securityCode" placeholder="CVV" autocomplete="cc-csc"></div>
-              <input id="form-checkout__cardholderName" placeholder="Nombre del titular" autocomplete="cc-name">
-              <select id="form-checkout__installments" aria-label="Cuotas"></select>
-              <select id="form-checkout__identificationType" aria-label="Tipo de documento"></select><input id="form-checkout__identificationNumber" placeholder="RUT / documento">
-              <input id="form-checkout__cardholderEmail" type="email" placeholder="Correo del pagador" autocomplete="email">
-              <button type="button" class="primary" id="mercadoPagoBtn" onclick="startMercadoPagoAuthorization()">Pagar con Mercado Pago</button>
-            </div>
-          </div>
+          <div id="mpCardFields" class="mp-card-fields" hidden></div>
           <div class="notice" id="mercadoPagoNotice"></div>
         </div>
         <div class="payment-breakdown" id="paymentBreakdown" hidden><div><span>Precio del servicio</span><strong id="paymentServicePrice">—</strong></div><div><span>Comisión Llama a Jaime (12%)</span><strong id="paymentPlatformFee">—</strong></div><div><span>IVA sobre comisión (19%)</span><strong id="paymentPlatformVat">—</strong></div><div><span>Costo Mercado Pago</span><strong id="paymentGatewayFee">—</strong></div><div class="payment-net"><span>Recibes</span><strong id="paymentProviderNet">—</strong></div><small id="paymentGatewayNote">El costo de Mercado Pago se actualizará con el valor real de la transacción.</small></div>
@@ -521,7 +511,6 @@
   </section>
 <nav class="nav nav-jaime"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button data-go="inbox"><b>💬</b>Conversaciones</button><button data-go="activity"><b>📋</b>Actividad</button><button data-go="money"><b>💰</b>Dinero</button><button data-go="profile"><b>●</b>Perfil</button></nav>
 </div>
-<script src="https://sdk.mercadopago.com/js/v2"></script>
 <!-- V7.40 · PANELES PLEGABLES + FINALIZAR SOLO TRAS PAGO AUTORIZADO -->
 <script>
 (() => {
@@ -531,7 +520,7 @@
   const paymentPanelToggle=$('#paymentPanelToggle'),paymentPanelBody=$('#paymentPanelBody');
   if(paymentPanelToggle&&paymentPanelBody){paymentPanelToggle.addEventListener('click',()=>{const open=paymentPanelBody.hidden;paymentPanelBody.hidden=!open;paymentPanelToggle.setAttribute('aria-expanded',open?'true':'false');});}
   const showMpFormBtn=$('#showMercadoPagoFormBtn'),mpCardFields=$('#mpCardFields');
-  if(showMpFormBtn&&mpCardFields){showMpFormBtn.addEventListener('click',async()=>{showMpFormBtn.disabled=true;try{await ensureMercadoPagoCardForm();mpCardFields.hidden=false;showMpFormBtn.hidden=true;setTimeout(()=>$('#form-checkout__cardNumber')?.focus(),0);}catch(err){const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent=err.message||'No pude cargar Mercado Pago.'}}finally{showMpFormBtn.disabled=false;}});}
+  if(showMpFormBtn){showMpFormBtn.addEventListener('click',()=>startMercadoPagoCheckout());}
   const session = localStorage.appSession || (localStorage.appSession = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
   const headers = {"Content-Type":"application/json","X-App-Session":session};
   const SERVICE_META = {
@@ -922,9 +911,8 @@ if(hasProvider){
   clientPaymentAction.hidden=!canStartPayment;
   if(canStartPayment){
     mercadoPagoBtn.disabled=false;
-    mercadoPagoBtn.textContent='Pagar con Mercado Pago';
     mercadoPagoNotice.textContent='';
-    const mpFields=$('#mpCardFields'),showPay=$('#showMercadoPagoFormBtn'); if(mpFields)mpFields.hidden=true; if(showPay)showPay.hidden=false;
+    const mpFields=$('#mpCardFields'),showPay=$('#showMercadoPagoFormBtn'); if(mpFields)mpFields.hidden=true; if(showPay){showPay.hidden=false;showPay.disabled=false;showPay.textContent='Pagar con Mercado Pago';}
   }
 
   const breakdown=$('#paymentBreakdown');
@@ -1011,33 +999,34 @@ $('#conversationForm').addEventListener('submit',async e=>{
   }
 });
 
-let mpCardForm=null,mpCardFormRequestId=null;
-async function ensureMercadoPagoCardForm(){
-  const c=conversationContext;if(!c)return;
-  if(mpCardForm&&mpCardFormRequestId===c.public_id)return;
-  if(typeof MercadoPago==='undefined')throw new Error('No se pudo cargar Mercado Pago.');
-  const kr=await fetch('/app/api/mercadopago/public-key',{headers:{'Accept':'application/json'}}),kd=await kr.json();
-  if(!kr.ok||!kd.public_key)throw new Error(kd.error||'Falta configurar la Public Key de Mercado Pago.');
-  if(mpCardForm&&typeof mpCardForm.unmount==='function'){try{mpCardForm.unmount()}catch(_){}}
-  const amount=String(Number(window.__currentServicePrice||0));
-  const mp=new MercadoPago(kd.public_key,{locale:'es-CL'});
-  mpCardForm=mp.cardForm({amount,iframe:true,form:{id:'mpCardForm',cardNumber:{id:'form-checkout__cardNumber',placeholder:'Número de tarjeta'},expirationDate:{id:'form-checkout__expirationDate',placeholder:'MM/AA'},securityCode:{id:'form-checkout__securityCode',placeholder:'CVV'},cardholderName:{id:'form-checkout__cardholderName',placeholder:'Nombre del titular'},installments:{id:'form-checkout__installments',placeholder:'Cuotas'},identificationType:{id:'form-checkout__identificationType',placeholder:'Tipo de documento'},identificationNumber:{id:'form-checkout__identificationNumber',placeholder:'RUT / documento'},cardholderEmail:{id:'form-checkout__cardholderEmail',placeholder:'Correo'}},callbacks:{onFormMounted:error=>{if(error)console.error('MP form',error)}}});
-  mpCardFormRequestId=c.public_id;
-}
-async function startMercadoPagoAuthorization(){
-    const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;if(!btn||!note||!c)return;
-  const original=btn.textContent;btn.disabled=true;btn.textContent='Procesando…';note.style.display='block';note.textContent='Mercado Pago está procesando el pago a Llama a Jaime…';
+async function startMercadoPagoCheckout(){
+  const btn=$('#showMercadoPagoFormBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;
+  if(!btn||!note||!c||c.actor!=='cliente')return;
+  const original=btn.textContent;
+  btn.disabled=true;
+  btn.textContent='Abriendo Mercado Pago…';
+  note.className='notice';
+  note.style.display='block';
+  note.textContent='Preparando el pago seguro…';
   try{
-    await ensureMercadoPagoCardForm();
-    const data=mpCardForm.getCardFormData();
-    if(!data.token)throw new Error('Revisa los datos de la tarjeta.');
-    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago/autorizar`,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({token:c.token,card_token:data.token,payment_method_id:data.paymentMethodId,installments:Number(data.installments||1),payer:{email:data.cardholderEmail,identification:{type:data.identificationType,number:data.identificationNumber}}})});
-    const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'No fue posible procesar el pago.');
-    note.className='notice success';note.textContent=d.message||'✓ Pago confirmado a Llama a Jaime. La liquidación al prestador se procesa 10 días después de la confirmación final, si no existe una disputa.';
-    await loadConversation(true);
-  }catch(err){note.className='notice error';note.textContent=err.message||'No pude autorizar el pago.';btn.disabled=false;btn.textContent=original;}
+    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify({token:c.token})
+    });
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok||!d.checkout_url)throw new Error(d.error||'No pude iniciar el pago con Mercado Pago.');
+    note.className='notice success';
+    note.textContent='Abriendo Mercado Pago…';
+    window.location.assign(d.checkout_url);
+  }catch(err){
+    note.className='notice error';
+    note.textContent=err.message||'No pude iniciar el pago con Mercado Pago.';
+    btn.disabled=false;
+    btn.textContent=original;
+  }
 }
-window.startMercadoPagoAuthorization=startMercadoPagoAuthorization;
+window.startMercadoPagoCheckout=startMercadoPagoCheckout;
 
 $('#finishServiceBtn').addEventListener('click',async()=>{
     const c=conversationContext,btn=$('#finishServiceBtn'),note=$('#finishServiceNotice');if(!c)return;
@@ -1499,7 +1488,7 @@ async function loadProvider(){
 
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
   $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
-  if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js?v=1950',{scope:'/app/'}).catch(()=>{});
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js?v=1960',{scope:'/app/'}).catch(()=>{});
   fetch('/app/api/config').then(r=>r.json()).then(d=>{deferredPaymentModel=d.payment_model!=='legacy_capture';if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
 
   let deferredPaymentModel=true, moneyActor='cliente';
