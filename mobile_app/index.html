@@ -9,7 +9,7 @@
   <link rel="manifest" href="/app/manifest.webmanifest">
   <link rel="icon" type="image/png" href="/app/assets/icon-192.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/app/assets/apple-touch-icon.png">
-  <!-- LLAMA A JAIME FRONT V19.4 · PUBLICAR SOLICITUD CORREGIDO -->
+  <!-- LLAMA A JAIME FRONT V19.5 · JAIME RESPONDE Y BUSCA -->
 <title>Llama a Jaime · Servicios cuando los necesitas</title>
   <style>
     :root{--forest:#073b66;--green:#08a6a6;--leaf:#ff9f1c;--cream:#f7f6f1;--gold:#ffb627;--ink:#102f49;--muted:#667783;--line:#d8e1e7;--white:#fff;--danger:#a6382f;--shadow:0 14px 38px rgba(7,59,102,.12)}
@@ -699,9 +699,14 @@
     try{
       const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');
       const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));latestCreatedRequest=d.solicitud;
-      $('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent='Tu solicitud fue creada. Jaime buscará prestadores y te avisará cuando haya novedades.';$('#requestCard').style.display='none';$('#trackingCard').style.display='block';$('#providerChoice').style.display='block';$('#providerBrowser').style.display='none';$('#providerCandidates').innerHTML='';
-      // Flujo rápido: la solicitud ya creada abre inmediatamente su conversación.
-      await openConversation('cliente',{public_id:d.solicitud.codigo,token:d.solicitud.token});
+      $('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent='Tu solicitud fue creada. Jaime buscará prestadores y te avisará cuando haya novedades.';
+      $('#requestCard').style.display='none';$('#trackingCard').style.display='none';$('#providerChoice').style.display='none';
+      stopJaimeVoice();history=[];sessionStorage.removeItem('llamaAJaimeHistory');providerSearchCount=-1;go('request');
+      const overlay=$('#jaimeReadyOverlay');if(overlay)overlay.style.display='block';
+      const ready=$('#jaimeReadyProviders');if(ready)ready.innerHTML='<div class="empty"><span class="spinner"></span> Buscando profesionales cerca de ti…</div>';
+      const msg='Perfecto. Ya publiqué tu solicitud. Estoy buscando profesionales disponibles para ti.';
+      addMessage(msg,'assistant',false);speakJaime(msg);
+      startProviderSearchPolling();loadAvailableProviders(true).catch(()=>{});
      }catch(err){alert(err.message);if(button){button.disabled=false;button.textContent='Enviar solicitud'}}
   }
   // V7.45: entrada rápida y dictado por voz. La IA sigue usando los endpoints existentes.
@@ -779,6 +784,26 @@
     }
   }
 
+
+  function startProviderSearchPolling(){
+    if(providerSearchTimer)clearInterval(providerSearchTimer);
+    providerSearchTimer=setInterval(async()=>{
+      if(!latestCreatedRequest)return;
+      try{
+        const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(latestCreatedRequest.codigo)}/prestadores-disponibles?token=${encodeURIComponent(latestCreatedRequest.token)}`,{headers,cache:'no-store'});
+        const d=await r.json();if(!r.ok||d.ya_asignada)return;
+        const items=Array.isArray(d.prestadores)?d.prestadores:[];
+        if(providerSearchCount>=0&&items.length>providerSearchCount){
+          stopJaimeVoice();
+          addMessage('Encontré un nuevo profesional disponible para tu solicitud.','assistant',true);
+        }
+        providerSearchCount=items.length;
+        renderAvailableProviders(items);
+        if($('#jaimeReadyOverlay')&&$('#jaimeReadyOverlay').style.display!=='none')renderReadyProviders(items);
+        if(items.length)$('#providerBrowser').style.display='block';
+      }catch(_){}
+    },15000);
+  }
   async function loadAvailableProviders(){
     const req=latestCreatedRequest;if(!req)return alert('No encontré la solicitud recién creada. Revísala en Mis solicitudes.');
     const browser=$('#providerBrowser'),box=$('#providerCandidates');browser.style.display='block';box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando profesionales compatibles…</div>';
@@ -1474,7 +1499,7 @@ async function loadProvider(){
 
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
   $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
-  if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js?v=1940',{scope:'/app/'}).catch(()=>{});
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js?v=1950',{scope:'/app/'}).catch(()=>{});
   fetch('/app/api/config').then(r=>r.json()).then(d=>{deferredPaymentModel=d.payment_model!=='legacy_capture';if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
 
   let deferredPaymentModel=true, moneyActor='cliente';
@@ -1608,10 +1633,21 @@ async function loadProvider(){
   $('#moneyClient').onclick=()=>{moneyActor='cliente';loadMoney()};$('#moneyProvider').onclick=()=>{moneyActor='prestador';loadMoney()};$('#refreshMoney').onclick=loadMoney;
   renderModes();
   const initialParams=new URLSearchParams(location.search),initialView=initialParams.get('view'),resetToken=initialParams.get('reset_token');if(['provider','status','money','inbox','activity','home','profile'].includes(initialView))go(initialView);if(resetToken){go('provider');$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerForgot').hidden=true;$('#providerForgot').style.display='none';$('#providerReset').hidden=false;$('#providerReset').style.display='block';}
+$('#jaimeWaitMoreBtn')?.addEventListener('click',()=>{providerSearchCount=-1;const ready=$('#jaimeReadyProviders');if(ready)ready.innerHTML='<div class="empty"><span class="spinner"></span> Jaime sigue buscando…</div>';startProviderSearchPolling();loadAvailableProviders(true).catch(()=>{});});
 })();
 
   // V7.33.1: Documentación queda compacta en la barra superior; la tarjeta se abre solo al tocar el botón.
 </script>
+<div id="jaimeReadyOverlay" style="display:none;position:fixed;inset:0;z-index:9999;background:#f6f8f7;overflow:auto">
+  <div style="max-width:620px;margin:0 auto;padding:20px 16px 90px">
+    <div style="background:#fff;border:1px solid #e4e9e6;border-radius:18px;padding:16px;margin-bottom:12px">
+      <strong style="font-size:18px">✓ Solicitud lista</strong>
+      <div style="margin-top:5px;color:#66736b;font-size:13px">Jaime está buscando profesionales disponibles para ti.</div>
+    </div>
+    <div id="jaimeReadyProviders"><div class="empty"><span class="spinner"></span> Buscando profesionales…</div></div>
+    <button type="button" id="jaimeWaitMoreBtn" class="secondary" style="width:100%;margin-top:12px">Esperar otro profesional</button>
+  </div>
+</div>
 </body>
 </html>
 
