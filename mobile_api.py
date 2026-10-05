@@ -1,5 +1,4 @@
 
-
 from __future__ import annotations
 
 import base64
@@ -4426,16 +4425,34 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             if request_row.get("prestador_id"):
                 return _json(app, {"ok": True, "prestadores": [], "cantidad": 0, "ya_asignada": True})
 
-            rpc_response = requests.post(
-                f"{settings['supabase_url']}/rest/v1/rpc/nexi_app_prestadores_para_solicitud",
+            # V18.25: la pantalla del cliente debe leer los matches REALES ya
+            # creados por el motor Python. Antes dependía de un RPC SQL distinto
+            # (nexi_app_prestadores_para_solicitud); si ese RPC estaba antiguo o
+            # devolvía 0, el prestador recibía la oportunidad pero el cliente no
+            # veía ningún profesional para seleccionar.
+            matches_response = requests.get(
+                f"{settings['supabase_url']}/rest/v1/nexi_app_matches",
                 headers=_db_headers(),
-                json={"p_solicitud_id": request_row["id"], "p_limite": 20},
+                params={
+                    "select": "prestador_id,estado,created_at",
+                    "solicitud_id": f"eq.{request_row['id']}",
+                    "estado": "in.(pendiente,tomada)",
+                    "order": "created_at.asc",
+                    "limit": "20",
+                },
                 timeout=settings["supabase_timeout"],
             )
-            rpc_response.raise_for_status()
-            candidates = rpc_response.json() if rpc_response.content else []
-            if isinstance(candidates, dict):
-                candidates = [candidates]
+            matches_response.raise_for_status()
+            match_rows = matches_response.json() if matches_response.content else []
+            candidates = [
+                {
+                    "prestador_id": row.get("prestador_id"),
+                    "match_estado": row.get("estado"),
+                    "distancia_km": None,
+                }
+                for row in match_rows
+                if row.get("prestador_id")
+            ]
 
             output = []
             for candidate in candidates:
@@ -4560,7 +4577,18 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 -int(p.get("trabajos_completados") or 0),
                 (p.get("nombre") or "").lower(),
             ))
-            return _json(app, {"ok": True, "prestadores": output, "cantidad": len(output), "ya_asignada": False})
+            return _json(app, {
+                "ok": True,
+                "prestadores": output,
+                "cantidad": len(output),
+                "ya_asignada": False,
+                "buscando": len(output) == 0,
+                "mensaje": (
+                    "Encontré profesionales disponibles. Elige uno para conversar."
+                    if output else
+                    "Estoy buscando profesionales disponibles. Te avisaré apenas encuentre uno."
+                ),
+            })
         except requests.RequestException as exc:
             app.logger.exception("AVAILABLE PROVIDERS ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude cargar los profesionales disponibles."}, 502)
