@@ -1,5 +1,6 @@
 
 
+
 from __future__ import annotations
 
 import base64
@@ -773,8 +774,11 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             "url": url,
             "tag": tag,
         }, ensure_ascii=False)
+        subscriptions = response.json() if response.content else []
         sent = 0
-        for subscription in (response.json() if response.content else []):
+        app.logger.info("PUSH SEND table=%s target=%s subscriptions=%s tag=%s",
+                        table, filter_value, len(subscriptions), tag)
+        for subscription in subscriptions:
             try:
                 webpush(
                     subscription_info={
@@ -798,6 +802,11 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                         json={"activa": False},
                         timeout=settings["supabase_timeout"],
                     )
+            except Exception as exc:
+                app.logger.exception("CUSTOM PUSH UNEXPECTED ERROR table=%s target=%s: %r",
+                                     table, filter_value, exc)
+        app.logger.info("PUSH RESULT table=%s target=%s sent=%s/%s tag=%s",
+                        table, filter_value, sent, len(subscriptions), tag)
         return sent
 
     def _send_push(provider_id, request_row):
@@ -823,6 +832,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         response.raise_for_status()
         subscriptions = response.json() if response.content else []
         sent = 0
+        app.logger.info("PROVIDER PUSH provider=%s subscriptions=%s solicitud=%s",
+                        provider_id, len(subscriptions), request_row.get("public_id"))
         payload = json.dumps({
             "title": "Nueva oportunidad · Llama a Jaime",
             "body": f"{SERVICE_LABELS.get(request_row.get('tipo'), 'Servicio')} disponible en {request_row.get('comuna') or 'tu zona'}.",
@@ -953,6 +964,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 created, sent = _create_match(provider, request_row, notify=True)
                 matched += created
                 notified += sent
+                if created:
+                    _notify_client_new_provider(request_row, provider)
 
             app.logger.info(
                 "MOBILE DISPATCH solicitud=%s tipo=%s subtipo=%s comuna=%s providers=%s matches=%s pushes=%s",
@@ -1000,9 +1013,14 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             for request_row in (response.json() if response.content else []):
                 if not _provider_matches_request(provider, request_row):
                     continue
-                created, _ = _create_match(provider, request_row, notify=True)
-                if created:
-                    _notify_client_new_provider(request_row, provider)
+                created, sent = _create_match(provider, request_row, notify=True)
+                # Aunque el match ya existiera (INSERT ignorado por unique), el cliente
+                # debe enterarse al volver a quedar compatible/disponible.
+                client_sent = _notify_client_new_provider(request_row, provider)
+                app.logger.info(
+                    "PROVIDER REMATCH provider=%s solicitud=%s created=%s provider_push=%s client_push=%s",
+                    provider.get("id"), request_row.get("public_id"), created, sent, client_sent,
+                )
         except Exception as exc:
             app.logger.exception("PROVIDER BACKFILL ERROR: %r", exc)
 
