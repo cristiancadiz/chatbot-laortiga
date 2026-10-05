@@ -1,3 +1,168 @@
+
+Cargando mensajes anteriores…
+okr evisa
+Sí. Revisé la documentación oficial actual de Mercado Pago Chile y hay algo importante para nuestro Plan B: Mercado Pago sí tiene un mecanismo de cobertura frente a determinados contracargos, pero no todos los pagos están cubiertos automáticamente.
+
+Cuando aparece un contracargo, la API nos entrega el campo coverage_eligible. Si aparece:
+
+coverage_eligible: true
+ese caso puede ser elegible para cobertura. Nosotros enviamos la documentación que demuestra que la operación fue legítima. Después del análisis, coverage_applied indica el resultado: true significa que la decisión fue favorable al vendedor y el dinero se devuelve; false, que la decisión fue desfavorable y el dinero se descuenta. 
+
+Esto es muy útil para Llama a Jaime
+Podemos construir automáticamente un expediente por cada servicio:
+
+Pago → cotización aceptada → conversación → prestador seleccionado → trabajo terminado → cliente confirma servicio recibido → fotografías/evidencias → fechas y horas.
+
+Si aparece un contracargo, el webhook nos avisa y consultamos:
+
+coverage_eligible
+documentation_status
+date_documentation_deadline
+coverage_applied
+Mercado Pago permite subir evidencia en JPG, PNG o PDF, hasta 10 MB en total. 
+
+La confirmación del cliente sería especialmente útil como parte de nuestra evidencia:
+
+✓ Servicio recibido
+Confirmado por el cliente
+29/09/2026 — 18:42
+Solicitud NX-XXXX
+
+No garantiza ganar la disputa, pero nos deja mucho mejor respaldados.
+
+También podemos prevenir bastante fraude
+Mercado Pago recomienda enviar en la creación del pago todos los datos disponibles del comprador y configurar sus mecanismos de seguridad. Además, ofrece una notificación de alerta de fraude (delivery_cancellation) cuando detecta comportamiento irregular o recibe información de una tarjeta robada. 
+
+Eso significa que nuestro backend puede hacer:
+
+Alerta de fraude → congelar servicio/payout → no pagar al prestador → revisar/devolver según corresponda.
+
+Pero queda un riesgo
+Mercado Pago es explícito: si el contracargo finalmente es válido, los fondos se retiran del vendedor y se devuelven al cliente. 
+
+Y una disputa puede demorarse hasta 6 meses en resolverse, dependiendo de la marca de la tarjeta. 
+
+Por eso no podemos pensar:
+
+10 días → pagamos al prestador → riesgo terminado. ❌
+
+Sería:
+
+10 días → pagamos al prestador → riesgo de contracargo posterior todavía existe.
+
+Cómo protegería NEXIA
+No retendría seis meses los pagos de todos; eso destruiría la experiencia del prestador. Usaría los 10 días que definimos y construiría un sistema de riesgo:
+
+Servicio normal + sin alertas → payout a los 10 días.
+
+Alerta/reclamo antes del payout → congelar automáticamente.
+
+Contracargo después del payout → NEXIA presenta el expediente a Mercado Pago.
+
+Si Mercado Pago cubre/falla a nuestro favor → recuperamos el dinero.
+
+Si perdemos → aplicar las reglas contractuales que correspondan con el prestador, incluido eventualmente saldo negativo/compensación futura cuando proceda.
+
+Y agregaría algo importante al código: nunca hacer un Payout si existe un chargeback, alerta de fraude o disputa abierta asociada a ese pago.
+
+Con esto, el Plan B sigue siendo viable, pero ahora sabemos que los 10 días son una capa de seguridad, no una garantía absoluta contra contracargos. La buena noticia es que podemos automatizar prácticamente todo el sistema de defensa mediante los endpoints y webhooks de Mercado Pago. 
+
+Documentación oficial de contracargos de Mercado Pago Chile
+
+si la erponsa quiere adlentar su indero podemos cobrar le un fee cimo tro nefocio tripo facirroin
+Sí, como idea comercial es muy interesante, pero hay que separar dos modelos porque jurídicamente no son lo mismo.
+
+Si al prestador le corresponden, por ejemplo, $100.000 que Llama a Jaime pagará dentro de 10 días, podríamos ofrecerle:
+
+Pago programado: $100.000 en 10 días.
+Pago anticipado: recibe $97.000 hoy.
+Costo por anticipo: $3.000.
+
+Eso se parece económicamente al factoring/confirming: se adelanta dinero correspondiente a un crédito que vence posteriormente, cobrando un descuento por obtener liquidez antes. La CMF describe el factoring precisamente como obtener anticipadamente el dinero de una cuenta por cobrar con un descuento; y el confirming permite a proveedores anticipar pagos antes de su vencimiento. 
+
+Pero aquí está la parte importante: no implementaría todavía “NEXIA te presta $97.000 y te cobra 3%” como una simple función del marketplace. Dependiendo de cómo estructuremos el derecho del prestador a cobrar, quién adelanta los fondos y quién asume el riesgo, podríamos estar entrando en una actividad de financiamiento que requiere una revisión jurídica/regulatoria distinta. La CMF mantiene reglas y registros para determinadas actividades financieras. 
+
+Una alternativa especialmente interesante sería que un tercero financiero entregue el anticipo. Llama a Jaime podría mostrar:
+
+Recibir en 10 días: $100.000
+o
+Recibir hoy: $97.000
+
+El tercero adelanta los $97.000 y, cuando llegue la fecha de liquidación, recibe los $100.000. NEXIA podría eventualmente ganar una comisión por facilitar esa operación, dependiendo del contrato y del modelo regulatorio.
+
+Incluso podría convertirse más adelante en otra línea de negocio de Llama a Jaime: “Adelanta tus ganancias”.
+
+Pero para la primera versión mantendría pago normal a 10 días. Cuando tengamos volumen y datos reales de liquidaciones, estudiamos formalmente el anticipo. Sería mucho más fácil negociar con un proveedor financiero teniendo, por ejemplo, cientos o miles de servicios completados mensualmente.
+
+Y no lo llamaría factoring automáticamente: el factoring tradicional en Chile está estrechamente ligado a la cesión de créditos/facturas; el SII incluso mantiene el Registro Público Electrónico de Transferencia de Créditos para las cesiones de facturas. 
+
+La idea sí es buena; la estructura legal es lo que tenemos que elegir correctamente. Podría ser una fuente de ingresos adicional muy interesante una vez que Llama a Jaime tenga escala.
+
+caunto timepo le costaria a la competncia hacer unca compia de lmamo a jaime, que dices?
+Por lo que hemos construido y definido hasta ahora, hay que separar copiar la interfaz de copiar el negocio completo.
+
+Una empresa con buenos desarrolladores podría hacer una PWA que visualmente se parezca a Llama a Jaime en unas semanas. Crear registro de clientes/prestadores, solicitudes, chat, cotizaciones, perfiles y un flujo básico de pago no constituye una barrera técnica enorme.
+
+Lo difícil de copiar es cuando todo lo que estamos diseñando empieza a funcionar como un sistema integrado: matching por comuna/disponibilidad, Jaime por IA y voz, documentación y validación de prestadores, cotizaciones y conversaciones, pagos, controversias, evidencia, liquidaciones, Payouts, reputación, notificaciones y administración.
+
+Para un equipo competente, mi estimación aproximada sería:
+
+Nivel de copia	Tiempo aproximado
+Interfaz similar + solicitud de servicios	2–6 semanas
+Marketplace funcional básico	2–4 meses
+Algo parecido a nuestra arquitectura completa	4–8 meses
+Plataforma madura, con pagos/disputas/operación afinada	8–18+ meses
+Pero el código no sería tu principal defensa. Una empresa con dinero podría acelerar mucho esos tiempos.
+
+La verdadera barrera empieza cuando Llama a Jaime acumula prestadores verificados + clientes + trabajos completados + reputación + historial antifraude + datos de precios + comportamiento de demanda + automatizaciones + acuerdos comerciales. Eso no se copia descargando una aplicación.
+
+Por ejemplo, si dentro de un año tienes 5.000 prestadores, miles de servicios realizados y sabes qué prestadores realmente cumplen en cada comuna y categoría, un competidor puede copiar el botón “¿Qué necesitas?”, pero empieza prácticamente desde cero en la parte que hace que ese botón encuentre a alguien confiable.
+
+Por eso yo priorizaría ahora salir, probar y generar transacciones reales, más que intentar esconder tecnológicamente Llama a Jaime. Cada servicio completado hace que el producto sea un poco más difícil de replicar.
+
+Y hay otra ventaja interesante que estamos creando: el sistema de pagos que acabamos de diseñar —cliente paga → servicio → confirmación → ventana de protección → liquidación automática al prestador → gestión de controversias— puede convertirse en parte importante de la confianza de la plataforma, no simplemente en un medio de pago.
+
+Si ejecutas rápido, alguien podrá copiar la app relativamente rápido; copiar el marketplace funcionando es bastante más difícil.
+
+busca en la otra conversacion la ultima versión de llama a jaime con codiffo para aplicarla y ademas agrega el metdoo de pago a 10 dias una vez que ambas partes aprobaron
+atencion que no tendremos que distribuir entre prestador y jaime, todo debe venir en la cuetna de llamaa jaime, yho hare el apgo a los prestdores despues, agregalo en el cpdigo cpara que apgue a los 10 dias despuesm, ademas ajusta las comisones en 10 dias por emrcado pago
+
+Ha pensado durante 3m 3s
+Sí. Ya tomé como base el backend más reciente que encontré, del 2 de octubre, y no la V18.22 anterior.
+
+Apliqué el nuevo modelo:
+
+El 100% del pago entra a la cuenta Mercado Pago de NEXIA/Llama a Jaime.
+Eliminé application_fee / marketplace_fee del nuevo flujo: no hay Split con el prestador.
+El pago utiliza las credenciales de NEXIA, no el OAuth del prestador.
+Mercado Pago queda considerado con modalidad 10 días: 2,89% + IVA; el costo definitivo se reemplaza por el fee real informado por MP. Esa es la tarifa general que MP publica actualmente para Checkout a 10 días. 
+El prestador marca Trabajo terminado.
+El cliente confirma Servicio recibido.
+Desde esa confirmación se cuentan 10 días.
+Si hay reclamo/controversia, el servicio no entra al Payout.
+Cumplidos los 10 días, queda elegible para dispersión.
+La dispersión agrupa el saldo por prestador y genera lotes de hasta 1.000 prestadores; si hay más, crea lotes sucesivos. Mercado Pago admite hasta 1.000 transferencias por Payout. 
+Dejé protección contra doble pago si el proceso automático se ejecuta nuevamente.
+Los Payouts productivos quedan preparados para la firma Ed25519 exigida por Mercado Pago. 
+Backend compilado correctamente y JavaScript del frontend validado.
+Backend actualizado:
+
+Frontend actualizado:
+
+Un punto importante: todavía no activaría el Payout automático con dinero real hasta registrar con Mercado Pago la clave pública de Payouts. En producción exigen que NEXIA firme cada solicitud con su clave privada y que Mercado Pago tenga la pública correspondiente. 
+
+El flujo final queda:
+
+Cliente paga → 100% NEXIA → servicio → prestador termina → cliente confirma → 10 días → verificar que no haya controversia → Payout automático → prestador recibe su neto.
+
+Y la conexión Mercado Pago individual del prestador ya no participa en el cobro del cliente. Para dispersarle por Mercado Pago utilizamos el destinatario de su liquidación.
+
+
+mobile_api_V18_23_NEXIA_CENTRAL_10_DIAS_PAYOUTS.txt
+Documento
+
+index_V7_96_NEXIA_CENTRAL_10_DIAS.txt
+Documento
 <!doctype html>
 <html lang="es">
 <head>
@@ -510,7 +675,7 @@
         <div class="payment-status-copy"><span id="paymentStatusDetail">Primero acepta la cotización.</span></div>
         <div class="payment-client-action" id="paymentClientAction" hidden>
           <div class="mp-pay-intro" id="mpPayIntro">
-            <p><strong>🛡️ Tu pago está protegido</strong><br><small>Paga de forma segura con Mercado Pago. El monto quedará protegido mientras se realiza el servicio. El cobro se completará cuando el prestador marque el trabajo terminado y tú confirmes la finalización. <strong>Si el trabajo no se completa, podrás solicitar la devolución íntegra del monto pagado</strong>, sujeta a la validación del estado del servicio y las condiciones aplicables.</small></p>
+            <p><strong>🛡️ Tu pago está protegido</strong><br><small>Paga de forma segura con Mercado Pago. El pago será recibido por Llama a Jaime/NEXIA y quedará asociado a este servicio. Cuando el prestador marque el trabajo terminado y tú confirmes la recepción, comenzará el plazo de 10 días para la liquidación al prestador. Si existe una controversia, la liquidación se suspende mientras se revisa.</small></p>
             <button type="button" class="primary" id="showMercadoPagoFormBtn">Pagar con Mercado Pago</button>
           </div>
           <div id="mpCardFields" class="mp-card-fields" hidden>
@@ -522,7 +687,7 @@
               <select id="form-checkout__installments" aria-label="Cuotas"></select>
               <select id="form-checkout__identificationType" aria-label="Tipo de documento"></select><input id="form-checkout__identificationNumber" placeholder="RUT / documento">
               <input id="form-checkout__cardholderEmail" type="email" placeholder="Correo del pagador" autocomplete="email">
-              <button type="submit" class="primary" id="mercadoPagoBtn">Autorizar y reservar fondos</button>
+              <button type="submit" class="primary" id="mercadoPagoBtn">Pagar con Mercado Pago</button>
             </form>
           </div>
           <div class="notice" id="mercadoPagoNotice"></div>
@@ -1134,9 +1299,9 @@ cancelBox.hidden=!canCancelRequest;
 const paymentLabels={pendiente:'Pendiente',autorizado:'Autorizado',pagado:'Pagado',liberado:'Liberado',reembolsado:'Reembolsado',disputado:'Disputado'};
 const paymentDetails={
   pendiente:'Aún no hay un pago confirmado.',
-  autorizado:'Fondos reservados por Mercado Pago. El cobro se realizará al finalizar y confirmar el trabajo.',
-  pagado:'Trabajo confirmado: Mercado Pago capturó el pago.',
-  liberado:'El pago fue liberado después del cierre del servicio.',
+  autorizado:'Pago en proceso de validación por Mercado Pago.',
+  pagado:'Pago recibido por Llama a Jaime. El prestador se liquida 10 días después de la confirmación de ambas partes, si no existen controversias.',
+  liberado:'Pago recibido y disponible para liquidación según el plazo del servicio.',
   reembolsado:'El pago fue reembolsado.',
   disputado:'El pago se encuentra en revisión por una disputa.'
 };
@@ -1159,7 +1324,7 @@ if(hasProvider){
   clientPaymentAction.hidden=!canStartPayment;
   if(canStartPayment){
     mercadoPagoBtn.disabled=false;
-    mercadoPagoBtn.textContent='Autorizar y reservar fondos';
+    mercadoPagoBtn.textContent='Pagar con Mercado Pago';
     mercadoPagoNotice.textContent='';
     const mpFields=$('#mpCardFields'),showPay=$('#showMercadoPagoFormBtn'); if(!mpPaymentUiActive){if(mpFields)mpFields.hidden=true; if(showPay)showPay.hidden=false;}
   }
@@ -1174,7 +1339,7 @@ if(hasProvider){
     $('#paymentPlatformFee').textContent='− '+money(sol.comision_llama_jaime_neta);
     $('#paymentPlatformVat').textContent='− '+money(sol.iva_comision_llama_jaime);
     const realMpFee=Number(sol.comision_mercado_pago||0);
-    const mpFee=realMpFee>0?realMpFee:Math.round(servicePrice*0.038);
+    const mpFee=realMpFee>0?realMpFee:Math.round(servicePrice*0.0289*1.19);
     const platformFee=Number(sol.comision_llama_jaime_neta||Math.round(servicePrice*0.12));
     const platformVat=Number(sol.iva_comision_llama_jaime||Math.round(platformFee*0.19));
     const providerNet=realMpFee>0?Number(sol.neto_prestador||0):Math.max(0,servicePrice-platformFee-platformVat-mpFee);
@@ -1184,7 +1349,7 @@ if(hasProvider){
     mpNote.hidden=false;
     mpNote.textContent=realMpFee>0
       ?'Costo Mercado Pago actualizado con el valor informado para esta transacción.'
-      :'Costo Mercado Pago estimado en 3,8% para esta referencia. Es aproximado y puede cambiar según el medio de pago, plazo de liberación y tarifas aplicables. El monto definitivo se actualiza al confirmarse el pago.';
+      :'Referencia Mercado Pago para disponibilidad en 10 días: 2,89% + IVA (aprox. 3,4391%). El monto definitivo se actualiza con el costo real informado por Mercado Pago.';
   }
 }
 const finishCard=$('#finishServiceCard'),finishBtn=$('#finishServiceBtn'),finishNote=$('#finishServiceNotice');
@@ -1211,7 +1376,7 @@ if(hasProvider&&paymentReady&&sol.servicio_finalizado_at){
   if(sol.prestador_declaro_finalizado_at){
     finishBtn.hidden=false;finishBtn.textContent='✓ Confirmar servicio recibido';
     $('#finishServiceTitle').textContent='El prestador indicó que terminó';
-    $('#finishServiceText').textContent='Revisa el trabajo. Al confirmar, Mercado Pago capturará el monto reservado y se cerrará el servicio.';
+    $('#finishServiceText').textContent='Revisa el trabajo. Al confirmar, el servicio se cerrará y comenzará el plazo de 10 días para liquidar al prestador.';
   }else{
     finishBtn.hidden=true;
     $('#finishServiceTitle').textContent='Servicio en curso';
@@ -1283,8 +1448,8 @@ function loadMercadoPagoSdk(){
 }
 async function submitMercadoPagoAuthorization(data){
   const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;if(!btn||!note||!c)return;
-  const original='Autorizar y reservar fondos';
-  btn.disabled=true;btn.textContent='Autorizando…';note.style.display='block';note.className='notice';note.textContent='Mercado Pago está reservando los fondos…';
+  const original='Pagar con Mercado Pago';
+  btn.disabled=true;btn.textContent='Procesando pago…';note.style.display='block';note.className='notice';note.textContent='Mercado Pago está procesando el pago a Llama a Jaime…';
   try{
     const missing=[];
     if(!data.token)missing.push('token de tarjeta');
@@ -1294,19 +1459,19 @@ async function submitMercadoPagoAuthorization(data){
     if(!data.identificationType)missing.push('tipo de documento');
     if(!data.identificationNumber)missing.push('documento');
     if(missing.length)throw new Error('Datos incompletos: '+missing.join(', ')+'.');
-    note.textContent='Mercado Pago: tarjeta validada. Enviando autorización…';
+    note.textContent='Mercado Pago: tarjeta validada. Enviando pago…';
     console.warn('MP FRONTEND AUTH SEND',{public_id:c.public_id,paymentMethodId:data.paymentMethodId,issuerId:data.issuerId||null,installments:Number(data.installments||1),hasToken:!!data.token,hasEmail:!!data.cardholderEmail,identificationType:data.identificationType,hasIdentification:!!data.identificationNumber});
     const payload={token:c.token,card_token:data.token,payment_method_id:data.paymentMethodId,installments:Number(data.installments||1),payer:{email:data.cardholderEmail,identification:{type:data.identificationType,number:data.identificationNumber}}};
     if(data.issuerId)payload.issuer_id=data.issuerId;
     const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago/autorizar`,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(payload)});
     let d={};
     try{d=await r.json();}catch(_){throw new Error(`El servidor respondió ${r.status} sin JSON válido.`);}
-    if(!r.ok||!d.ok)throw new Error(d.error||d.message||`Mercado Pago rechazó la autorización (${r.status}).`);
-    note.className='notice success';note.textContent=d.status==='authorized'?'✓ Fondos reservados. El prestador puede realizar el trabajo. El cobro se hará cuando confirmes que terminó.':(d.message||'Autorización en proceso.');
+    if(!r.ok||!d.ok)throw new Error(d.error||d.message||`Mercado Pago rechazó el pago (${r.status}).`);
+    note.className='notice success';note.textContent=d.message||'✓ Pago procesado correctamente por Llama a Jaime.';
     mpPaymentUiActive=false;
     await loadConversation(true);
   }catch(err){
-    console.error('MP autorización',err);
+    console.error('MP pago',err);
     note.className='notice error';note.style.display='block';note.textContent='Mercado Pago: '+mpErrorText(err);
     btn.disabled=false;btn.textContent=original;
   }
@@ -1353,13 +1518,13 @@ async function ensureMercadoPagoCardForm(){
             const data=form.getCardFormData();
             console.log('MP CardForm submit',{paymentMethodId:data.paymentMethodId,issuerId:data.issuerId,installments:data.installments,hasToken:!!data.token,hasEmail:!!data.cardholderEmail,identificationType:data.identificationType,hasIdentification:!!data.identificationNumber});
             Promise.resolve(submitMercadoPagoAuthorization(data)).catch(err=>{
-              console.error('MP autorización no controlada',err);
+              console.error('MP pago no controlado',err);
               const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent='Mercado Pago [envío]: '+mpErrorText(err);}
             });
           }catch(err){
             console.error('MP tokenización/submit',err);
             const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent='Mercado Pago [tokenización]: '+mpErrorText(err);}
-            const b=$('#mercadoPagoBtn');if(b){b.disabled=false;b.textContent='Autorizar y reservar fondos';}
+            const b=$('#mercadoPagoBtn');if(b){b.disabled=false;b.textContent='Pagar con Mercado Pago';}
           }
         },
         onFetching:resource=>{
@@ -1387,9 +1552,9 @@ async function startMercadoPagoAuthorization(){
     if(typeof formEl.requestSubmit==='function')formEl.requestSubmit();
     else formEl.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
   }catch(err){
-    console.error('MP inicio autorización',err);
+    console.error('MP inicio pago',err);
     note.className='notice error';note.style.display='block';note.textContent='Mercado Pago [inicio]: '+mpErrorText(err);
-    btn.disabled=false;btn.textContent='Autorizar y reservar fondos';
+    btn.disabled=false;btn.textContent='Pagar con Mercado Pago';
   }
 }
 // V7.90: el botón de Mercado Pago es submit nativo del formulario.
@@ -1401,7 +1566,7 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     const isProvider=c.actor==='prestador';
     const question=isProvider
       ?'¿Confirmas que terminaste el trabajo? El cliente deberá confirmar que recibió el servicio.'
-      :'¿Confirmas que recibiste correctamente el servicio? Al confirmar, Mercado Pago capturará el monto reservado y el servicio se cerrará.';
+      :'¿Confirmas que recibiste correctamente el servicio? Al confirmar, comenzará el plazo de 10 días para la liquidación al prestador.';
     if(!confirm(question))return;
     const auth=c.actor==='cliente'?{actor:'cliente',token:c.token}:{actor:'prestador',codigo:c.codigo,token:c.token};
     const originalText=btn.textContent;
@@ -1426,7 +1591,7 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     e.preventDefault();
     const c=conversationContext,button=e.submitter,note=$('#cancelRequestNotice'),motivo=$('#cancelRequestReason').value;
     if(!c||c.actor!=='cliente'||!motivo)return;
-    if(!confirm('¿Cancelar esta solicitud? Si hay fondos reservados, primero intentaremos liberarlos en Mercado Pago.'))return;
+    if(!confirm('¿Cancelar esta solicitud? Si el pago ya fue procesado, la cancelación puede requerir revisión o devolución.'))return;
     button.disabled=true;note.style.display='none';
     try{
       const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/cancelar`,{method:'POST',headers,body:JSON.stringify({token:c.token,motivo})});
@@ -1483,10 +1648,10 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     const price=money(amount);
     const platform=Math.round(amount*0.12);
     const vat=Math.round(platform*0.19);
-    const mpEstimate=Math.round(amount*0.038);
+    const mpEstimate=Math.round(amount*0.0289*1.19);
     const estimatedNet=Math.max(0,amount-platform-vat-mpEstimate);
     const description=escapeHtml(quote.detalle||'Servicio cotizado sin descripción adicional');
-    const economy=c&&c.actor==='prestador'?`<div class="quote-economy"><div><span>Valor del servicio</span><strong>${escapeHtml(price)}</strong></div><div><span>Comisión Llama a Jaime (12%)</span><strong>− ${escapeHtml(money(platform))}</strong></div><div><span>IVA sobre comisión (19%)</span><strong>− ${escapeHtml(money(vat))}</strong></div><div><span>Mercado Pago (aprox. 3,8%)</span><strong>− ${escapeHtml(money(mpEstimate))}</strong></div><div class="net"><span>Recibirías aprox.</span><strong>${escapeHtml(money(estimatedNet))}</strong></div><small class="quote-mp-note">El costo de Mercado Pago es aproximado y puede cambiar según el medio de pago, plazo de liberación y tarifas aplicables. Después del pago se mostrará el costo real informado por Mercado Pago.</small></div>`:'';
+    const economy=c&&c.actor==='prestador'?`<div class="quote-economy"><div><span>Valor del servicio</span><strong>${escapeHtml(price)}</strong></div><div><span>Comisión Llama a Jaime (12%)</span><strong>− ${escapeHtml(money(platform))}</strong></div><div><span>IVA sobre comisión (19%)</span><strong>− ${escapeHtml(money(vat))}</strong></div><div><span>Mercado Pago (2,89% + IVA · 10 días)</span><strong>− ${escapeHtml(money(mpEstimate))}</strong></div><div class="net"><span>Recibirías aprox.</span><strong>${escapeHtml(money(estimatedNet))}</strong></div><small class="quote-mp-note">El costo de Mercado Pago es aproximado y puede cambiar según el medio de pago, plazo de liberación y tarifas aplicables. Después del pago se mostrará el costo real informado por Mercado Pago.</small></div>`:'';
     const title=quote.estado==='aceptada'?`✓ Cotización aceptada · ${escapeHtml(price)}`:`Cotización · ${escapeHtml(price)}`;
     const actions=(c&&c.actor==='cliente'&&quote.estado==='pendiente')?`<div class="quote-actions"><button class="quote-accept" data-quote-action="aceptar">Aceptar cotización</button><button class="quote-reject" data-quote-action="rechazar">Rechazar</button></div>`:'';
     const status=(c&&c.actor==='prestador'&&quote.estado==='pendiente')?'<small>Esperando respuesta del cliente.</small>':'';
@@ -1921,3 +2086,5 @@ async function loadProvider(){
 </div>
 </body>
 </html>
+
+
