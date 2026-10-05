@@ -9,7 +9,7 @@
   <link rel="manifest" href="/app/manifest.webmanifest">
   <link rel="icon" type="image/png" href="/app/assets/icon-192.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/app/assets/apple-touch-icon.png">
-  <!-- LLAMA A JAIME FRONT V19.7 · JAIME BUSQUEDA DIRECTA -->
+  <!-- LLAMA A JAIME FRONT V19.8 · JAIME + CHECKOUT PRO FIX -->
 <title>Llama a Jaime · Servicios cuando los necesitas</title>
   <style>
     :root{--forest:#073b66;--green:#08a6a6;--leaf:#ff9f1c;--cream:#f7f6f1;--gold:#ffb627;--ink:#102f49;--muted:#667783;--line:#d8e1e7;--white:#fff;--danger:#a6382f;--shadow:0 14px 38px rgba(7,59,102,.12)}
@@ -914,7 +914,6 @@ if(hasProvider){
   paymentDetail.textContent=(paymentDetails[paymentState]||paymentDetails.pendiente)+amountText;
 
   const clientPaymentAction=$('#paymentClientAction');
-  const mercadoPagoBtn=$('#mercadoPagoBtn');
   const mercadoPagoNotice=$('#mercadoPagoNotice');
   const servicePriceForClient=Number(sol.precio_servicio);
   window.__currentServicePrice=Number.isFinite(servicePriceForClient)?servicePriceForClient:0;
@@ -924,7 +923,6 @@ if(hasProvider){
     && !['autorizado','pagado','liberado','reembolsado','disputado'].includes(paymentState);
   clientPaymentAction.hidden=!canStartPayment;
   if(canStartPayment){
-    mercadoPagoBtn.disabled=false;
     mercadoPagoNotice.textContent='';
     const mpFields=$('#mpCardFields'),showPay=$('#showMercadoPagoFormBtn'); if(mpFields)mpFields.hidden=true; if(showPay){showPay.hidden=false;showPay.disabled=false;showPay.textContent='Pagar con Mercado Pago';}
   }
@@ -1502,7 +1500,7 @@ async function loadProvider(){
 
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
   $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
-  if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js?v=1970',{scope:'/app/'}).catch(()=>{});
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js?v=1980',{scope:'/app/'}).catch(()=>{});
   fetch('/app/api/config').then(r=>r.json()).then(d=>{deferredPaymentModel=d.payment_model!=='legacy_capture';if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
 
   let deferredPaymentModel=true, moneyActor='cliente';
