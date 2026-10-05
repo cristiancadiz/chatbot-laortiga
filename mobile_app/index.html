@@ -1,4 +1,216 @@
 
+Cargando mensajes anteriores…
+Archivo adjunto del usuario
+Sí. El error es porque pegaste los nombres de las columnas, no una instrucción SQL. Supabase/PostgreSQL necesita CREATE TABLE.
+
+Pega esto completo en el SQL Editor:
+
+create table if not exists public.nexi_app_liquidaciones (
+    id uuid primary key default gen_random_uuid(),
+
+    empresa_id uuid not null,
+    solicitud_id uuid not null,
+    prestador_id uuid not null,
+
+    monto_servicio numeric(12,2) not null default 0,
+    costo_mercadopago numeric(12,2) not null default 0,
+    comision_nexia numeric(12,2) not null default 0,
+    iva_comision_nexia numeric(12,2) not null default 0,
+    monto_prestador numeric(12,2) not null default 0,
+
+    confirmado_at timestamptz,
+    liberar_at timestamptz,
+
+    estado text not null default 'pendiente'
+        check (
+            estado in (
+                'pendiente',
+                'esperando_10_dias',
+                'disponible',
+                'procesando',
+                'pagado',
+                'en_disputa',
+                'bloqueado',
+                'fallido'
+            )
+        ),
+
+    payout_id text,
+    payout_transaction_id text,
+    pagado_at timestamptz,
+
+    bloqueado_por_disputa boolean not null default false,
+
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+
+    constraint nexi_app_liquidaciones_solicitud_unique
+        unique (solicitud_id)
+);
+
+create index if not exists idx_nexi_liquidaciones_liberar
+    on public.nexi_app_liquidaciones (liberar_at);
+
+create index if not exists idx_nexi_liquidaciones_estado
+    on public.nexi_app_liquidaciones (estado);
+
+create index if not exists idx_nexi_liquidaciones_prestador
+    on public.nexi_app_liquidaciones (prestador_id);
+
+create index if not exists idx_nexi_liquidaciones_empresa
+    on public.nexi_app_liquidaciones (empresa_id);
+
+Después aprieta Run.
+
+¿Qué estamos dejando preparado?
+La lógica queda así:
+
+1. Cliente paga $100.000 → los $100.000 entran a Llama a Jaime/NEXIA.
+
+2. Ya no hacemos split de Mercado Pago.
+
+3. Guardamos en nexi_app_liquidaciones cuánto corresponde al prestador y cuánto corresponde a NEXIA.
+
+4. Prestador marca terminado.
+
+5. Cliente confirma.
+
+6. En ese momento:
+
+confirmado_at = fecha de confirmación
+liberar_at = confirmado_at + 10 días
+estado = esperando_10_dias
+7. Si aparece disputa:
+
+estado = en_disputa
+bloqueado_por_disputa = true
+y no se paga.
+
+8. Si pasan los 10 días sin problemas:
+
+estado = disponible
+y recién ahí entra al proceso de pago al prestador.
+
+Un detalle importante: no ejecutes todavía ningún SQL adicional. Primero ejecuta exactamente este bloque y mándame el resultado que te entregue Supabase. Así verificamos que los tipos de empresa_id, solicitud_id y prestador_id coincidan con tu base antes de conectar las foreign keys y el backend.
+
+create table if not exists public.nexi_app_liquidaciones (
+    id uuid primary key default gen_random_uuid(),
+
+    empresa_id uuid not null,
+    solicitud_id uuid not null,
+    prestador_id uuid not null,
+
+    monto_servicio numeric(12,2) not null default 0,
+    costo_mercadopago numeric(12,2) not null default 0,
+    comision_nexia numeric(12,2) not null default 0,
+    iva_comision_nexia numeric(12,2) not null default 0,
+    monto_prestador numeric(12,2) not null default 0,
+
+    confirmado_at timestamptz,
+    liberar_at timestamptz,
+
+    estado text not null default 'pendiente'
+        check (
+            estado in (
+                'pendiente',
+                'esperando_10_dias',
+                'disponible',
+                'procesando',
+                'pagado',
+                'en_disputa',
+                'bloqueado',
+                'fallido'
+            )
+        ),
+
+    payout_id text,
+    payout_transaction_id text,
+    pagado_at timestamptz,
+
+    bloqueado_por_disputa boolean not null default false,
+
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+
+    constraint nexi_app_liquidaciones_solicitud_unique
+        unique (solicitud_id)
+);
+
+create index if not exists idx_nexi_liquidaciones_liberar
+    on public.nexi_app_liquidaciones (liberar_at);
+
+create index if not exists idx_nexi_liquidaciones_estado
+    on public.nexi_app_liquidaciones (estado);
+
+create index if not exists idx_nexi_liquidaciones_prestador
+    on public.nexi_app_liquidaciones (prestador_id);
+
+create index if not exists idx_nexi_liquidaciones_empresa
+    on public.nexi_app_liquidaciones (empresa_id);
+…
+Sí, Cris. Ese es el bloque correcto.
+
+Ahora ejecútalo completo con Run en Supabase. Si todo sale bien, abajo debería aparecer algo similar a:
+
+Success. No rows returned
+
+Eso significa que se creó nexi_app_liquidaciones y sus cuatro índices.
+
+No ejecutes otro SQL todavía. Envíame una captura del resultado después de darle a Run. Con eso revisamos el siguiente paso: conectar esta tabla con las solicitudes existentes y con el flujo automático de liquidación a los 10 días.
+
+dice que cp,ñeto nombre . telefomo y cpo,una la priemra vesz
+Sí. Si te refieres al registro inicial del cliente en Llama a Jaime, la idea es que nombre, teléfono y comuna se pidan solo la primera vez.
+
+Después quedan guardados en su perfil:
+
+Nombre: se reutiliza automáticamente.
+Teléfono: queda asociado a la cuenta y no se vuelve a pedir en cada solicitud.
+Comuna: queda como comuna habitual; idealmente Jaime puede actualizarla mediante ubicación/GPS cuando corresponda.
+Entonces, cuando vuelva y diga “necesito limpiar mis zapatillas mañana”, Jaime no debería responder preguntando otra vez nombre, teléfono o comuna. Debe ir directamente a entender el servicio y hacer el matching.
+
+Si me estás diciendo que la versión V7.96 que acabamos de preparar los vuelve a pedir, entonces hay que corregirla porque no es el comportamiento que habíamos definido.
+
+dice eso cuando solicito algo
+Ah, perfecto. Entonces sí hay un error en el flujo actual.
+
+Cuando haces una solicitud, Jaime está interpretando que faltan nombre, teléfono y comuna, aunque esos datos ya fueron ingresados en el registro inicial. Eso no debería ocurrir.
+
+El comportamiento correcto es:
+
+Primera vez: registro → nombre + teléfono + comuna.
+
+Desde la segunda interacción: Jaime recupera esos datos del perfil y no vuelve a preguntarlos. Si escribes:
+
+“Necesito limpiar mis zapatillas mañana”
+
+debería concentrarse únicamente en lo que realmente falte para crear la solicitud: por ejemplo cantidad de zapatillas, fecha/horario, fotos u otro detalle necesario.
+
+Y si la comuna ya está guardada, tampoco debería decir algo como “para continuar necesito tu nombre, teléfono y comuna”.
+
+Esto hay que corregir en el backend, no solamente ocultar el mensaje en el frontend, porque el problema está en la validación/contexto que Jaime utiliza para determinar qué datos faltan.
+
+Puedo corregirlo sobre el V18.23 que acabamos de generar, manteniendo intacto el nuevo sistema de pago NEXIA + liquidación a 10 días.
+
+ok dale
+
+Ha pensado durante 23s
+Listo. Encontré exactamente el problema: el frontend V7.96 seguía teniendo esta validación:
+
+“Completa nombre, teléfono y comuna la primera vez.”
+
+La corregí. Ahora:
+
+Nombre se toma del perfil; solo se reclama si realmente nunca fue registrado.
+Teléfono no bloquea una nueva solicitud ni vuelve a pedirse.
+Comuna se reutiliza del perfil/GPS y tampoco vuelve a pedirse.
+Jaime sigue teniendo la instrucción de no preguntar esos datos nuevamente.
+No toqué el nuevo sistema de pagos ni la liquidación a 10 días.
+Validé el JavaScript y pasó correctamente.
+El backend V18.23 no necesita cambio por este problema, porque ya permitía avanzar sin teléfono y utilizar GPS para ubicación. El bloqueo estaba en el frontend.
+
+
+index_V7_97_PERFIL_UNA_SOLA_VEZ.txt
+Documento
 <!doctype html>
 <html lang="es">
 <head>
@@ -877,7 +1089,7 @@
   $('#chatForm').addEventListener('submit',e=>{e.preventDefault();const m=$('#chatInput').value.trim();if(!m)return;$('#chatInput').value='';ask(m)});
   $$('.chips .chip').forEach(b=>b.addEventListener('click',()=>ask(b.textContent)));
 
-  $('#requestForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submitRequest'),note=$('#formNotice');btn.disabled=true;btn.innerHTML=' Publicando';note.style.display='none';const materials=$$('#requestMaterials input:checked').map(x=>x.value);const profile=clientProfile()||{};const nombre=($('#name').value||profile.nombre||'').trim(),telefono=(profile.telefono||$('#phone').value||'').trim(),email=($('#email').value||profile.email||'').trim(),comuna=($('#commune').value||profile.comuna||'').trim();if(!pendingLocation&&profile.latitud!=null&&profile.longitud!=null)pendingLocation={latitud:profile.latitud,longitud:profile.longitud,precision_m:profile.precision_m||0};if(!pendingLocation){note.textContent='Activa tu ubicación GPS antes de publicar la solicitud.';note.className='notice error';note.style.display='block';btn.disabled=false;btn.textContent='Publicar solicitud';return}if(!nombre||!telefono||!comuna){note.textContent='Completa nombre, teléfono y comuna la primera vez.';note.className='notice error';note.style.display='block';btn.disabled=false;btn.textContent='Publicar solicitud';return}saveClientProfile({nombre,telefono,email,comuna,...pendingLocation});const payload={tipo:service,subtipo:service==='belleza'?($('#beautyService')?.value||''):(service==='salud'?$('#healthService').value:(service==='limpieza'?$('#cleaningService').value:'')),nombre,telefono,email,comuna,direccion_origen:'Ubicación GPS',direccion_destino:$('#destination').value,detalles:$('#details').value,materiales:materials,fecha_preferida:$('#schedule').value,acepta_terminos:$('#requestConsent').checked,acepta_privacidad:$('#requestConsent').checked,...pendingLocation};
+  $('#requestForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submitRequest'),note=$('#formNotice');btn.disabled=true;btn.innerHTML=' Publicando';note.style.display='none';const materials=$$('#requestMaterials input:checked').map(x=>x.value);const profile=clientProfile()||{};const nombre=($('#name').value||profile.nombre||'').trim(),telefono=(profile.telefono||$('#phone').value||'').trim(),email=($('#email').value||profile.email||'').trim(),comuna=($('#commune').value||profile.comuna||'').trim();if(!pendingLocation&&profile.latitud!=null&&profile.longitud!=null)pendingLocation={latitud:profile.latitud,longitud:profile.longitud,precision_m:profile.precision_m||0};if(!pendingLocation){note.textContent='Activa tu ubicación GPS antes de publicar la solicitud.';note.className='notice error';note.style.display='block';btn.disabled=false;btn.textContent='Publicar solicitud';return}if(!nombre){note.textContent='Completa tu nombre en el perfil antes de publicar tu primera solicitud.';note.className='notice error';note.style.display='block';btn.disabled=false;btn.textContent='Publicar solicitud';return}saveClientProfile({nombre,telefono,email,comuna,...pendingLocation});const payload={tipo:service,subtipo:service==='belleza'?($('#beautyService')?.value||''):(service==='salud'?$('#healthService').value:(service==='limpieza'?$('#cleaningService').value:'')),nombre,telefono,email,comuna,direccion_origen:'Ubicación GPS',direccion_destino:$('#destination').value,detalles:$('#details').value,materiales:materials,fecha_preferida:$('#schedule').value,acepta_terminos:$('#requestConsent').checked,acepta_privacidad:$('#requestConsent').checked,...pendingLocation};
     try{const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));let photoWarning='',uploadedCount=requestPhotos.length;if(requestPhotos.length){btn.innerHTML=' Subiendo fotos';const form=new FormData();form.append('token',d.solicitud.token);requestPhotos.forEach(file=>form.append('fotos',file,file.name));try{const photoResponse=await fetch(`/app/api/solicitudes/${encodeURIComponent(d.solicitud.codigo)}/fotos`,{method:'POST',headers:{'X-App-Session':session},body:form});const photoData=await photoResponse.json();if(!photoResponse.ok)throw new Error(photoData.error||'No pude subir las fotos')}catch(photoError){photoWarning='La solicitud quedó publicada, pero algunas fotos no se pudieron guardar. Puedes continuar igualmente.'}}$('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent=photoWarning||(uploadedCount?`${uploadedCount} foto${uploadedCount===1?'':'s'} guardada${uploadedCount===1?'':'s'} de forma privada.`:'Guarda este código para consultar el estado.');latestCreatedRequest=d.solicitud;requestPhotos=[];renderPhotoPreview();$('#requestLocationBtn').textContent='✓ GPS activo';$('#requestLocationStatus').textContent='Ubicación guardada para tu próxima solicitud. Puedes actualizarla cuando quieras.';renderClientSession();$('#requestCard').style.display='none';$('#trackingCard').style.display='block';$('#providerChoice').style.display='block';$('#providerBrowser').style.display='none';$('#providerCandidates').innerHTML='';}
     catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{btn.disabled=false;btn.textContent='Publicar solicitud'}
   });
