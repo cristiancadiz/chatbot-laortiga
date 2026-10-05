@@ -1,8 +1,4 @@
-"""API y archivos públicos de la PWA Llama a Jaime Servicios.
 
-El módulo no conoce credenciales ni importa el núcleo histórico. Recibe las
-dependencias necesarias al registrarse desde app.py.
-"""
 
 from __future__ import annotations
 
@@ -865,18 +861,30 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
 
     def _provider_matches_request(provider, request_row):
         roles = {_norm(x) for x in (provider.get("roles") or [])}
-        communes = {_norm(x) for x in (provider.get("comunas") or [])}
         materials = {_norm(x) for x in (provider.get("materiales") or [])}
         specialties = {_norm(x).replace(" ", "_") for x in (provider.get("especialidades") or [])}
-        request_commune = _norm(request_row.get("comuna"))
+        def _commune_key(value):
+            value = _norm(value)
+            # Tolera valores guardados como "Viña del Mar, Valparaíso" o
+            # "Viña del Mar - Valparaíso" sin debilitar el filtro por comuna.
+            for suffix in (", valparaiso", " - valparaiso", ", region de valparaiso", " - region de valparaiso"):
+                if value.endswith(suffix):
+                    value = value[:-len(suffix)].strip()
+            return value
+        communes = {_commune_key(x) for x in (provider.get("comunas") or []) if _commune_key(x)}
+        request_commune = _commune_key(request_row.get("comuna"))
         request_materials = {_norm(x) for x in (request_row.get("materiales") or []) if _norm(x)}
         provider_phone = _normalize_phone(provider.get("telefono_normalizado") or provider.get("telefono"))
         request_phone = _normalize_phone(request_row.get("telefono_normalizado") or request_row.get("telefono"))
         if provider_phone and request_phone and provider_phone == request_phone:
             return False
         if _norm(request_row.get("tipo")) not in roles:
+            app.logger.info("MATCH SKIP provider=%s solicitud=%s reason=rol request=%s provider_roles=%s",
+                            provider.get("id"), request_row.get("public_id"), request_row.get("tipo"), sorted(roles))
             return False
         if request_commune and request_commune not in communes:
+            app.logger.info("MATCH SKIP provider=%s solicitud=%s reason=comuna request=%s provider_comunas=%s",
+                            provider.get("id"), request_row.get("public_id"), request_commune, sorted(communes))
             return False
         if request_row.get("tipo") == "reciclaje" and request_materials and materials and not (request_materials & materials):
             return False
@@ -1952,7 +1960,16 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             )
             response.raise_for_status()
             rows = response.json() if response.content else []
-            return _json(app, {"ok": True, "prestador": rows[0] if rows else update})
+            updated_provider = rows[0] if rows else {**provider, **update}
+
+            # V18.24: cualquier cambio que pueda afectar el matching debe volver a
+            # cruzar al prestador con solicitudes abiertas. Antes solo se hacía al
+            # registrarlo o tras acciones del administrador; cambiar comunas,
+            # especialidades o disponibilidad desde Perfil no regeneraba matches.
+            if any(key in update for key in ("comunas", "especialidades", "materiales", "vehiculo", "disponible")):
+                Thread(target=_match_provider, args=(updated_provider,), daemon=True).start()
+
+            return _json(app, {"ok": True, "prestador": updated_provider})
         except requests.RequestException as exc:
             app.logger.exception("PROVIDER ME ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude consultar el perfil."}, 502)
@@ -4900,3 +4917,5 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         except requests.RequestException as exc:
             app.logger.exception("CLIENT PUSH SUBSCRIBE ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude activar las notificaciones."}, 502)
+
+
