@@ -1,4 +1,5 @@
 
+
 from __future__ import annotations
 
 import base64
@@ -859,39 +860,51 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         return sent
 
     def _provider_matches_request(provider, request_row):
-        roles = {_norm(x) for x in (provider.get("roles") or [])}
-        materials = {_norm(x) for x in (provider.get("materiales") or [])}
-        specialties = {_norm(x).replace(" ", "_") for x in (provider.get("especialidades") or [])}
+        """Regla única de matching para solicitud nueva y rematch de prestador."""
         def _commune_key(value):
             value = _norm(value)
-            # Tolera valores guardados como "Viña del Mar, Valparaíso" o
-            # "Viña del Mar - Valparaíso" sin debilitar el filtro por comuna.
-            for suffix in (", valparaiso", " - valparaiso", ", region de valparaiso", " - region de valparaiso"):
+            for suffix in (
+                ", valparaiso", " - valparaiso",
+                ", region de valparaiso", " - region de valparaiso",
+            ):
                 if value.endswith(suffix):
                     value = value[:-len(suffix)].strip()
             return value
+
+        # Estado operativo: se aplica igual desde ambos sentidos del match.
+        if provider.get("activo") is not True:
+            return False
+        if _norm(provider.get("estado_cuenta")) != "activa":
+            return False
+        if provider.get("disponible") is not True:
+            return False
+        if _norm(provider.get("estado_verificacion")) != "verificado":
+            return False
+
+        roles = {_norm(x) for x in (provider.get("roles") or []) if _norm(x)}
         communes = {_commune_key(x) for x in (provider.get("comunas") or []) if _commune_key(x)}
+        materials = {_norm(x) for x in (provider.get("materiales") or []) if _norm(x)}
+        specialties = {_norm(x).replace(" ", "_") for x in (provider.get("especialidades") or []) if _norm(x)}
+
+        request_type = _norm(request_row.get("tipo"))
+        request_subtype = _norm(request_row.get("subtipo")).replace(" ", "_")
         request_commune = _commune_key(request_row.get("comuna"))
         request_materials = {_norm(x) for x in (request_row.get("materiales") or []) if _norm(x)}
+
         provider_phone = _normalize_phone(provider.get("telefono_normalizado") or provider.get("telefono"))
         request_phone = _normalize_phone(request_row.get("telefono_normalizado") or request_row.get("telefono"))
         if provider_phone and request_phone and provider_phone == request_phone:
             return False
-        if _norm(request_row.get("tipo")) not in roles:
-            app.logger.info("MATCH SKIP provider=%s solicitud=%s reason=rol request=%s provider_roles=%s",
-                            provider.get("id"), request_row.get("public_id"), request_row.get("tipo"), sorted(roles))
+
+        if request_type not in roles:
             return False
         if request_commune and request_commune not in communes:
-            app.logger.info("MATCH SKIP provider=%s solicitud=%s reason=comuna request=%s provider_comunas=%s",
-                            provider.get("id"), request_row.get("public_id"), request_commune, sorted(communes))
             return False
-        if request_row.get("tipo") == "reciclaje" and request_materials and materials and not (request_materials & materials):
+        if request_type == "reciclaje" and request_materials and materials and not (request_materials & materials):
             return False
-        if request_row.get("tipo") == "belleza" and request_row.get("subtipo") and request_row.get("subtipo") not in specialties:
+        if request_type in ("belleza", "salud") and request_subtype and request_subtype not in specialties:
             return False
-        if request_row.get("tipo") == "salud" and request_row.get("subtipo") not in specialties:
-            return False
-        if request_row.get("tipo") == "limpieza" and request_row.get("subtipo") in CLEANING_TYPES and request_row.get("subtipo") not in specialties:
+        if request_type == "limpieza" and request_subtype in CLEANING_TYPES and request_subtype not in specialties:
             return False
         return True
 
@@ -920,7 +933,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 f"{settings['supabase_url']}/rest/v1/nexi_app_prestadores",
                 headers=_db_headers(),
                 params={
-                    "select": "id,roles,comunas,materiales,especialidades,vehiculo,telefono,telefono_normalizado,estado_cuenta",
+                    "select": "id,public_id,nombre,roles,comunas,materiales,especialidades,vehiculo,telefono,telefono_normalizado,activo,disponible,estado_cuenta,estado_verificacion",
                     "empresa_id": f"eq.{settings['empresa_id']}",
                     "activo": "eq.true",
                     "estado_cuenta": "eq.activa",
@@ -942,8 +955,9 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 notified += sent
 
             app.logger.info(
-                "MOBILE DISPATCH solicitud=%s matches=%s pushes=%s",
-                request_row.get("public_id"), matched, notified,
+                "MOBILE DISPATCH solicitud=%s tipo=%s subtipo=%s comuna=%s providers=%s matches=%s pushes=%s",
+                request_row.get("public_id"), request_row.get("tipo"), request_row.get("subtipo"),
+                request_row.get("comuna"), len(providers), matched, notified,
             )
         except Exception as exc:
             app.logger.exception("MOBILE DISPATCH ERROR: %r", exc)
@@ -968,9 +982,6 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
     def _match_provider(provider):
         """Cruza un prestador con solicitudes abiertas y avisa al cliente si aparece una opción nueva."""
         try:
-            # No avisamos al cliente por perfiles todavía pendientes de verificación.
-            if str(provider.get("estado_verificacion") or "").lower() != "verificado":
-                return
             cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
             response = requests.get(
                 f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
@@ -4425,7 +4436,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             if request_row.get("prestador_id"):
                 return _json(app, {"ok": True, "prestadores": [], "cantidad": 0, "ya_asignada": True})
 
-            # V18.25: la pantalla del cliente debe leer los matches REALES ya
+            # V18.26: la pantalla del cliente debe leer los matches REALES ya
             # creados por el motor Python. Antes dependía de un RPC SQL distinto
             # (nexi_app_prestadores_para_solicitud); si ese RPC estaba antiguo o
             # devolvía 0, el prestador recibía la oportunidad pero el cliente no
