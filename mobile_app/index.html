@@ -99,41 +99,8 @@
 .compact-panel-body[hidden]{display:none!important}.quote-box,.payment-status-card{padding:12px!important}.quote-box .compact-panel-body,.payment-status-card .compact-panel-body{margin-top:10px}
 
 /* V7.45 · solicitud rápida IA */
-.quick-ai-request{margin:10px 0 16px;padding:10px;border:1px solid var(--line);border-radius:18px;background:#fff}.quick-ai-row{display:flex;gap:7px;align-items:stretch}.quick-ai-row textarea{flex:1;min-height:52px;max-height:110px;resize:vertical;border:1px solid var(--line);border-radius:14px;padding:11px 12px;font:inherit}.quick-ai-action{flex:0 0 44px;border:0;border-radius:14px;background:#edf6fa;font-size:19px}.quick-ai-send{margin-top:7px;width:100%;border:0;border-radius:14px;padding:11px 13px;background:var(--leaf);color:var(--forest);font-weight:900}.quick-ai-hint{display:block;margin-top:6px;color:var(--muted);font-size:11px}.schedule-quick{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 7px}.schedule-quick button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 10px;font-weight:800;font-size:11px}.schedule-quick button.active{background:#e1f2f2;border-color:#9bcaca}.chat-compose .voice-send{pointer-events:auto!important;cursor:pointer;opacity:1!important;flex:0 0 42px;border:0;border-radius:50%;font-size:18px;background:#edf6fa}.voice-send.listening,.quick-ai-action.listening{outline:2px solid #ef7f61;animation:jaimeMicPulse .72s ease-in-out infinite;position:relative;z-index:1}
-    .voice-send.listening::before,.quick-ai-action.listening::before,.voice-send.listening::after,.quick-ai-action.listening::after{content:"";position:absolute;inset:-7px;border:2px solid rgba(239,127,97,.48);border-radius:50%;pointer-events:none;animation:jaimeMicWave 1.25s ease-out infinite}
-    .voice-send.listening::after,.quick-ai-action.listening::after{animation-delay:.42s}
-    @keyframes jaimeMicPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.10)}}
-    @keyframes jaimeMicWave{0%{transform:scale(.82);opacity:.75}100%{transform:scale(1.55);opacity:0}}
-    @media (prefers-reduced-motion:reduce){.voice-send.listening,.quick-ai-action.listening,.voice-send.listening::before,.quick-ai-action.listening::before,.voice-send.listening::after,.quick-ai-action.listening::after{animation:none}}.ai-friction-note{font-size:11px;color:var(--muted);margin:-2px 0 8px}
-
-    #profilePhoneDisplay{
-      display:block;
-      width:100%;
-      padding:11px 12px;
-      border:1px solid var(--line);
-      border-radius:12px;
-      background:#f5f7f6;
-      color:var(--ink);
-      font-weight:700;
-      user-select:none;
-      -webkit-user-select:none;
-      cursor:default;
-    }
-
-
-    .home-voice-only{text-align:center;padding:12px 0 4px}
-    .home-main-mic{width:82px!important;height:82px!important;border-radius:50%!important;font-size:34px!important;margin:0 auto 10px!important;display:flex!important;align-items:center;justify-content:center}
-    .home-voice-only .quick-ai-hint{font-size:12px;margin-top:4px}
-
-
-    .mp-secure-field{min-height:44px;border:1px solid #d8dee4;border-radius:10px;background:#fff;padding:11px 12px;box-sizing:border-box;}
-    .mp-secure-field iframe{width:100%!important;height:22px!important;border:0!important;}
-
-    /* V7.94 · Historial cliente + Ayuda */
-    .request-summary{display:grid;gap:3px}.request-summary strong{font-size:14px}.request-summary .request-status{font-size:12px;font-weight:800;color:var(--forest)}.request-summary .request-meta{font-size:12px;color:var(--muted)}
-    .request-groups{display:grid;gap:18px}.request-group-head{display:flex;align-items:center;justify-content:space-between;margin:2px 2px 8px}.request-group-head h2{font-size:17px;margin:0}.request-count{min-width:26px;padding:3px 8px;border-radius:999px;background:#e8f1d5;text-align:center;font-size:11px;font-weight:900;color:var(--forest)}
-    .saved.completed{border-color:#cfe1b3;background:#fbfdf7}.saved.cancelled{opacity:.78}.saved .saved-row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.saved .saved-arrow{font-size:18px;color:var(--muted)}
-    .help-card{margin-top:14px}.help-card details{border-top:1px solid var(--line);padding:12px 0}.help-card details:first-of-type{border-top:0}.help-card summary{cursor:pointer;font-weight:800;color:var(--forest)}.help-card details p{margin:8px 0 0;color:var(--muted);font-size:13px}.support-mail{display:block;text-align:center;text-decoration:none;margin-top:12px;border-radius:15px;padding:13px 16px;background:var(--forest);color:#fff;font-weight:900}
+.quick-ai-request{margin:10px 0 16px;padding:10px;border:1px solid var(--line);border-radius:18px;background:#fff}.quick-ai-row{display:flex;gap:7px;align-items:stretch}.quick-ai-row textarea{flex:1;min-height:52px;max-height:110px;resize:vertical;border:1px solid var(--line);border-radius:14px;padding:11px 12px;font:inherit}.quick-ai-action{flex:0 0 44px;border:0;border-radius:14px;background:#edf6fa;font-size:19px}.quick-ai-send{margin-top:7px;width:100%;border:0;border-radius:14px;padding:11px 13px;background:var(--leaf);color:var(--forest);font-weight:900}.quick-ai-hint{display:block;margin-top:6px;color:var(--muted);font-size:11px}.schedule-quick{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 7px}.schedule-quick button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 10px;font-weight:800;font-size:11px}.schedule-quick button.active{background:#e1f2f2;border-color:#9bcaca}.chat-compose .voice-send{flex:0 0 42px;border:0;border-radius:50%;font-size:18px;background:#edf6fa}.voice-send.listening,.quick-ai-action.listening{outline:2px solid #ef7f61}.ai-friction-note{font-size:11px;color:var(--muted);margin:-2px 0 8px}
+ .mode-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0}.mode-row button{min-width:62px;border:0;border-radius:20px;padding:8px;background:#ddd}.mode-row button[aria-checked="true"]{background:#123d2b;color:white}#accountModes{margin:16px 0}#moneyList details{background:white;padding:16px;border-radius:16px}#moneySummary .form-card{margin-top:12px}#modeNotice,#moneyScope{font-size:12px;color:var(--muted)}
 </style>
   <style>
     .nav{grid-template-columns:repeat(5,1fr)}
@@ -192,8 +159,7 @@
 .provider-public-avatar{width:46px;height:46px;flex:0 0 46px;border-radius:50%;display:grid;place-items:center;background:#edf7f7;color:var(--forest);font-size:20px;font-weight:900}
 .provider-public-copy{min-width:0;flex:1}.provider-public-title{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.provider-public-title strong{font-size:14px}.provider-public-title span{font-size:10px;font-weight:900;padding:4px 7px;border-radius:999px;background:#e4f5e9;color:#246238}
 .provider-public-meta{font-size:11px;color:var(--muted);margin-top:4px}.provider-public-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.provider-public-tags span{font-size:10px;padding:4px 7px;border-radius:999px;background:#f1f4f5;color:#42535b}
-.provider-comments{margin-top:10px;display:grid;gap:7px}.provider-comment{padding:9px 10px;border-radius:11px;background:#f7faf8;border:1px solid #e5ebe7}.provider-comment-stars{font-size:11px;font-weight:900;color:#9a7211}.provider-comment-text{margin-top:3px;font-size:11px;line-height:1.4;color:#44524a}.provider-comment-date{margin-top:3px;font-size:9px;color:var(--muted)}.provider-comments-title{font-size:11px;font-weight:900;color:var(--forest);margin-top:9px}
-    .review-card{margin:0 0 12px;padding:14px;border:1px solid var(--line);border-radius:16px;background:#fff}.review-card p{margin:4px 0 10px;color:var(--muted);font-size:11px}.review-stars{display:flex;gap:5px;margin-bottom:10px}.review-stars button{border:0;background:transparent;padding:0;font-size:30px;line-height:1;color:#c9d0d3;cursor:pointer}.review-stars button.selected{color:#d49b16}.review-card textarea{width:100%;min-height:72px;resize:vertical;box-sizing:border-box;border:1px solid var(--line);border-radius:11px;padding:10px;margin-bottom:9px}.review-card .primary{width:100%}
+.review-card{margin:0 0 12px;padding:14px;border:1px solid var(--line);border-radius:16px;background:#fff}.review-card p{margin:4px 0 10px;color:var(--muted);font-size:11px}.review-stars{display:flex;gap:5px;margin-bottom:10px}.review-stars button{border:0;background:transparent;padding:0;font-size:30px;line-height:1;color:#c9d0d3;cursor:pointer}.review-stars button.selected{color:#d49b16}.review-card textarea{width:100%;min-height:72px;resize:vertical;box-sizing:border-box;border:1px solid var(--line);border-radius:11px;padding:10px;margin-bottom:9px}.review-card .primary{width:100%}
 .provider-public-reputation{margin-top:5px;font-size:13px;font-weight:800;color:#263238}.provider-public-reputation .star{color:#d49b16}.provider-public-reputation .new-provider{font-weight:700;color:var(--muted)}
 .profile-photo-card{margin:0 0 14px;padding:16px;border:1px solid var(--line);border-radius:18px;background:#fff}.profile-photo-head{display:flex;align-items:center;gap:13px;margin-bottom:12px}.profile-photo-head h3{margin:0 0 3px}.profile-photo-head p{margin:0;color:var(--muted);font-size:12px}.profile-photo-preview{width:70px;height:70px;flex:0 0 70px;border-radius:50%;overflow:hidden;background:#edf2ef;display:grid;place-items:center;font-size:27px;font-weight:800}.profile-photo-preview img{width:100%;height:100%;object-fit:cover}.profile-photo-actions{display:flex;gap:8px}.profile-photo-actions .primary{flex:1}
 .provider-public-avatar img{width:100%;height:100%;object-fit:cover;display:block}.provider-public-avatar img[hidden]{display:none}
@@ -314,13 +280,13 @@
 </head>
 <body>
 <div class="app">
-  <header class="top"><img class="brand-logo" src="/app/assets/logo-llama-a-jaime-final-v534.png" alt="Llama a Jaime"><button type="button" class="top-client-mini" id="topClientMini" data-go="profile" aria-label="Abrir mi perfil"><span class="top-client-text"><strong id="topClientName">Perfil</strong><small id="topClientLocation">📍 Configurar</small></span></button></header>
+  <header class="top"><img class="brand-logo" src="/app/assets/logo-llama-a-jaime-final-v534.png" alt="Llama a Jaime"><button type="button" class="top-client-mini" id="topClientMini" data-go="profile" aria-label="Abrir mi perfil"><span class="top-client-text"><strong id="topClientName">Perfil</strong><small id="topClientLocation">📍 Configurar</small></span><span class="status-dot" title="Servicio activo"></span></button></header>
   <main>
-    <section class="view active" id="home">
+    <section class="view active" id="home"><div class="form-card" id="accountModes"><div class="field"><label for="accountKind">Tipo de cuenta</label><select id="accountKind"><option value="persona">Persona</option><option value="empresa">Empresa</option></select></div><div class="field" id="companyFields" hidden><label for="companyName">Razón social</label><input id="companyName" maxlength="180"><label for="companyRut">RUT tributario</label><input id="companyRut" maxlength="20"><button type="button" id="saveCompany" class="chip">Guardar datos</button></div><div class="mode-row"><span id="seekLabel">Necesito un servicio</span><button id="seekMode" type="button" role="switch" aria-checked="true">ON</button></div><div class="mode-row"><span id="offerLabel">Ofrezco servicios</span><button id="offerMode" type="button" role="switch" aria-checked="false">OFF</button></div><p id="modeNotice" aria-live="polite"></p></div>
       <div class="home-ai-hero">
         <h1>¿Qué necesitas?</h1>
         <p>Cuéntaselo a Jaime con tus palabras.</p>
-        <div class="quick-ai-request home-voice-only"><button class="quick-ai-action quick-ai-mic-first home-main-mic" id="homeVoiceBtn" type="button" aria-label="Solicitar por voz">🎙️</button><textarea id="homeNeedInput" maxlength="800" aria-hidden="true" tabindex="-1" style="position:absolute;opacity:0;pointer-events:none;width:1px;height:1px"></textarea><small class="quick-ai-hint">Toca el micrófono y cuéntale a Jaime qué necesitas.</small></div>
+        <div class="quick-ai-request"><div class="quick-ai-row"><button class="quick-ai-action quick-ai-mic-first" id="homeVoiceBtn" type="button" aria-label="Hablar">🎙️</button><textarea id="homeNeedInput" maxlength="800" placeholder="Ej.: mi lavadora no centrifuga y hace un ruido raro"></textarea></div><small class="quick-ai-hint">Escribe o habla como quieras. Jaime ordenará la solicitud por ti.</small></div>
       </div>
 
       <div class="home-services-head">
@@ -333,7 +299,7 @@
         <button class="service-card" data-start="limpieza" style="--service-image:url('/app/assets/categories/limpieza.webp')" aria-label="Solicitar un servicio de limpieza"><span class="service-copy"><strong>Limpieza</strong><span>Hogar, oficina y apoyo</span></span></button>
         <button class="service-card" data-start="flete" style="--service-image:url('/app/assets/categories/fletes.webp')" aria-label="Solicitar un flete o traslado"><span class="service-copy"><strong>Fletes</strong><span>Traslados y entregas</span></span></button>
         <button class="service-card" data-start="jardineria" style="--service-image:url('/app/assets/categories/jardineria.webp')" aria-label="Solicitar un servicio de jardinería"><span class="service-copy"><strong>Jardinería</strong><span>Mantención y áreas verdes</span></span></button>
-        
+        <button class="service-card" data-start="belleza" style="--service-image:url('/app/assets/categories/belleza.webp')" aria-label="Solicitar un servicio de belleza o bienestar"><span class="service-copy"><strong>Belleza</strong><span>Barbería, peluquería y bienestar</span></span></button>
         <button class="service-card" data-start="salud" style="--service-image:url('/app/assets/categories/salud.webp')" aria-label="Solicitar un servicio de salud"><span class="service-copy"><strong>Salud</strong><span>Kinesiología, enfermería, psicología y terapia ocupacional</span></span></button>
         <button class="service-card" data-start="reciclaje" style="--service-image:url('/app/assets/categories/reciclaje.webp')" aria-label="Solicitar retiro de reciclaje"><span class="service-copy"><strong>Reciclaje</strong><span>Retiros y materiales</span></span></button>
         <button class="service-card" data-start="otro" style="--service-image:url('/app/assets/categories/otros.webp')" aria-label="Solicitar otro tipo de servicio"><span class="service-copy"><strong>Otros servicios</strong><span>Cuéntale a Jaime qué necesitas</span></span></button>
@@ -357,10 +323,10 @@
       <div class="page-head"><h1>Crear solicitud</h1><p>Completa lo esencial. Podrás revisar todo antes de coordinar.</p></div>
       <div class="form-card" id="requestCard">
         <form id="requestForm">
-          <div class="field"><label for="serviceSelect">Categoría del servicio</label><select id="serviceSelect" required><option value="hogar">Servicios para el hogar</option><option value="limpieza">Limpieza</option><option value="flete">Fletes y traslados</option><option value="jardineria">Jardinería</option><option value="salud">Salud</option><option value="reciclaje">Reciclaje</option><option value="otro">Otros servicios</option></select></div>
-          <div class="field conditional-field" id="cleaningServiceField" hidden><label for="cleaningService">Tipo de limpieza</label><select id="cleaningService"><option value="">Limpieza general</option><option value="limpieza_zapatillas">Limpieza de zapatillas</option></select></div><div class="field conditional-field" id="healthServiceField" hidden><label for="healthService">Profesional de salud que necesitas</label><select id="healthService"><option value="kinesiologia">Kinesiología</option><option value="enfermeria">Enfermería</option><option value="psicologia">Psicología</option><option value="terapia_ocupacional">Terapia ocupacional</option></select></div>
+          <div class="field"><label for="serviceSelect">Categoría del servicio</label><select id="serviceSelect" required><option value="hogar">Servicios para el hogar</option><option value="limpieza">Limpieza</option><option value="flete">Fletes y traslados</option><option value="jardineria">Jardinería</option><option value="belleza">Belleza y bienestar</option><option value="salud">Salud</option><option value="reciclaje">Reciclaje</option><option value="otro">Otros servicios</option></select></div>
+          <div class="field conditional-field" id="cleaningServiceField" hidden><label for="cleaningService">Tipo de limpieza</label><select id="cleaningService"><option value="">Limpieza general</option><option value="limpieza_zapatillas">Limpieza de zapatillas</option></select></div><div class="field conditional-field" id="beautyServiceField" hidden><label for="beautyService">Servicio de belleza o bienestar</label><select id="beautyService"><option value="barberia">Barbería</option><option value="peluqueria">Peluquería</option><option value="manicure_pedicure">Manicure y pedicure</option><option value="maquillaje">Maquillaje</option><option value="depilacion">Depilación</option><option value="masaje_relajacion">Masaje de relajación</option><option value="peinado_eventos">Peinado para eventos</option><option value="otro_belleza">Otro servicio de belleza</option></select></div><div class="field conditional-field" id="healthServiceField" hidden><label for="healthService">Profesional de salud que necesitas</label><select id="healthService"><option value="kinesiologia">Kinesiología</option><option value="enfermeria">Enfermería</option><option value="psicologia">Psicología</option><option value="terapia_ocupacional">Terapia ocupacional</option></select></div>
           <div class="client-session-card" id="clientSessionCard" hidden><div class="client-session-copy"><strong id="clientSessionName">Cliente</strong><span id="clientSessionCommune">📍 Ubicación pendiente</span></div><button class="client-session-location" id="requestLocationBtn" type="button">📍 Usar GPS</button></div>
-          <div class="client-session-fields" id="clientSessionFields"><div class="field"><label for="name">Nombre</label><input id="name" required autocomplete="name"></div><input id="phone" type="hidden"><div class="field"><label for="email">Correo (opcional)</label><input id="email" type="email" autocomplete="email"></div><div class="field"><label for="commune">Comuna</label><input id="commune" required placeholder="Ej.: Viña del Mar"></div></div>
+          <div class="client-session-fields" id="clientSessionFields"><div class="field"><label for="name">Nombre</label><input id="name" required autocomplete="name"></div><div class="field"><label for="phone">Teléfono</label><input id="phone" required type="tel" autocomplete="tel" placeholder="+56 9…"></div><div class="field"><label for="email">Correo (opcional)</label><input id="email" type="email" autocomplete="email"></div><div class="field"><label for="commune">Comuna</label><input id="commune" required placeholder="Ej.: Viña del Mar"></div></div>
           <input id="origin" type="hidden">
           <span class="location-status" id="requestLocationStatus">Usaremos tu GPS para esta solicitud. La ubicación exacta será privada.</span>
           <div class="field" id="destinationField" hidden><label for="destination">Dirección de destino</label><input id="destination"></div>
@@ -375,20 +341,20 @@
       </div>
       <div class="tracking-card" id="trackingCard"><div class="check">✓</div><h2>Solicitud publicada</h2><p id="trackingMessage">Guarda este código para consultar el estado.</p><div class="code" id="requestCode"></div><button class="primary" data-go="status">Ver mis solicitudes</button></div>
       <section class="provider-choice" id="providerChoice">
-        <h2>Listo. ¿Cómo quieres buscar?</h2>
-        <p>Jaime ya creó tu solicitud. Elige una opción.</p>
+        <h2>¿Cómo quieres encontrar ayuda?</h2>
+        <p>Tu solicitud ya está publicada. Puedes dejar que Jaime encuentre a alguien o revisar profesionales compatibles.</p>
         <div class="provider-choice-actions">
-          <button type="button" class="recommended" id="autoFindProvider"><strong>⚡ Buscar por mí</strong><span>Jaime la envía a profesionales compatibles.</span></button>
-          <button type="button" id="chooseProviderMode"><strong>👤 Buscar profesionales</strong><span>Revisa profesionales compatibles y elige tú.</span></button>
+          <button type="button" class="recommended" id="autoFindProvider"><strong>⚡ Encontrar a alguien por mí</strong><span>Los profesionales compatibles reciben la oportunidad y uno puede tomarla.</span></button>
+          <button type="button" id="chooseProviderMode"><strong>👤 Elegir profesional</strong><span>Revisa perfiles verificados y selecciona a quién quieres solicitar el servicio.</span></button>
         </div>
         <div class="provider-browser" id="providerBrowser">
-          <div class="provider-browser-head"><h3>Profesionales cerca de ti</h3><button type="button" id="refreshAvailableProviders">Actualizar</button></div>
+          <div class="provider-browser-head"><h3>Profesionales disponibles</h3><button type="button" id="refreshAvailableProviders">Actualizar</button></div>
           <div class="provider-candidates" id="providerCandidates"></div>
         </div>
       </section>
     </section>
 
-    <section class="view" id="profile">
+    <section class="view" id="profile"><button class="chip" data-go="provider">Perfil prestador · Documentos · Mercado Pago</button>
       <div class="page-head"><h1>Mi perfil</h1><p>Guarda tus datos una vez y pide servicios más rápido.</p></div>
       <div class="form-card">
         <div class="field"><label for="profileName">Nombre</label><input id="profileName" autocomplete="name" placeholder="Tu nombre"></div>
@@ -398,19 +364,11 @@
         <button class="primary" type="button" id="profileSave">Guardar perfil</button>
         <div class="notice" id="profileNotice"></div>
       </div>
-      <div class="form-card help-card" id="helpSupport">
-        <div class="page-head" style="padding:0 0 8px"><h1 style="font-size:21px">❓ Ayuda y soporte</h1><p>Resuelve dudas sobre solicitudes, pagos y seguridad.</p></div>
-        <details><summary>¿Cómo funciona Llama a Jaime?</summary><p>Cuéntale a Jaime qué necesitas, publica la solicitud, revisa profesionales disponibles y coordina el servicio desde la conversación.</p></details>
-        <details><summary>Solicitudes y profesionales</summary><p>En Estado puedes revisar tus solicitudes en curso, completadas y canceladas. Toca cualquiera para abrir su conversación e información.</p></details>
-        <details><summary>Pagos y cotizaciones</summary><p>Revisa y acepta la cotización dentro de la conversación. El estado del pago se muestra junto a la cotización cuando corresponde.</p></details>
-        <details><summary>Seguridad y reportes</summary><p>Dentro de cada conversación puedes reportar de forma privada problemas de seguridad, cobro, trato o servicio.</p></details>
-        <a class="support-mail" href="mailto:soporte@nexia.tech.com?subject=Ayuda%20Llama%20a%20Jaime">✉ Contactar a soporte</a>
-      </div>
     </section>
 
     <section class="view" id="provider">
       <div class="page-head"><h1>Modo prestador</h1><p>Ofrece tus servicios y recibe oportunidades según tu cobertura.</p></div>
-      <div class="provider-summary" id="providerSummary"><div class="row"><div class="provider-summary-main"><div class="provider-summary-avatar" id="providerSummaryAvatar" title="Abrir perfil"><span id="providerSummaryAvatarInitial">J</span><img id="providerSummaryAvatarImage" alt="Foto del prestador" hidden></div><div class="provider-summary-copy"><h3 id="providerName">Prestador</h3><span class="security-status" id="providerSecurityStatus">Identidad pendiente de revisión</span></div></div><button class="availability" id="availabilityBtn">Activado</button></div></div>
+      <div class="provider-summary" id="providerSummary"><div class="row"><div class="provider-summary-main"><div class="provider-summary-avatar" id="providerSummaryAvatar" title="Abrir perfil"><span id="providerSummaryAvatarInitial">J</span><img id="providerSummaryAvatarImage" alt="Foto del prestador" hidden></div><div class="provider-summary-copy"><h3 id="providerName">Prestador</h3><span id="providerCode"></span><span class="security-status" id="providerSecurityStatus">Identidad pendiente de revisión</span></div></div><button class="availability" id="availabilityBtn">Activado</button></div></div>
       <div class="provider-quick-actions" id="providerQuickActions">
         <button class="notify-btn provider-mini-action" id="notifyBtn" hidden>🔔 Activar notificaciones</button>
         <button class="secondary provider-mini-action" id="providerProfileQuick" type="button" hidden>👤 Perfil</button>
@@ -423,7 +381,7 @@
           <div class="grid2"><div class="field"><label for="providerRut">RUT</label><input id="providerRut" required inputmode="text" autocomplete="off" placeholder="12.345.678-5"></div><div class="field"><label for="providerPin">Clave de acceso</label><input id="providerPin" required type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="new-password" placeholder="6 números"></div></div>
           <div class="muted-note">El RUT se valida por formato, pero tu identidad quedará pendiente de revisión. No uses la clave de tu banco.</div>
           <div class="grid2"><div class="field"><label for="providerPhone">Teléfono</label><input id="providerPhone" required type="tel" autocomplete="tel"></div><div class="field"><label for="providerEmail">Correo</label><input id="providerEmail" type="email" autocomplete="email"></div></div>
-          <div class="field"><label>Servicios que realizas</label><div class="checks"><label class="check-pill"><input type="checkbox" name="providerRole" value="hogar"><span>Hogar</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="limpieza"><span>Limpieza</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="flete"><span>Fletes</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="jardineria"><span>Jardinería</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="salud"><span>Salud</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="reciclaje"><span>Reciclaje</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="otro"><span>Otros</span></label></div><div class="muted-note">Puedes seleccionar más de un servicio.</div></div>
+          <div class="field"><label>Servicios que realizas</label><div class="checks"><label class="check-pill"><input type="checkbox" name="providerRole" value="hogar"><span>Hogar</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="limpieza"><span>Limpieza</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="flete"><span>Fletes</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="jardineria"><span>Jardinería</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="belleza"><span>Belleza</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="salud"><span>Salud</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="reciclaje"><span>Reciclaje</span></label><label class="check-pill"><input type="checkbox" name="providerRole" value="otro"><span>Otros</span></label></div><div class="muted-note">Puedes seleccionar más de un servicio.</div></div>
           <div class="field" id="providerSpecialtiesField" hidden><label>Especialidades</label><div class="checks" id="providerSpecialties"></div><div class="muted-note">Se muestran según los servicios seleccionados.</div></div>
           <div class="field"><label for="providerRegion">Región</label><select id="providerRegion" required><option value="">Selecciona una región</option></select></div>
           <div class="field" id="providerCommunesField" hidden><label>Comunas donde trabajas</label><div class="checks provider-communes" id="providerCommunes"></div><div class="muted-note">Puedes seleccionar varias comunas de la región.</div></div>
@@ -461,7 +419,7 @@
         <p class="muted-note">JPG, PNG o WebP · máximo 5 MB.</p>
       </section>
       <section class="docs-card" id="providerDocumentsCard" hidden>
-<div class="docs-head"><div class="docs-head-main"><h3>Documentos</h3><p id="providerDocsSummary">Archivos privados para revisión administrativa.</p></div><div class="docs-head-actions"><span class="docs-progress" id="providerDocsProgress">0/3 básicos</span><button class="docs-toggle" id="providerDocsToggle" type="button" aria-expanded="false">Ver documentos ▾</button></div></div>
+<div class="docs-head"><div class="docs-head-main"><h3>Documentación y verificación</h3><p id="providerDocsSummary">Archivos privados para revisión administrativa.</p></div><div class="docs-head-actions"><span class="docs-progress" id="providerDocsProgress">0/3 básicos</span><button class="docs-toggle" id="providerDocsToggle" type="button" aria-expanded="false">Ver documentos ▾</button></div></div>
 <div class="docs-body" id="providerDocsBody" hidden><div class="docs-list" id="providerDocuments"></div>
 <div class="notice" id="providerDocsNotice"></div>
 <p class="muted-note">PDF, JPG, PNG o WebP · máximo 10 MB. Tus documentos no son públicos.</p></div>
@@ -483,8 +441,8 @@
     </section>
 
     <section class="view" id="status">
-      <div class="page-head"><h1>Mis solicitudes</h1><p>Todo tu historial, ordenado por estado.</p></div>
-      <div class="request-groups" id="savedList"></div>
+      <div class="page-head"><h1>Mis solicitudes</h1><p>Consulta el estado de lo que publicaste desde este dispositivo.</p></div>
+      <div class="saved-list" id="savedList"></div>
     </section>
   </main>
   <section class="conversation-modal" id="conversationModal" hidden>
@@ -494,13 +452,13 @@
       <div class="conversation-tools" id="conversationTools">
       <button class="client-notify" id="clientNotifyBtn" hidden>🔔 Recibir avisos de mensajes y precios</button><div class="provider-public-card" id="providerPublicCard" hidden>
   <div class="provider-public-avatar" id="providerPublicAvatar"><span id="providerPublicAvatarInitial">J</span><img id="providerPublicAvatarImage" alt="Foto del prestador" hidden></div>
-  <div class="provider-public-copy"><div class="provider-public-title"><strong id="providerPublicName">Prestador</strong><span id="providerPublicVerified">✓ Verificado</span></div><div class="provider-public-meta" id="providerPublicMeta"></div><div class="provider-public-reputation" id="providerPublicReputation"></div><div class="provider-public-jobs" id="providerPublicJobs"></div><div class="provider-public-tags" id="providerPublicTags"></div><div class="provider-comments" id="providerPublicComments"></div></div>
+  <div class="provider-public-copy"><div class="provider-public-title"><strong id="providerPublicName">Prestador</strong><span id="providerPublicVerified">✓ Verificado</span></div><div class="provider-public-meta" id="providerPublicMeta"></div><div class="provider-public-reputation" id="providerPublicReputation"></div><div class="provider-public-jobs" id="providerPublicJobs"></div><div class="provider-public-tags" id="providerPublicTags"></div></div>
 </div>
       <div class="review-card" id="providerReviewCard" hidden><strong>¿Cómo fue tu experiencia?</strong><p>Califica al prestador. Solo puedes evaluar una vez esta solicitud.</p><div class="review-stars" id="providerReviewStars"><button type="button" data-rating="1">★</button><button type="button" data-rating="2">★</button><button type="button" data-rating="3">★</button><button type="button" data-rating="4">★</button><button type="button" data-rating="5">★</button></div><textarea id="providerReviewComment" maxlength="1000" placeholder="Comentario opcional"></textarea><button type="button" class="primary" id="providerReviewSubmit">Enviar evaluación</button><div class="notice" id="providerReviewNotice"></div></div>
       <div class="location-panel" id="conversationLocations"><div class="location-card" id="clientLocationCard"><strong>Ubicación del cliente</strong><span>No compartida</span></div><div class="location-card" id="providerLocationCard"><strong>Ubicación del prestador</strong><span>No compartida</span></div><button class="share-location" id="shareConversationLocation">📍 Compartir o actualizar mi ubicación</button></div>
       <div class="photo-gallery" id="conversationPhotos" hidden></div>
       <button class="report-toggle" id="reportToggle" type="button">Reportar un problema de seguridad</button>
-      <form class="report-form" id="reportForm" hidden><select id="reportCategory" required><option value="">Selecciona un motivo</option><option value="seguridad">Seguridad</option><option value="estafa">Posible estafa</option><option value="trato">Trato inapropiado</option><option value="cobro">Problema con el cobro</option><option value="servicio">Problema con el servicio</option><option value="contenido">Contenido inapropiado</option><option value="otro">Otro</option></select><textarea id="reportDescription" required minlength="10" maxlength="2000" placeholder="Describe lo ocurrido. No incluyas claves ni datos bancarios."></textarea><button type="submit">Enviar reporte privado</button><div class="notice" id="reportNotice"></div></form><div id="cancelRequestBox" hidden style="margin-top:10px"><button type="button" class="report-toggle" id="cancelRequestToggle">Cancelar solicitud</button><form class="report-form" id="cancelRequestForm" hidden><select id="cancelRequestReason" required><option value="">¿Por qué quieres cancelar?</option><option value="ya_no_lo_necesito">Ya no necesito el servicio</option><option value="cambio_de_planes">Cambio de planes</option><option value="problema_con_prestador">Problema con el prestador</option><option value="acordamos_cancelar">Acordamos cancelar</option><option value="otro">Otro</option></select><button type="submit">Confirmar cancelación</button><div class="notice" id="cancelRequestNotice"></div></form></div>
+      <form class="report-form" id="reportForm" hidden><select id="reportCategory" required><option value="">Selecciona un motivo</option><option value="seguridad">Seguridad</option><option value="estafa">Posible estafa</option><option value="trato">Trato inapropiado</option><option value="cobro">Problema con el cobro</option><option value="servicio">Problema con el servicio</option><option value="contenido">Contenido inapropiado</option><option value="otro">Otro</option></select><textarea id="reportDescription" required minlength="10" maxlength="2000" placeholder="Describe lo ocurrido. No incluyas claves ni datos bancarios."></textarea><button type="submit">Enviar reporte privado</button><div class="notice" id="reportNotice"></div></form>
       </div>
 
       <div class="quote-box" id="quoteBox" hidden></div>
@@ -512,20 +470,19 @@
         <div class="payment-status-copy"><span id="paymentStatusDetail">Primero acepta la cotización.</span></div>
         <div class="payment-client-action" id="paymentClientAction" hidden>
           <div class="mp-pay-intro" id="mpPayIntro">
-            <p><strong>🛡️ Tu pago está protegido</strong><br><small>Paga de forma segura con Mercado Pago. El pago será recibido por Llama a Jaime/NEXIA y quedará asociado a este servicio. Cuando el prestador marque el trabajo terminado y tú confirmes la recepción, comenzará el plazo de 10 días para la liquidación al prestador. Si existe una controversia, la liquidación se suspende mientras se revisa.</small></p>
+<p><strong>Pago protegido por Llama a Jaime</strong><br><small>El cliente paga a Llama a Jaime. El prestador recibe su liquidación 10 días después de la confirmación final del servicio, siempre que no exista una disputa o bloqueo.</small></p>
             <button type="button" class="primary" id="showMercadoPagoFormBtn">Pagar con Mercado Pago</button>
           </div>
           <div id="mpCardFields" class="mp-card-fields" hidden>
-            <form id="mpCardForm" class="mp-reserve-form">
-              <div id="form-checkout__cardNumber" class="mp-secure-field"></div>
-              <div class="grid2"><div id="form-checkout__expirationDate" class="mp-secure-field"></div><div id="form-checkout__securityCode" class="mp-secure-field"></div></div>
+            <div id="mpCardForm" class="mp-reserve-form">
+              <input id="form-checkout__cardNumber" placeholder="Número de tarjeta" autocomplete="cc-number">
+              <div class="grid2"><input id="form-checkout__expirationDate" placeholder="MM/AA" autocomplete="cc-exp"><input id="form-checkout__securityCode" placeholder="CVV" autocomplete="cc-csc"></div>
               <input id="form-checkout__cardholderName" placeholder="Nombre del titular" autocomplete="cc-name">
-              <select id="form-checkout__issuer" aria-label="Banco emisor"></select>
               <select id="form-checkout__installments" aria-label="Cuotas"></select>
               <select id="form-checkout__identificationType" aria-label="Tipo de documento"></select><input id="form-checkout__identificationNumber" placeholder="RUT / documento">
               <input id="form-checkout__cardholderEmail" type="email" placeholder="Correo del pagador" autocomplete="email">
-              <button type="submit" class="primary" id="mercadoPagoBtn">Pagar con Mercado Pago</button>
-            </form>
+              <button type="button" class="primary" id="mercadoPagoBtn" onclick="startMercadoPagoAuthorization()">Autorizar y reservar fondos</button>
+            </div>
           </div>
           <div class="notice" id="mercadoPagoNotice"></div>
         </div>
@@ -536,10 +493,10 @@
       <form class="conversation-compose" id="conversationForm"><input id="conversationInput" maxlength="2000" placeholder="Escribe un mensaje…" autocomplete="off"><button type="submit">Enviar</button></form>
     </div>
   </section>
-  <nav class="nav nav-jaime"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button class="nav-jaime-ai" data-go="chat" aria-label="Hablar con Jaime"><b>✦</b>Jaime</button><button data-go="status"><b>◷</b>Estado</button><button data-go="provider"><b>⚙</b>Prestador</button><button data-go="profile"><b>●</b>Perfil</button></nav>
+<nav class="nav nav-jaime"><button class="active" data-go="home"><b>⌂</b>Inicio</button><button data-go="inbox"><b>💬</b>Conversaciones</button><button data-go="activity"><b>📋</b>Actividad</button><button data-go="money"><b>💰</b>Dinero</button><button data-go="profile"><b>●</b>Perfil</button></nav>
 </div>
 <script src="https://sdk.mercadopago.com/js/v2"></script>
-<!-- V7.94 · AYUDA + HISTORIAL CLIENTE · COMENTARIOS VISIBLES · MERCADO PAGO CARDFORM IFRAME OFICIAL -->
+<!-- V7.40 · PANELES PLEGABLES + FINALIZAR SOLO TRAS PAGO AUTORIZADO -->
 <script>
 (() => {
   const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -548,7 +505,7 @@
   const paymentPanelToggle=$('#paymentPanelToggle'),paymentPanelBody=$('#paymentPanelBody');
   if(paymentPanelToggle&&paymentPanelBody){paymentPanelToggle.addEventListener('click',()=>{const open=paymentPanelBody.hidden;paymentPanelBody.hidden=!open;paymentPanelToggle.setAttribute('aria-expanded',open?'true':'false');});}
   const showMpFormBtn=$('#showMercadoPagoFormBtn'),mpCardFields=$('#mpCardFields');
-  if(showMpFormBtn&&mpCardFields){showMpFormBtn.addEventListener('click',async()=>{showMpFormBtn.disabled=true;mpPaymentUiActive=true;const n=$('#mercadoPagoNotice');if(n){n.className='notice';n.style.display='block';n.textContent='Cargando formulario seguro de Mercado Pago…';}try{await ensureMercadoPagoCardForm();mpCardFields.hidden=false;showMpFormBtn.hidden=true;if(n){n.style.display='none';n.textContent='';}setTimeout(()=>$('#form-checkout__cardNumber')?.focus(),0);}catch(err){mpPaymentUiActive=false;if(n){n.className='notice error';n.style.display='block';n.textContent='Mercado Pago: '+mpErrorText(err);}}finally{showMpFormBtn.disabled=false;}});}
+  if(showMpFormBtn&&mpCardFields){showMpFormBtn.addEventListener('click',async()=>{showMpFormBtn.disabled=true;try{await ensureMercadoPagoCardForm();mpCardFields.hidden=false;showMpFormBtn.hidden=true;setTimeout(()=>$('#form-checkout__cardNumber')?.focus(),0);}catch(err){const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent=err.message||'No pude cargar Mercado Pago.'}}finally{showMpFormBtn.disabled=false;}});}
   const session = localStorage.appSession || (localStorage.appSession = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
   const headers = {"Content-Type":"application/json","X-App-Session":session};
   const SERVICE_META = {
@@ -556,6 +513,7 @@
     limpieza:{label:"Limpieza",prompt:"Ej.: limpieza profunda de departamento de dos dormitorios…"},
     flete:{label:"Fletes y traslados",prompt:"Ej.: refrigerador y dos cajas; segundo piso sin ascensor…"},
     jardineria:{label:"Jardinería",prompt:"Ej.: corte de pasto y poda de arbustos…"},
+    belleza:{label:"Belleza y bienestar",prompt:"Ej.: corte de cabello a domicilio el sábado por la tarde…"},
     salud:{label:"Salud",prompt:"Ej.: necesito una sesión de kinesiología a domicilio el martes por la tarde…"},
     reciclaje:{label:"Reciclaje",prompt:"Ej.: cartón, botellas y dos bolsas de plástico…"},
     otro:{label:"Otros servicios",prompt:"Describe con detalle el servicio que necesitas…"}
@@ -567,7 +525,7 @@
   let conversationContext = null, conversationTimer = null, requestPhotos = [], pendingLocation = null, providerReviewRating = 0, latestCreatedRequest = null;
   const CLIENT_SESSION_KEY='llamaAJaimeClientProfileV1';
   function clientProfile(){try{return JSON.parse(localStorage.getItem(CLIENT_SESSION_KEY)||'null')}catch{return null}}
-  function saveClientProfile(profile){localStorage.setItem(CLIENT_SESSION_KEY,JSON.stringify({...profile,updated_at:new Date().toISOString()}));renderClientSession()}
+  function saveClientProfile(profile){localStorage.setItem(CLIENT_SESSION_KEY,JSON.stringify({...clientProfile(),...profile,updated_at:new Date().toISOString()}));renderClientSession()}
   function renderClientSession(){
     const p=clientProfile(),card=$('#clientSessionCard'),fields=$('#clientSessionFields'),top=$('#topClientMini');
     if(!card||!fields)return;
@@ -582,60 +540,25 @@
   function hydrateClientProfile(){renderClientSession()}
   hydrateClientProfile();
 
-  function go(id){
-    const hv=$('#homeVoiceBtn'),cv=$('#chatVoiceBtn');
-    if(hv)hv.disabled=false;
-    if(cv)cv.disabled=false;
-    $$(".view").forEach(v=>v.classList.toggle("active",v.id===id)); $$(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.go===id)); window.scrollTo({top:0,behavior:"smooth"}); if(id==="status") loadSaved(); if(id==="provider") loadProvider(); }
+  function go(id){ $$(".view").forEach(v=>v.classList.toggle("active",v.id===id)); $$(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.go===id)); window.scrollTo({top:0,behavior:"smooth"}); if(id==="status") loadSaved(); if(id==="provider") loadProvider(); if(id==="money") loadMoney(); if(id==="inbox") loadInbox(); if(id==="home") renderModes(); }
   $$('[data-go]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.go)));
-  $$('[data-start]').forEach(b=>b.addEventListener('click',()=>{ setService(b.dataset.start); go('request'); }));
+  $$('[data-start]').forEach(b=>b.addEventListener('click',()=>{ if(!modes().buscar){alert('Activa la búsqueda de servicios.');return} setService(b.dataset.start); go('request'); }));
 
-  function setService(value){
-    service=SERVICE_META[value]?value:'otro';
-    const serviceSelect=$('#serviceSelect');if(serviceSelect)serviceSelect.value=service;
-    const flete=service==='flete',reciclaje=service==='reciclaje',salud=service==='salud',limpieza=service==='limpieza';
-    const destinationField=$('#destinationField'),destination=$('#destination'),materialsField=$('#materialsField');
-    const healthField=$('#healthServiceField'),health=$('#healthService'),cleaningField=$('#cleaningServiceField');
-    if(destinationField)destinationField.hidden=!flete;
-    if(destination)destination.required=flete;
-    if(materialsField)materialsField.hidden=!reciclaje;
-    if(healthField)healthField.hidden=!salud;
-    if(health)health.required=salud;
-    if(cleaningField)cleaningField.hidden=!limpieza;
-    const detailsLabel=$('#detailsLabel'),details=$('#details'),cleaning=$('#cleaningService');
-    if(detailsLabel)detailsLabel.textContent=flete?'¿Qué necesitas trasladar?':reciclaje?'¿Qué materiales necesitas retirar?':salud?'Cuéntanos qué atención necesitas y si la prefieres a domicilio u online':limpieza&&cleaning?.value==='limpieza_zapatillas'?'Cuéntanos sobre las zapatillas':'Describe lo que necesitas';
-    if(details)details.placeholder=limpieza&&cleaning?.value==='limpieza_zapatillas'?'Ej.: limpieza de un par de zapatillas blancas de cuero…':(SERVICE_META[service]?.prompt||'Describe lo que necesitas');
-  }
-  if($('#cleaningService'))$('#cleaningService').addEventListener('change',()=>setService(service));
-  if($('#serviceSelect'))$('#serviceSelect').addEventListener('change',e=>setService(e.target.value));
+  function setService(value){service=SERVICE_META[value]?value:'otro';$('#serviceSelect').value=service;const flete=service==='flete',reciclaje=service==='reciclaje',belleza=service==='belleza',salud=service==='salud',limpieza=service==='limpieza';$('#destinationField').hidden=!flete;$('#destination').required=flete;$('#materialsField').hidden=!reciclaje;$('#beautyServiceField').hidden=!belleza;$('#beautyService').required=belleza;$('#healthServiceField').hidden=!salud;$('#healthService').required=salud;$('#cleaningServiceField').hidden=!limpieza;$('#detailsLabel').textContent=flete?'¿Qué necesitas trasladar?':reciclaje?'¿Qué materiales necesitas retirar?':belleza?'Cuéntanos los detalles y si prefieres domicilio o local':salud?'Cuéntanos qué atención necesitas y si la prefieres a domicilio u online':limpieza&&$('#cleaningService').value==='limpieza_zapatillas'?'Cuéntanos sobre las zapatillas':'Describe lo que necesitas';$('#details').placeholder=limpieza&&$('#cleaningService').value==='limpieza_zapatillas'?'Ej.: limpieza de un par de zapatillas blancas de cuero…':SERVICE_META[service].prompt;}
+  $('#cleaningService').addEventListener('change',()=>setService(service));
+  $('#serviceSelect').addEventListener('change',e=>setService(e.target.value));
 
   function renderPhotoPreview(){const box=$('#photoPreview');box.innerHTML='';requestPhotos.forEach((file,index)=>{const item=document.createElement('div'),img=document.createElement('img'),remove=document.createElement('button'),url=URL.createObjectURL(file);item.className='photo-item';img.src=url;img.alt=`Foto ${index+1}`;img.onload=()=>URL.revokeObjectURL(url);remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Eliminar foto');remove.addEventListener('click',()=>{requestPhotos.splice(index,1);renderPhotoPreview()});item.append(img,remove);box.append(item)})}
   function addSelectedPhotos(event){const selected=[...event.target.files],available=5-requestPhotos.length;if(selected.length>available)alert(`Solo puedes agregar ${available} foto${available===1?'':'s'} más.`);for(const file of selected.slice(0,available)){if(!['image/jpeg','image/png','image/webp'].includes(file.type)){alert(`${file.name}: formato no compatible.`);continue}if(file.size>8*1024*1024){alert(`${file.name}: supera el máximo de 8 MB.`);continue}requestPhotos.push(file)}event.target.value='';renderPhotoPreview()}
-  if($('#requestCamera'))$('#requestCamera').addEventListener('change',addSelectedPhotos);
-
-
-  const CHILE_COMUNAS=['Algarrobo','Alhué','Alto Biobío','Alto del Carmen','Alto Hospicio','Ancud','Andacollo','Angol','Antofagasta','Antuco','Arauco','Arica','Buin','Bulnes','Cabildo','Cabo de Hornos','Cabrero','Calama','Calbuco','Caldera','Calera de Tango','Calle Larga','Camarones','Camiña','Canela','Cañete','Carahue','Cartagena','Casablanca','Castro','Catemu','Cauquenes','Cerrillos','Cerro Navia','Chaitén','Chanco','Chañaral','Chépica','Chiguayante','Chile Chico','Chillán','Chillán Viejo','Chimbarongo','Cholchol','Chonchi','Cisnes','Cobquecura','Cochamó','Cochrane','Codegua','Coelemu','Coihueco','Coinco','Colbún','Colchane','Colina','Collipulli','Coltauco','Combarbalá','Concepción','Conchalí','Concón','Constitución','Contulmo','Copiapó','Coquimbo','Coronel','Corral','Coyhaique','Cunco','Curacautín','Curacaví','Curanilahue','Curarrehue','Curepto','Curicó','Dalcahue','Diego de Almagro','Doñihue','El Bosque','El Carmen','El Monte','El Quisco','El Tabo','Empedrado','Ercilla','Estación Central','Florida','Freire','Freirina','Fresia','Frutillar','Futaleufú','Futrono','Galvarino','General Lagos','Gorbea','Graneros','Guaitecas','Hijuelas','Hualaihué','Hualañé','Hualpén','Hualqui','Huara','Huasco','Huechuraba','Illapel','Independencia','Iquique','Isla de Maipo','Isla de Pascua','Juan Fernández','La Calera','La Cisterna','La Cruz','La Estrella','La Florida','La Granja','La Higuera','La Ligua','La Pintana','La Reina','La Serena','La Unión','Lago Ranco','Lago Verde','Laguna Blanca','Laja','Lampa','Lanco','Las Cabras','Las Condes','Lautaro','Lebu','Licantén','Limache','Linares','Litueche','Llaillay','Llanquihue','Lo Barnechea','Lo Espejo','Lo Prado','Lolol','Loncoche','Longaví','Lonquimay','Los Álamos','Los Andes','Los Ángeles','Los Lagos','Los Muermos','Los Sauces','Los Vilos','Lota','Lumaco','Machalí','Macul','Máfil','Maipú','Malloa','Marchigüe','María Elena','María Pinto','Mariquina','Maule','Maullín','Mejillones','Melipeuco','Melipilla','Molina','Monte Patria','Mostazal','Mulchén','Nacimiento','Nancagua','Natales','Navidad','Negrete','Ninhue','Nogales','Nueva Imperial','Ñiquén','Ñuñoa',"O'Higgins",'Olivar','Ollagüe','Olmué','Osorno','Padre Hurtado','Padre Las Casas','Paihuano','Paillaco','Paine','Palena','Palmilla','Panguipulli','Panquehue','Papudo','Paredones','Parral','Pedro Aguirre Cerda','Pelarco','Pelluhue','Pemuco','Pencahue','Penco','Peñaflor','Peñalolén','Peralillo','Perquenco','Petorca','Peumo','Pica','Pichidegua','Pichilemu','Pinto','Pirque','Pitrufquén','Placilla','Portezuelo','Porvenir','Primavera','Providencia','Puchuncaví','Pucón','Pudahuel','Puente Alto','Puerto Montt','Puerto Octay','Puerto Varas','Pumanque','Punitaqui','Punta Arenas','Puqueldón','Purén','Purranque','Putaendo','Putre','Puyehue','Queilén','Quellón','Quemchi','Quilaco','Quilicura','Quilleco','Quillón','Quillota','Quilpué','Quinchao','Quinta de Tilcoco','Quinta Normal','Quintero','Quirihue','Rancagua','Ránquil','Rauco','Recoleta','Renaico','Renca','Rengo','Requínoa','Retiro','Rinconada','Río Bueno','Río Claro','Río Hurtado','Río Ibáñez','Río Negro','Río Verde','Romeral','Saavedra','Sagrada Familia','Salamanca','San Antonio','San Bernardo','San Carlos','San Clemente','San Esteban','San Fabián','San Felipe','San Fernando','San Gregorio','San Ignacio','San Javier','San Joaquín','San José de Maipo','San Juan de la Costa','San Miguel','San Nicolás','San Pablo','San Pedro','San Pedro de Atacama','San Pedro de la Paz','San Rafael','San Ramón','San Rosendo','San Vicente','Santa Bárbara','Santa Cruz','Santa Juana','Santa María','Santiago','Santo Domingo','Sierra Gorda','Talagante','Talca','Talcahuano','Taltal','Temuco','Teno','Teodoro Schmidt','Tierra Amarilla','Tiltil','Timaukel','Tirúa','Tocopilla','Toltén','Tomé','Torres del Paine','Tortel','Traiguén','Trehuaco','Tucapel','Valdivia','Vallenar','Valparaíso','Vichuquén','Victoria','Vicuña','Vilcún','Villa Alegre','Villa Alemana','Villarrica','Viña del Mar','Vitacura','Yerbas Buenas','Yumbel','Yungay','Zapallar'];
-  const normalizeCommune=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
-  const CHILE_COMUNA_MAP=new Map(CHILE_COMUNAS.map(c=>[normalizeCommune(c),c]));
-  function validChileCommune(value){
-    if(!value)return '';
-    let raw=String(value).replace(/^comuna\s+de\s+/i,'').replace(/^municipalidad\s+de\s+/i,'').trim();
-    return CHILE_COMUNA_MAP.get(normalizeCommune(raw))||'';
-  }
+  $('#requestCamera').addEventListener('change',addSelectedPhotos);
 
   async function communeFromCoordinates(lat,lon){
     try{
-      const url=`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&zoom=18&addressdetails=1&accept-language=es`;
+      const url=`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&zoom=14&addressdetails=1&accept-language=es`;
       const r=await fetch(url,{headers:{'Accept':'application/json'}});
       if(!r.ok)throw new Error('No pude identificar la comuna');
       const d=await r.json(),a=d.address||{};
-      // Nunca usar county/state/province: en Chile pueden devolver "Provincia de Maipo".
-      const candidates=[a.municipality,a.city,a.town,a.village,a.suburb,a.city_district,a.neighbourhood];
-      for(const candidate of candidates){
-        const comuna=validChileCommune(candidate);
-        if(comuna)return comuna;
-      }
-      return '';
+      return (a.city_district||a.municipality||a.city||a.town||a.village||a.county||'').trim();
     }catch(_){return ''}
   }
 
@@ -648,11 +571,6 @@
   $('#requestLocationBtn').addEventListener('click',async()=>{const button=$('#requestLocationBtn'),status=$('#requestLocationStatus');button.disabled=true;status.textContent='Obteniendo ubicación…';try{pendingLocation=await currentPosition();status.textContent='Detectando comuna…';const comuna=await communeFromCoordinates(pendingLocation.latitud,pendingLocation.longitud);const current=clientProfile()||{};saveClientProfile({...current,nombre:$('#name').value.trim()||current.nombre||'Cliente',telefono:$('#phone').value.trim()||current.telefono||'',email:$('#email').value.trim()||current.email||'',comuna:comuna||current.comuna||'Ubicación GPS',...pendingLocation});if($('#commune'))$('#commune').value=comuna||current.comuna||'Ubicación GPS';button.textContent='✓ GPS activo';status.textContent=comuna?`📍 ${comuna} · precisión aproximada ±${Math.round(pendingLocation.precision_m||0)} m.`:`Ubicación GPS guardada · precisión aproximada ±${Math.round(pendingLocation.precision_m||0)} m.`}catch(error){status.textContent=error.message}finally{button.disabled=false}});
 
   function plainAssistantText(content){return String(content||'').replace(/\*\*(.*?)\*\*/gs,'$1').replace(/__(.*?)__/gs,'$1').replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,'$1$2').replace(/`([^`\n]+)`/g,'$1').replace(/^\s{0,3}#{1,6}\s*/gm,'').replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'$1 ($2)').trim()}
-  function stopJaimeVoice(){
-    try{if(jaimeAudio){jaimeAudio.pause();jaimeAudio.currentTime=0;jaimeAudio=null}}catch(_){}
-    try{if(jaimeAudioUrl){URL.revokeObjectURL(jaimeAudioUrl);jaimeAudioUrl=''}}catch(_){}
-    try{if('speechSynthesis' in window)window.speechSynthesis.cancel()}catch(_){}
-  }
   function speakJaimeFallback(text){
     if(!('speechSynthesis' in window)||!text)return;
     window.speechSynthesis.cancel();
@@ -689,36 +607,16 @@
       speakJaimeFallback(clean);
     }
   }
-  function addMessage(content, role, speak=false){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'){const audio=document.createElement('button');audio.type='button';audio.className='jaime-audio-btn';audio.setAttribute('aria-label','Escuchar respuesta');audio.title='Escuchar respuesta';audio.textContent='🔊';audio.addEventListener('click',()=>speakJaime(display));el.append(audio)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; if(role!=='user'&&speak)speakJaime(display); }
+  function addMessage(content, role, speak=false){ const el=document.createElement('div'),display=role==='user'?String(content||''):plainAssistantText(content); el.className='message '+(role==='user'?'user':'bot'); el.textContent=display; if(role!=='user'){const audio=document.createElement('button');audio.type='button';audio.className='jaime-audio-btn';audio.setAttribute('aria-label','Escuchar respuesta');audio.title='Escuchar respuesta';audio.textContent='🔊';audio.addEventListener('click',()=>speakJaime(display));el.append(audio)} if(role!=='user'&&/crear solicitud/i.test(display)){setTimeout(()=>prepareAIRequest(null),150)} $('#chatBox').append(el); $('#chatBox').scrollTop=$('#chatBox').scrollHeight; if(role!=='user'&&speak)speakJaime(display); }
 
-  let aiRequestAdvancing=false, jaimeRequestFinalized=false, jaimeChatGeneration=0;
   async function prepareAIRequest(button){
-    if(aiRequestAdvancing)return;
-    const original=button?.textContent||'';if(button){button.disabled=true;button.innerHTML=' Preparando'}
+    const original=button?.textContent||'';if(button){button.disabled=true;button.innerHTML='<span class="spinner"></span> Preparando'}
     try{
-      const p=clientProfile()||{};const knownContext={role:'user',content:`DATOS FIJOS DEL CLIENTE YA GUARDADOS. Nombre: ${p.nombre||'pendiente'}. El teléfono es un dato interno del perfil: NO lo preguntes ni lo marques como faltante. Comuna: ${p.comuna||'pendiente'}. GPS/origen: ${p.latitud!=null&&p.longitud!=null?'activo y guardado':'pendiente'}. REGLAS: no pedir teléfono. No pedir nuevamente comuna, dirección de origen ni ubicación si ya están disponibles. La dirección exacta de origen se obtiene del GPS privado. Pregunta únicamente datos indispensables del trabajo que todavía falten. Si ya hay información suficiente, devuelve la solicitud lista sin pedir al usuario que pulse, confirme o diga “crear solicitud”.`};const r=await fetch('/app/api/chat/preparar-solicitud',{method:'POST',headers,body:JSON.stringify({service,history:[knownContext,...history]})});
+      const p=clientProfile()||{};const knownContext={role:'user',content:`Datos del perfil ya guardados. Nombre: ${p.nombre||'pendiente'}. Teléfono: ${p.telefono||'pendiente'}. Comuna: ${p.comuna||'pendiente'}. GPS: ${p.latitud!=null&&p.longitud!=null?'activo':'pendiente'}. No solicitar nuevamente los datos disponibles.`};const r=await fetch('/app/api/chat/preparar-solicitud',{method:'POST',headers,body:JSON.stringify({service,history:[knownContext,...history]})});
       const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude preparar la solicitud');
-      if(Array.isArray(d.faltantes)&&d.faltantes.length){
-        const lastUser=[...history].reverse().find(m=>m.role==='user')?.content||'';
-        d.solicitud=d.solicitud||{};
-        if(!d.solicitud.detalles)d.solicitud.detalles=lastUser||'Servicio solicitado';
-      }
-      aiRequestAdvancing=true;
-      jaimeRequestFinalized=true;
-      jaimeChatGeneration++;
-      stopJaimeVoice();
-      const chatBox=$('#chatBox');if(chatBox)chatBox.innerHTML='';
-      $('#chatInput').disabled=true;
-      if($('#chatVoiceBtn'))$('#chatVoiceBtn').disabled=false;
-      const draft={...(d.solicitud||{})};
-      if(p.nombre&&!draft.nombre)draft.nombre=p.nombre;
-      if(p.telefono&&!draft.telefono)draft.telefono=p.telefono;
-      if(p.comuna&&!draft.comuna)draft.comuna=p.comuna;
-      if(p.latitud!=null&&draft.latitud==null)draft.latitud=p.latitud;
-      if(p.longitud!=null&&draft.longitud==null)draft.longitud=p.longitud;
-      const advanced=await publishAIRequest(draft,null,null,true);
-      if(!advanced){aiRequestAdvancing=false;jaimeRequestFinalized=false;$('#chatInput').disabled=false;if($('#chatVoiceBtn'))$('#chatVoiceBtn').disabled=false}
-    }catch(err){aiRequestAdvancing=false;jaimeRequestFinalized=false;$('#chatInput').disabled=false;if($('#chatVoiceBtn'))$('#chatVoiceBtn').disabled=false;addMessage(err.message||'No pude preparar la solicitud.','assistant')}finally{if(button){button.disabled=false;button.textContent=original}}
+      if(Array.isArray(d.faltantes)&&d.faltantes.length){addMessage(`Me falta: ${d.faltantes.join(', ')}.`,'assistant',true);return}
+      await publishAIRequest(d.solicitud||{},null,null,true);
+    }catch(err){addMessage(err.message||'No pude preparar la solicitud.','assistant')}finally{if(button){button.disabled=false;button.textContent=original}}
   }
 
   function renderAIRequestConfirmation(draft){
@@ -731,155 +629,57 @@
   }
 
   async function publishAIRequest(draft,consent,button,automatic=false){
+    if(!modes().buscar){alert('Activa la búsqueda de servicios.');return}
     if(!automatic&&consent&&!consent.checked){alert('Debes aceptar los términos y el tratamiento de datos para enviar la solicitud.');return}
-    const p=clientProfile()||{};
-    const payload={...draft,
-      nombre:draft.nombre||p.nombre||'Cliente',
-      telefono:p.telefono||draft.telefono||'',
-      comuna:p.comuna||draft.comuna||'Ubicación GPS',
-      direccion_origen:draft.direccion_origen||(p.latitud!=null?'Ubicación GPS compartida':''),
-      latitud:draft.latitud??p.latitud,
-      longitud:draft.longitud??p.longitud,
-      precision_m:draft.precision_m??p.precision_m,
-      acepta_terminos:true,acepta_privacidad:true
-    };if(button){button.disabled=true;button.innerHTML=' Enviando'};
+    const payload={...draft,cliente_tipo_persona:clientProfile()?.tipo_persona||"persona",cliente_razon_social:clientProfile()?.razon_social||null,cliente_rut_tributario:clientProfile()?.rut_tributario||null,acepta_terminos:true,acepta_privacidad:true};if(button){button.disabled=true;button.innerHTML='<span class="spinner"></span> Enviando'};
     try{
       const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');
       const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));latestCreatedRequest=d.solicitud;
-      $('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent='Tu solicitud fue creada con los datos que entregaste a Jaime.';$('#requestCard').style.display='none';$('#trackingCard').style.display='none';$('#providerChoice').style.display='none';
-      stopJaimeVoice();
-      history=[];sessionStorage.removeItem('llamaAJaimeHistory');
-      const ci=$('#chatInput'),cv=$('#chatVoiceBtn');if(ci)ci.disabled=false;if(cv)cv.disabled=false;
-      providerSearchCount=-1;
+      $('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent='Tu solicitud fue creada con los datos que entregaste a Jaime.';$('#requestCard').style.display='none';$('#trackingCard').style.display='block';$('#providerChoice').style.display='block';$('#providerBrowser').style.display='none';$('#providerCandidates').innerHTML='';
       go('request');
-      const overlay=$('#jaimeReadyOverlay');
-      if(overlay){overlay.style.display='block';overlay.style.pointerEvents='auto'};
-      const ready=$('#jaimeReadyProviders');
-      if(ready)ready.innerHTML='<div class="empty"> Buscando profesionales cerca de ti…</div>';
-      speakJaime('OK. Tu solicitud está lista. Ahora puedes seleccionar uno de estos profesionales cercanos o puedes esperar que encuentre otro.');
-      startProviderSearchPolling();
-      loadAvailableProviders(true).catch(()=>{});
-      return true;
-     }catch(err){
-       aiRequestAdvancing=false;
-       const msg=String(err.message||'No pude crear la solicitud');
-       addMessage('No pude avanzar todavía: '+msg,'assistant',false);
-       if(button){button.disabled=false;button.textContent='Enviar solicitud'}
-       return false
-     }
+     }catch(err){alert(err.message);if(button){button.disabled=false;button.textContent='Enviar solicitud'}}
   }
   // V7.45: entrada rápida y dictado por voz. La IA sigue usando los endpoints existentes.
-  let activeSpeechRecognition=null;
-
-  function startVoiceDictation(target,button,onSend){
+  function speechToInput(target,button,onDone){
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){alert('El dictado por voz no está disponible en este navegador.');return}
-    if(activeSpeechRecognition){try{activeSpeechRecognition.abort()}catch(_){} activeSpeechRecognition=null}
-    stopJaimeVoice();
-    const rec=new SR();
-    activeSpeechRecognition=rec;
-    rec.lang='es-CL';
-    rec.interimResults=true;
-    rec.continuous=false;
-    rec.maxAlternatives=1;
-    let finalText='',lastText='';
-    button.disabled=false;
-    button.classList.remove('listening');
-    button.textContent='🎙️';
-    rec.onstart=()=>{
-      button.classList.add('listening');
-      button.setAttribute('aria-label','Grabando. Toca para detener');
-    };
-    rec.onresult=e=>{
-      let current='';
-      for(let i=e.resultIndex;i<e.results.length;i++){
-        const part=(e.results[i]?.[0]?.transcript||'').trim();
-        if(!part)continue;
-        current+=(current?' ':'')+part;
-        if(e.results[i].isFinal)finalText+=(finalText?' ':'')+part;
-      }
-      lastText=(finalText||current).trim();
-      if(lastText)target.value=lastText;
-    };
-    rec.onerror=e=>{
-      if(e.error==='not-allowed'||e.error==='service-not-allowed')alert('Debes permitir el acceso al micrófono para hablar con Jaime.');
-    };
-    rec.onend=()=>{
-      if(activeSpeechRecognition===rec)activeSpeechRecognition=null;
-      button.classList.remove('listening');
-      button.textContent='🎙️';
-      button.setAttribute('aria-label','Solicitar por voz');
-      const message=(finalText||lastText||target.value||'').trim();
-      if(message&&typeof onSend==='function')onSend(message);
-    };
-    try{rec.start()}catch(e){activeSpeechRecognition=null;button.classList.remove('listening');button.textContent='🎙️';alert('No pude iniciar el micrófono. Intenta nuevamente.')}
+    if(!SR){alert('El dictado por voz no está disponible en este navegador. Puedes escribir tu solicitud.');return}
+    const rec=new SR();rec.lang='es-CL';rec.interimResults=false;rec.maxAlternatives=1;button.classList.add('listening');button.textContent='●';
+    rec.onresult=e=>{const text=(e.results?.[0]?.[0]?.transcript||'').trim();if(text){target.value=(target.value.trim()?target.value.trim()+' ':'')+text;if(onDone)onDone(text)}};
+    rec.onerror=()=>{};rec.onend=()=>{button.classList.remove('listening');button.textContent='🎙️'};rec.start();
   }
-
-  window.addEventListener('error',e=>{console.error('LLAMA A JAIME UI ERROR',e.error||e.message);});
-  window.addEventListener('unhandledrejection',e=>{console.error('LLAMA A JAIME PROMISE ERROR',e.reason);});
-
   const homeVoiceBtn=$('#homeVoiceBtn'),homeNeedInput=$('#homeNeedInput');
-
-  function resetJaimeForNewRequest(){
-    jaimeRequestFinalized=false;
-    aiRequestAdvancing=false;
-    jaimeChatGeneration++;
-    const ci=$('#chatInput'),cv=$('#chatVoiceBtn');
-    if(ci)ci.disabled=false;
-    if(cv)cv.disabled=false;
-    history=[];
-    sessionStorage.removeItem('llamaAJaimeHistory');
-  }
-
-  function sendHomeNeed(message){
-    const m=(message||homeNeedInput.value||'').trim();
+  function sendHomeNeed(){
+    if(!modes().buscar){alert('Activa Necesito un servicio para publicar una nueva solicitud.');return}
+    const m=homeNeedInput.value.trim();
     if(!m){homeNeedInput.focus();return}
-    resetJaimeForNewRequest();
     homeNeedInput.value='';
     go('chat');
     setTimeout(()=>ask(m),0);
   }
-
   if(homeVoiceBtn)homeVoiceBtn.addEventListener('click',()=>{
-    resetJaimeForNewRequest();
-    startVoiceDictation(homeNeedInput,homeVoiceBtn,message=>sendHomeNeed(message));
+    if(!('webkitSpeechRecognition' in window||'SpeechRecognition' in window)){alert('Tu navegador no permite dictado por voz.');return}
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition,rec=new SR();
+    rec.lang='es-CL';rec.interimResults=false;rec.maxAlternatives=1;
+    homeVoiceBtn.disabled=true;homeVoiceBtn.textContent='…';
+    rec.onresult=e=>{homeNeedInput.value=e.results[0][0].transcript||''};
+    rec.onerror=()=>{homeVoiceBtn.disabled=false;homeVoiceBtn.textContent='🎙️'};
+    rec.onend=()=>{homeVoiceBtn.disabled=false;homeVoiceBtn.textContent='🎙️';if(homeNeedInput.value.trim())sendHomeNeed()};
+    rec.start();
   });
-
-  if(homeNeedInput){
-    homeNeedInput.addEventListener('input',()=>stopJaimeVoice());
-    homeNeedInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendHomeNeed()}});
-  }
-
-  const chatVoiceBtn=$('#chatVoiceBtn');
-  if($('#chatInput'))$('#chatInput').addEventListener('input',()=>stopJaimeVoice());
-  if(chatVoiceBtn)chatVoiceBtn.addEventListener('click',()=>{
-    if(jaimeRequestFinalized)resetJaimeForNewRequest();
-    const input=$('#chatInput');
-    input.disabled=false;
-    chatVoiceBtn.disabled=false;
-    startVoiceDictation(input,chatVoiceBtn,message=>{
-      input.value='';
-      ask(message);
-    });
-  });
-
+  if(homeNeedInput)homeNeedInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendHomeNeed()}});
+  const chatVoiceBtn=$('#chatVoiceBtn');if(chatVoiceBtn)chatVoiceBtn.addEventListener('click',()=>speechToInput($('#chatInput'),chatVoiceBtn));
   $$('.schedule-quick button').forEach(b=>b.addEventListener('click',()=>{const v=b.dataset.schedule||'';$$('.schedule-quick button').forEach(x=>x.classList.toggle('active',x===b));$('#schedule').value=v;if(!v)$('#schedule').focus()}));
 
   history.forEach(m=>addMessage(m.content,m.role));
-  async function ask(message){
-    if(jaimeRequestFinalized||aiRequestAdvancing)return;
-    const myGeneration=jaimeChatGeneration;
-    addMessage(message,'user'); const prior=history.slice(-8); history.push({role:'user',content:message}); $('#chatInput').disabled=true; const waiting=document.createElement('div'); waiting.className='message bot'; waiting.innerHTML=' Pensando…'; $('#chatBox').append(waiting); $('#chatBox').scrollTop=$('#chatBox').scrollHeight;
-    try{ const p=clientProfile()||{};const known=[p.nombre&&`Nombre: ${p.nombre}`,p.telefono&&`Teléfono: ${p.telefono}`,p.comuna&&`Comuna: ${p.comuna}`].filter(Boolean).join(' · ');const aiMessage=known?`[DATOS YA GUARDADOS: ${known}. GPS: ${p.latitud!=null&&p.longitud!=null?'activo':'pendiente'}. No vuelvas a pedir nombre, teléfono, comuna, dirección de origen ni ubicación si ya están disponibles. El GPS guardado reemplaza pedir una dirección de origen escrita. Deduce el tipo de servicio desde lo que cuenta el usuario y pregunta solo información indispensable del trabajo. Cuando tengas lo suficiente, no le digas que pulse “crear solicitud” ni que confirme: la app avanzará automáticamente.]\n${message}`:message; const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message:aiMessage,service,history:prior})}); const d=await r.json(); waiting.remove(); if(myGeneration!==jaimeChatGeneration||jaimeRequestFinalized||aiRequestAdvancing)return; if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply);
-      history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history));
-      await prepareAIRequest(null); }
-    catch(e){waiting.remove();addMessage(e.message||'No pude conectar. Intenta nuevamente.','assistant')} finally{if(!jaimeRequestFinalized&&!aiRequestAdvancing){$('#chatInput').disabled=false;$('#chatInput').focus()}}
+  async function ask(message){ addMessage(message,'user'); const prior=history.slice(-8); history.push({role:'user',content:message}); $('#chatInput').disabled=true; const waiting=document.createElement('div'); waiting.className='message bot'; waiting.innerHTML='<span class="spinner"></span> Pensando…'; $('#chatBox').append(waiting); $('#chatBox').scrollTop=$('#chatBox').scrollHeight;
+    try{ const p=clientProfile()||{};const known=[p.nombre&&`Nombre: ${p.nombre}`,p.telefono&&`Teléfono: ${p.telefono}`,p.comuna&&`Comuna: ${p.comuna}`].filter(Boolean).join(' · ');const aiMessage=known?`[DATOS YA GUARDADOS: ${known}. GPS: ${p.latitud!=null&&p.longitud!=null?'activo':'pendiente'}. No vuelvas a pedir nombre, teléfono ni comuna si aparecen aquí. Deduce el tipo de servicio desde lo que cuenta el usuario y pregunta solo información realmente faltante.]\n${message}`:message; const r=await fetch('/app/api/chat',{method:'POST',headers,body:JSON.stringify({message:aiMessage,service,history:prior})}); const d=await r.json(); waiting.remove(); if(!r.ok) throw new Error(d.error||'No pude responder'); const reply=plainAssistantText(d.reply); addMessage(reply,'assistant',true); history.push({role:'assistant',content:reply}); history=history.slice(-10); sessionStorage.setItem('llamaAJaimeHistory',JSON.stringify(history)); }
+    catch(e){waiting.remove();addMessage(e.message||'No pude conectar. Intenta nuevamente.','assistant')} finally{$('#chatInput').disabled=false;$('#chatInput').focus()}
   }
   $('#chatForm').addEventListener('submit',e=>{e.preventDefault();const m=$('#chatInput').value.trim();if(!m)return;$('#chatInput').value='';ask(m)});
   $$('.chips .chip').forEach(b=>b.addEventListener('click',()=>ask(b.textContent)));
 
-  $('#requestForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submitRequest'),note=$('#formNotice');btn.disabled=true;btn.innerHTML=' Publicando';note.style.display='none';const materials=$$('#requestMaterials input:checked').map(x=>x.value);const profile=clientProfile()||{};const nombre=($('#name').value||profile.nombre||'').trim(),telefono=(profile.telefono||$('#phone').value||'').trim(),email=($('#email').value||profile.email||'').trim(),comuna=($('#commune').value||profile.comuna||'').trim();if(!pendingLocation&&profile.latitud!=null&&profile.longitud!=null)pendingLocation={latitud:profile.latitud,longitud:profile.longitud,precision_m:profile.precision_m||0};if(!pendingLocation){note.textContent='Activa tu ubicación GPS antes de publicar la solicitud.';note.className='notice error';note.style.display='block';btn.disabled=false;btn.textContent='Publicar solicitud';return}if(!nombre){note.textContent='Completa tu nombre en el perfil antes de publicar tu primera solicitud.';note.className='notice error';note.style.display='block';btn.disabled=false;btn.textContent='Publicar solicitud';return}saveClientProfile({nombre,telefono,email,comuna,...pendingLocation});const payload={tipo:service,subtipo:service==='belleza'?($('#beautyService')?.value||''):(service==='salud'?$('#healthService').value:(service==='limpieza'?$('#cleaningService').value:'')),nombre,telefono,email,comuna,direccion_origen:'Ubicación GPS',direccion_destino:$('#destination').value,detalles:$('#details').value,materiales:materials,fecha_preferida:$('#schedule').value,acepta_terminos:$('#requestConsent').checked,acepta_privacidad:$('#requestConsent').checked,...pendingLocation};
-    try{const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));let photoWarning='',uploadedCount=requestPhotos.length;if(requestPhotos.length){btn.innerHTML=' Subiendo fotos';const form=new FormData();form.append('token',d.solicitud.token);requestPhotos.forEach(file=>form.append('fotos',file,file.name));try{const photoResponse=await fetch(`/app/api/solicitudes/${encodeURIComponent(d.solicitud.codigo)}/fotos`,{method:'POST',headers:{'X-App-Session':session},body:form});const photoData=await photoResponse.json();if(!photoResponse.ok)throw new Error(photoData.error||'No pude subir las fotos')}catch(photoError){photoWarning='La solicitud quedó publicada, pero algunas fotos no se pudieron guardar. Puedes continuar igualmente.'}}$('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent=photoWarning||(uploadedCount?`${uploadedCount} foto${uploadedCount===1?'':'s'} guardada${uploadedCount===1?'':'s'} de forma privada.`:'Guarda este código para consultar el estado.');latestCreatedRequest=d.solicitud;requestPhotos=[];renderPhotoPreview();$('#requestLocationBtn').textContent='✓ GPS activo';$('#requestLocationStatus').textContent='Ubicación guardada para tu próxima solicitud. Puedes actualizarla cuando quieras.';renderClientSession();$('#requestCard').style.display='none';$('#trackingCard').style.display='block';$('#providerChoice').style.display='block';$('#providerBrowser').style.display='none';$('#providerCandidates').innerHTML='';}
+  $('#requestForm').addEventListener('submit',async e=>{e.preventDefault();if(!modes().buscar){alert('Activa la búsqueda de servicios.');return}const btn=$('#submitRequest'),note=$('#formNotice');btn.disabled=true;btn.innerHTML='<span class="spinner"></span> Publicando';note.style.display='none';const materials=$$('#requestMaterials input:checked').map(x=>x.value);const profile=clientProfile()||{};const nombre=($('#name').value||profile.nombre||'').trim(),telefono=($('#phone').value||profile.telefono||'').trim(),email=($('#email').value||profile.email||'').trim(),comuna=($('#commune').value||profile.comuna||'').trim();if(!pendingLocation&&profile.latitud!=null&&profile.longitud!=null)pendingLocation={latitud:profile.latitud,longitud:profile.longitud,precision_m:profile.precision_m||0};if(!pendingLocation){note.textContent='Activa tu ubicación GPS antes de publicar la solicitud.';note.className='notice error';note.style.display='block';btn.disabled=false;btn.textContent='Publicar solicitud';return}if(!nombre){note.textContent='Completa tu nombre en Perfil la primera vez.';note.className='notice error';note.style.display='block';btn.disabled=false;btn.textContent='Publicar solicitud';return}saveClientProfile({nombre,telefono,email,comuna,...pendingLocation});const payload={cliente_tipo_persona:profile.tipo_persona||"persona",cliente_razon_social:profile.razon_social||null,cliente_rut_tributario:profile.rut_tributario||null,tipo:service,subtipo:service==='belleza'?$('#beautyService').value:(service==='salud'?$('#healthService').value:(service==='limpieza'?$('#cleaningService').value:'')),nombre,telefono,email,comuna,direccion_origen:'Ubicación GPS',direccion_destino:$('#destination').value,detalles:$('#details').value,materiales:materials,fecha_preferida:$('#schedule').value,acepta_terminos:$('#requestConsent').checked,acepta_privacidad:$('#requestConsent').checked,...pendingLocation};
+    try{const r=await fetch('/app/api/solicitudes',{method:'POST',headers,body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear la solicitud');const saved=JSON.parse(localStorage.requests||'[]');saved.unshift(d.solicitud);localStorage.requests=JSON.stringify(saved.slice(0,20));let photoWarning='',uploadedCount=requestPhotos.length;if(requestPhotos.length){btn.innerHTML='<span class="spinner"></span> Subiendo fotos';const form=new FormData();form.append('token',d.solicitud.token);requestPhotos.forEach(file=>form.append('fotos',file,file.name));try{const photoResponse=await fetch(`/app/api/solicitudes/${encodeURIComponent(d.solicitud.codigo)}/fotos`,{method:'POST',headers:{'X-App-Session':session},body:form});const photoData=await photoResponse.json();if(!photoResponse.ok)throw new Error(photoData.error||'No pude subir las fotos')}catch(photoError){photoWarning='La solicitud quedó publicada, pero algunas fotos no se pudieron guardar. Puedes continuar igualmente.'}}$('#requestCode').textContent=d.solicitud.codigo;$('#trackingMessage').textContent=photoWarning||(uploadedCount?`${uploadedCount} foto${uploadedCount===1?'':'s'} guardada${uploadedCount===1?'':'s'} de forma privada.`:'Guarda este código para consultar el estado.');latestCreatedRequest=d.solicitud;requestPhotos=[];renderPhotoPreview();$('#requestLocationBtn').textContent='✓ GPS activo';$('#requestLocationStatus').textContent='Ubicación guardada para tu próxima solicitud. Puedes actualizarla cuando quieras.';renderClientSession();$('#requestCard').style.display='none';$('#trackingCard').style.display='block';$('#providerChoice').style.display='block';$('#providerBrowser').style.display='none';$('#providerCandidates').innerHTML='';}
     catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{btn.disabled=false;btn.textContent='Publicar solicitud'}
   });
 
@@ -890,166 +690,31 @@
 
   function providerInitial(name){return String(name||'P').trim().charAt(0).toUpperCase()||'P'}
   function providerTags(p){const tags=[...(Array.isArray(p.especialidades)?p.especialidades:[]),...(Array.isArray(p.roles)?p.roles:[])];return [...new Set(tags.filter(Boolean))].slice(0,5)}
-  function providerCommentsHtml(p){const items=Array.isArray(p?.comentarios)?p.comentarios.filter(x=>x&&String(x.comentario||'').trim()).slice(0,5):[];if(!items.length)return '<div class="provider-comments-title">Aún no hay comentarios escritos.</div>';return '<div class="provider-comments-title">Comentarios de clientes</div>'+items.map(x=>{const stars=Math.max(1,Math.min(5,Number(x.calificacion)||0)),date=x.created_at?new Date(x.created_at).toLocaleDateString('es-CL'):'';return `<div class="provider-comment"><div class="provider-comment-stars">${'★'.repeat(stars)}${'☆'.repeat(5-stars)}</div><div class="provider-comment-text">“${escapeHtml(String(x.comentario||'').trim())}”</div>${date?`<div class="provider-comment-date">${escapeHtml(date)}</div>`:''}</div>`}).join('')}
   function renderAvailableProviders(items){
     const box=$('#providerCandidates');box.innerHTML='';
-    if(!items.length){
-      box.innerHTML='<div class="empty"><strong>Estoy buscando nuevos profesionales.</strong><br>Te avisaré en esta app cuando encuentre lo que necesitas.<br><button type="button" id="searchNotifyBtn" class="secondary" style="margin-top:12px">🔔 Activar avisos</button></div>';
-      const nb=$('#searchNotifyBtn');if(nb)nb.addEventListener('click',()=>enableSearchNotifications(nb));
-      return
-    }
+    if(!items.length){box.innerHTML='<div class="empty">No encontramos profesionales disponibles para elegir en este momento. Tu solicitud sigue publicada y puede ser tomada mediante el sistema normal.</div>';return}
     for(const p of items){
       const card=document.createElement('article');card.className='provider-candidate';
       const rep=p.reputacion||{},avg=Number(rep.promedio||0),reviews=Number(rep.evaluaciones||0),jobs=Number(p.trabajos_completados||0),tags=providerTags(p);
-      card.innerHTML=`<div class="provider-candidate-avatar">${p.foto_url?`<img src="${escapeHtml(p.foto_url)}" alt="Foto de ${escapeHtml(p.nombre||'profesional')}">`:escapeHtml(providerInitial(p.nombre))}</div><div class="provider-candidate-main"><div class="provider-candidate-title"><strong>${escapeHtml(p.nombre||'Profesional')}</strong>${p.verificado?'<span class="verified-badge">✓ Verificado</span>':''}</div><div class="provider-candidate-rating">${reviews?`⭐ ${avg.toFixed(1)} · ${reviews} evaluación${reviews===1?'':'es'}`:'⭐ Profesional nuevo'} · ${jobs} trabajo${jobs===1?'':'s'} completado${jobs===1?'':'s'}</div><div class="provider-candidate-meta">${p.distancia_km!=null?`Aprox. ${escapeHtml(Number(p.distancia_km).toFixed(1))} km de tu ubicación`:`Disponible en tu zona`}${p.radio_km?` · cobertura ${escapeHtml(String(p.radio_km))} km`:''}</div>${tags.length?`<div class="provider-candidate-tags">${tags.map(x=>`<span>${escapeHtml(x)}</span>`).join('')}</div>`:''}<div class="provider-candidate-actions"><button type="button" class="view-profile">Ver perfil</button><button type="button" class="choose-provider">Solicitar a este profesional</button></div><div class="provider-detail" hidden><strong>Perfil profesional</strong><br>${reviews?`Calificación: ${avg.toFixed(1)}/5 con ${reviews} evaluación${reviews===1?'':'es'}.`:'Aún no tiene evaluaciones.'}<br>Trabajos completados: ${jobs}.<br>${p.miembro_desde?`Miembro desde ${escapeHtml(new Date(p.miembro_desde).toLocaleDateString('es-CL'))}.`:''}${providerCommentsHtml(p)}</div></div>`;
+      card.innerHTML=`<div class="provider-candidate-avatar">${p.foto_url?`<img src="${escapeHtml(p.foto_url)}" alt="Foto de ${escapeHtml(p.nombre||'profesional')}">`:escapeHtml(providerInitial(p.nombre))}</div><div class="provider-candidate-main"><div class="provider-candidate-title"><strong>${escapeHtml(p.nombre||'Profesional')}</strong>${p.verificado?'<span class="verified-badge">✓ Verificado</span>':''}</div><div class="provider-candidate-rating">${reviews?`⭐ ${avg.toFixed(1)} · ${reviews} evaluación${reviews===1?'':'es'}`:'⭐ Profesional nuevo'} · ${jobs} trabajo${jobs===1?'':'s'} completado${jobs===1?'':'s'}</div><div class="provider-candidate-meta">Cobertura declarada: ${escapeHtml((p.comunas||[]).slice(0,3).join(', ')||'según solicitud')}${p.radio_km?` · radio ${escapeHtml(String(p.radio_km))} km`:''}</div>${tags.length?`<div class="provider-candidate-tags">${tags.map(x=>`<span>${escapeHtml(x)}</span>`).join('')}</div>`:''}<div class="provider-candidate-actions"><button type="button" class="view-profile">Ver perfil</button><button type="button" class="choose-provider">Solicitar a este profesional</button></div><div class="provider-detail" hidden><strong>Perfil profesional</strong><br>${reviews?`Calificación: ${avg.toFixed(1)}/5 con ${reviews} evaluación${reviews===1?'':'es'}.`:'Aún no tiene evaluaciones.'}<br>Trabajos completados: ${jobs}.<br>${p.miembro_desde?`Miembro desde ${escapeHtml(new Date(p.miembro_desde).toLocaleDateString('es-CL'))}.`:''}</div></div>`;
       card.querySelector('.view-profile').addEventListener('click',e=>{const detail=card.querySelector('.provider-detail');detail.hidden=!detail.hidden;e.currentTarget.textContent=detail.hidden?'Ver perfil':'Ocultar perfil'});
       card.querySelector('.choose-provider').addEventListener('click',e=>chooseAvailableProvider(p,e.currentTarget));
       box.append(card);
     }
   }
 
-  function renderReadyProviders(items){
-    const dst=$('#jaimeReadyProviders');if(!dst)return;
-    if(!items.length){
-      dst.innerHTML='<div class="empty" style="padding:18px"><strong>Buscando profesionales…</strong><br>Jaime te avisará cuando aparezca uno compatible.<br><button type="button" id="readyNotifyBtn" class="secondary" style="margin-top:10px">🔔 Activar avisos</button></div>';
-      const nb=$('#readyNotifyBtn');if(nb)nb.addEventListener('click',()=>enableSearchNotifications(nb));
-      return;
-    }
-    dst.innerHTML='';
-    items.forEach(p=>{
-      const rep=p.reputacion||{},avg=Number(rep.promedio||0),reviews=Number(rep.evaluaciones||0);
-      const card=document.createElement('article');
-      card.style.cssText='display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #e4e9e6;border-radius:16px;padding:12px;margin-bottom:9px';
-      const info=document.createElement('div');info.style.cssText='min-width:0;flex:1';
-      const where=p.distancia_km!=null?`${Number(p.distancia_km).toFixed(1)} km aprox.`:'Disponible en tu zona';
-      info.innerHTML=`<strong style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(p.nombre||'Profesional')}</strong><span style="font-size:12px;color:#66736b">${reviews?`⭐ ${avg.toFixed(1)} · ${reviews} eval.`:'⭐ Nuevo'} · ${escapeHtml(where)}</span>`;
-      const btn=document.createElement('button');btn.type='button';btn.className='primary';btn.textContent='Elegir';btn.style.cssText='width:auto;flex:0 0 auto;padding:9px 12px';
-      btn.addEventListener('click',()=>chooseAvailableProvider(p,btn));
-      card.append(info,btn);dst.append(card);
-    });
-  }
-
-  async function loadAvailableProviders(showReady=false){
+  async function loadAvailableProviders(){
     const req=latestCreatedRequest;if(!req)return alert('No encontré la solicitud recién creada. Revísala en Mis solicitudes.');
-    const browser=$('#providerBrowser'),box=$('#providerCandidates');browser.style.display='block';box.innerHTML='<div class="empty"> Buscando profesionales compatibles…</div>';
-    try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/prestadores-disponibles?token=${encodeURIComponent(req.token)}`,{headers,cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude cargar los profesionales');if(d.ya_asignada){box.innerHTML='<div class="empty">Esta solicitud ya tiene un profesional asignado.</div>';if(showReady)renderReadyProviders([]);return}
-      const items=Array.isArray(d.prestadores)?d.prestadores:[];
-      renderAvailableProviders(items);
-      if(showReady)renderReadyProviders(items);
-    }catch(err){
-      box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`;
-      if(showReady){const dst=$('#jaimeReadyProviders');if(dst)dst.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}
-    }
+    const browser=$('#providerBrowser'),box=$('#providerCandidates');browser.style.display='block';box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando profesionales compatibles…</div>';
+    try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/prestadores-disponibles?token=${encodeURIComponent(req.token)}`,{headers,cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude cargar los profesionales');if(d.ya_asignada){box.innerHTML='<div class="empty">Esta solicitud ya tiene un profesional asignado.</div>';return}renderAvailableProviders(Array.isArray(d.prestadores)?d.prestadores:[])}catch(err){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(err.message)}</div>`}
   }
-
-  let providerSearchTimer=null,providerSearchCount=-1;
-  function startProviderSearchPolling(){
-    if(providerSearchTimer)clearInterval(providerSearchTimer);
-    providerSearchTimer=setInterval(async()=>{
-      if(!latestCreatedRequest)return;
-      try{
-        const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(latestCreatedRequest.codigo)}/prestadores-disponibles?token=${encodeURIComponent(latestCreatedRequest.token)}`,{headers,cache:'no-store'});
-        const d=await r.json();if(!r.ok||d.ya_asignada)return;
-        const items=Array.isArray(d.prestadores)?d.prestadores:[];
-        if(providerSearchCount>=0&&items.length>providerSearchCount){
-          stopJaimeVoice();
-          addMessage('Encontré un nuevo profesional disponible para tu solicitud.','assistant',true);
-        }
-        providerSearchCount=items.length;
-        renderAvailableProviders(items);
-        if($('#jaimeReadyOverlay')&&$('#jaimeReadyOverlay').style.display!=='none')renderReadyProviders(items);
-        if(items.length)$('#providerBrowser').style.display='block';
-      }catch(_){}
-    },15000);
-  }
-
-  async function enableSearchNotifications(button){
-    const req=latestCreatedRequest;
-    if(!req||!('serviceWorker'in navigator)||!('PushManager'in window)){alert('Este dispositivo no admite notificaciones push.');return}
-    const original=button.textContent;button.disabled=true;button.textContent='Activando…';
-    try{
-      const permission=await Notification.requestPermission();
-      if(permission!=='granted')throw new Error('Debes permitir las notificaciones para que Jaime pueda avisarte.');
-      const keyResponse=await fetch('/app/api/push/public-key'),keyData=await keyResponse.json();
-      if(!keyResponse.ok)throw new Error('Las notificaciones aún no están configuradas.');
-      const registration=await navigator.serviceWorker.ready;
-      let subscription=await registration.pushManager.getSubscription();
-      if(!subscription)subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(keyData.public_key)});
-      const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/push/subscribe`,{method:'POST',headers,body:JSON.stringify({token:req.token,subscription:subscription.toJSON()})});
-      const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude activar los avisos');
-      button.textContent='✓ Avisos activados';
-    }catch(err){alert(err.message);button.disabled=false;button.textContent=original}
-  }
-
-  const jaimeWaitMoreBtn=$('#jaimeWaitMoreBtn');
-  if(jaimeWaitMoreBtn)jaimeWaitMoreBtn.addEventListener('click',()=>{
-    const overlay=$('#jaimeReadyOverlay');if(overlay){overlay.style.display='none';overlay.style.pointerEvents='none'};
-    go('home');loadAvailableProviders();startProviderSearchPolling();
-  });
 
   async function chooseAvailableProvider(provider,button){
-    const req=latestCreatedRequest;if(!req)return;
-    const original=button.textContent;
-    button.disabled=true;button.textContent='…';
-    try{
-      const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/elegir-prestador`,{method:'POST',headers,body:JSON.stringify({token:req.token,prestador_id:provider.id})});
-      const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude asignar al profesional');
-      if(providerSearchTimer){clearInterval(providerSearchTimer);providerSearchTimer=null}
-      $('#providerChoice').style.display='none';
-      const overlay=$('#jaimeReadyOverlay');if(overlay){overlay.style.display='none';overlay.style.pointerEvents='none'};
-      button.textContent='✓';
-      await openConversation('cliente',{public_id:req.codigo,token:req.token});
-    }catch(err){
-      alert(err.message);button.disabled=false;button.textContent=original;
-    }
+    const req=latestCreatedRequest;if(!req)return;if(!confirm(`¿Solicitar este trabajo a ${provider.nombre||'este profesional'}?`))return;const original=button.textContent;button.disabled=true;button.textContent='Asignando…';
+    try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(req.codigo)}/elegir-prestador`,{method:'POST',headers,body:JSON.stringify({token:req.token,prestador_id:provider.id})}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude asignar al profesional');$('#providerChoice').style.display='none';openConversation('cliente',{public_id:req.codigo,token:req.token})}catch(err){alert(err.message);button.disabled=false;button.textContent=original}
   }
 
-  function clientRequestGroup(state){
-    const s=String(state||'').toLowerCase();
-    if(['finalizada','finalizado','completada','completado'].includes(s))return 'completed';
-    if(['cancelada','cancelado','rechazada','rechazado'].includes(s))return 'cancelled';
-    return 'active';
-  }
-  function clientRequestStatusLabel(state){
-    const s=String(state||'').toLowerCase();
-    const labels={publicada:'Publicada',revisando:'Buscando profesional',asignada:'Profesional asignado',asignado:'Profesional asignado',aceptada:'Cotización aceptada',aceptado:'Cotización aceptada',en_servicio:'Servicio en curso',finalizada:'Completada',finalizado:'Completada',completada:'Completada',completado:'Completada',cancelada:'Cancelada',cancelado:'Cancelada'};
-    return labels[s]||String(state||'En curso').replaceAll('_',' ');
-  }
-  function clientRequestDate(value){
-    if(!value)return '';
-    const d=new Date(value);if(Number.isNaN(d.getTime()))return '';
-    return d.toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'});
-  }
-  async function loadSaved(){
-    const box=$('#savedList'),items=JSON.parse(localStorage.requests||'[]');
-    if(!items.length){box.innerHTML='<div class="empty">Aún no has creado solicitudes desde este dispositivo.</div>';return}
-    box.innerHTML='<div class="empty"><span class="spinner"></span><br>Ordenando tus solicitudes…</div>';
-    const records=await Promise.all(items.map(async item=>{
-      try{
-        const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(item.codigo)}?token=${encodeURIComponent(item.token)}`,{headers,cache:'no-store'}),d=await r.json();
-        return {...item,_ok:r.ok,_data:r.ok?d.solicitud:null,_error:r.ok?'':(d.error||'Sin información')};
-      }catch{return {...item,_ok:false,_data:null,_error:'Sin conexión'}}
-    }));
-    const groups={active:[],completed:[],cancelled:[]};
-    records.forEach(x=>groups[clientRequestGroup(x._data?.estado||x.estado)].push(x));
-    const sections=[['active','En curso'],['completed','Completadas'],['cancelled','Canceladas']];
-    box.innerHTML='';
-    for(const [key,title] of sections){
-      const rows=groups[key];if(!rows.length)continue;
-      const section=document.createElement('section');
-      section.innerHTML=`<div class="request-group-head"><h2>${title}</h2><span class="request-count">${rows.length}</span></div><div class="saved-list"></div>`;
-      const list=section.querySelector('.saved-list');
-      for(const item of rows){
-        const d=item._data||item,meta=SERVICE_META[d.tipo||item.tipo]||SERVICE_META.otro,el=document.createElement('button');
-        const status=item._ok?clientRequestStatusLabel(d.estado):item._error;
-        const details=[d.comuna||'',d.fecha_preferida?`Para ${escapeHtml(String(d.fecha_preferida))}`:'',clientRequestDate(d.created_at)].filter(Boolean).join(' · ');
-        el.className=`saved ${key==='completed'?'completed':key==='cancelled'?'cancelled':''}`;
-        el.innerHTML=`<div class="saved-row"><div class="request-summary"><strong>${escapeHtml(meta.label)} · ${escapeHtml(item.codigo)}</strong><span class="request-status">${escapeHtml(status)}</span>${details?`<span class="request-meta">${details}</span>`:''}<span class="request-meta">Toca para ver conversación y detalles</span></div><span class="saved-arrow">›</span></div>`;
-        el.addEventListener('click',()=>openConversation('cliente',{public_id:item.codigo,token:item.token}));list.append(el);
-      }
-      box.append(section);
-    }
-  }
+  async function loadSaved(){const box=$('#savedList'),items=JSON.parse(localStorage.requests||'[]');if(!items.length){box.innerHTML='<div class="empty">Aún no has creado solicitudes desde este dispositivo.</div>';return}box.innerHTML='';for(const item of items){const meta=SERVICE_META[item.tipo]||SERVICE_META.otro,el=document.createElement('button');el.className='saved';el.innerHTML=`<strong>${escapeHtml(meta.label)} · ${escapeHtml(item.codigo)}</strong><span>Consultando estado… · Toca para conversar</span>`;el.addEventListener('click',()=>openConversation('cliente',{public_id:item.codigo,token:item.token}));box.append(el);try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(item.codigo)}?token=${encodeURIComponent(item.token)}`,{headers});const d=await r.json();el.querySelector('span').textContent=r.ok?`${d.solicitud.estado} · Toca para conversar y revisar precios`:(d.error||'Sin información');}catch{el.querySelector('span').textContent='Sin conexión'}}}
 
   function providerAuth(){try{return JSON.parse(localStorage.providerAuth||'null')}catch{return null}}
   function providerMaterials(){return $$('#providerMaterials input:checked').map(x=>x.value)}
@@ -1112,16 +777,15 @@
       jobsEl.innerHTML=`<span class="jobs-check">✓</span> ${jobs} ${jobs===1?'trabajo completado':'trabajos completados'}`;
       const tags=[...(Array.isArray(p.especialidades)?p.especialidades:[]),...(Array.isArray(p.roles)?p.roles:[])].filter(Boolean).slice(0,6);
       $('#providerPublicTags').innerHTML=tags.map(x=>`<span>${escapeHtml(String(x).replaceAll('_',' '))}</span>`).join('');
-      $('#providerPublicComments').innerHTML=providerCommentsHtml(p);
       card.hidden=false;
     }catch{}
   }
 
-  async function openConversation(actor,data){clearInterval(conversationTimer);conversationContext={actor,public_id:data.public_id,token:data.token,codigo:data.codigo||''};$('#conversationModal').hidden=false;$('#conversationTitle').textContent=actor==='cliente'?'Tu solicitud':'Cliente y cotización';$('#conversationSubtitle').textContent=data.public_id;$('#clientNotifyBtn').hidden=actor!=='cliente';$('#shareConversationLocation').textContent=actor==='cliente'?'📍 Compartir ubicación con el prestador':'📍 Compartir ubicación con el cliente';$('#reportToggle').hidden=true;$('#reportForm').hidden=true;$('#reportForm').reset();$('#reportNotice').style.display='none';$('#cancelRequestForm').hidden=true;$('#cancelRequestNotice').style.display='none';$('#conversationMessages').innerHTML='<div class="empty"> Abriendo conversación…</div>';await loadConversation();if(actor==='cliente'){await loadPublicProviderProfile();await loadProviderReview();}conversationTimer=setInterval(()=>loadConversation(true),5000)}
-  function closeConversation(){clearInterval(conversationTimer);conversationTimer=null;mpPaymentUiActive=false;conversationContext=null;$('#reportForm').hidden=true;$('#conversationModal').hidden=true}
+  async function openConversation(actor,data){clearInterval(conversationTimer);conversationContext={actor,public_id:data.public_id,token:data.token,codigo:data.codigo||''};$('#conversationModal').hidden=false;$('#conversationTitle').textContent=actor==='cliente'?'Tu solicitud':'Cliente y cotización';$('#conversationSubtitle').textContent=data.public_id;$('#clientNotifyBtn').hidden=actor!=='cliente';$('#shareConversationLocation').textContent=actor==='cliente'?'📍 Compartir ubicación con el prestador':'📍 Compartir ubicación con el cliente';$('#reportToggle').hidden=true;$('#reportForm').hidden=true;$('#reportForm').reset();$('#reportNotice').style.display='none';$('#conversationMessages').innerHTML='<div class="empty"><span class="spinner"></span> Abriendo conversación…</div>';await loadConversation();if(actor==='cliente'){await loadPublicProviderProfile();await loadProviderReview();}conversationTimer=setInterval(()=>loadConversation(true),5000)}
+  function closeConversation(){clearInterval(conversationTimer);conversationTimer=null;conversationContext=null;$('#reportForm').hidden=true;$('#conversationModal').hidden=true}
   $('#closeConversation').addEventListener('click',closeConversation);
 
-  async function loadConversation(silent=false){const c=conversationContext;if(!c)return;if(silent&&mpPaymentUiActive)return;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/conversacion?${conversationQuery()}`,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude abrir la conversación');
+  async function loadConversation(silent=false){const c=conversationContext;if(!c)return;try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/conversacion?${conversationQuery()}`,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude abrir la conversación');
 if(d.actor==='cliente'||d.actor==='prestador'){
   c.actor=d.actor;
   $('#clientNotifyBtn').hidden=c.actor!=='cliente';
@@ -1129,16 +793,12 @@ if(d.actor==='cliente'||d.actor==='prestador'){
 }
 const box=$('#conversationMessages'),hasProvider=!!d.prestador;if(!silent)box.innerHTML='';renderPhotoGallery(d.fotos,$('#conversationPhotos'));renderLocations(d.ubicaciones);$('#reportToggle').hidden=!hasProvider;const sol=d.solicitud||{},paymentCard=$('#paymentStatusCard'),paymentBadge=$('#paymentStatusBadge'),paymentDetail=$('#paymentStatusDetail');
 const paymentState=String(sol.pago_estado||'pendiente').toLowerCase();
-const requestState=String(sol.estado||'').toLowerCase();
-const cancelBox=$('#cancelRequestBox');
-const canCancelRequest=c.actor==='cliente' && !['cancelada','cancelado','finalizada','finalizado','completada','completado'].includes(requestState) && !['pagado','liberado','reembolsado','disputado'].includes(paymentState) && !sol.servicio_finalizado_at;
-cancelBox.hidden=!canCancelRequest;
 const paymentLabels={pendiente:'Pendiente',autorizado:'Autorizado',pagado:'Pagado',liberado:'Liberado',reembolsado:'Reembolsado',disputado:'Disputado'};
 const paymentDetails={
-  pendiente:'Aún no hay un pago confirmado.',
-  autorizado:'Pago en proceso de validación por Mercado Pago.',
-  pagado:'Pago recibido por Llama a Jaime. El prestador se liquida 10 días después de la confirmación de ambas partes, si no existen controversias.',
-  liberado:'Pago recibido y disponible para liquidación según el plazo del servicio.',
+  pendiente:'El pago del servicio aún está pendiente.',
+  autorizado:'Pago en procesamiento por Mercado Pago.',
+  pagado:'Pago recibido por Llama a Jaime. La liquidación al prestador se gestiona por separado en Dinero.',
+  liberado:'Estado de la pasarela: liberado. Consulta el comprobante de transferencia en Dinero.',
   reembolsado:'El pago fue reembolsado.',
   disputado:'El pago se encuentra en revisión por una disputa.'
 };
@@ -1163,7 +823,7 @@ if(hasProvider){
     mercadoPagoBtn.disabled=false;
     mercadoPagoBtn.textContent='Pagar con Mercado Pago';
     mercadoPagoNotice.textContent='';
-    const mpFields=$('#mpCardFields'),showPay=$('#showMercadoPagoFormBtn'); if(!mpPaymentUiActive){if(mpFields)mpFields.hidden=true; if(showPay)showPay.hidden=false;}
+    const mpFields=$('#mpCardFields'),showPay=$('#showMercadoPagoFormBtn'); if(mpFields)mpFields.hidden=true; if(showPay)showPay.hidden=false;
   }
 
   const breakdown=$('#paymentBreakdown');
@@ -1186,11 +846,11 @@ if(hasProvider){
     mpNote.hidden=false;
     mpNote.textContent=realMpFee>0
       ?'Costo Mercado Pago actualizado con el valor informado para esta transacción.'
-      :'Referencia Mercado Pago para disponibilidad en 10 días: 2,89% + IVA (aprox. 3,4391%). El monto definitivo se actualiza con el costo real informado por Mercado Pago.';
+      :'Estimación referencial para disponibilidad en 10 días: 2,89% + IVA. El monto definitivo se reemplaza por el costo real informado por Mercado Pago para la transacción.';
   }
 }
 const finishCard=$('#finishServiceCard'),finishBtn=$('#finishServiceBtn'),finishNote=$('#finishServiceNotice');
-const paymentReady=['autorizado','pagado'].includes(paymentState);
+const paymentReady=['pagado','liberado'].includes(paymentState);
 finishCard.hidden=!(hasProvider&&paymentReady);
 if(hasProvider&&paymentReady&&sol.servicio_finalizado_at){
   finishCard.classList.add('done');finishBtn.hidden=true;
@@ -1213,7 +873,7 @@ if(hasProvider&&paymentReady&&sol.servicio_finalizado_at){
   if(sol.prestador_declaro_finalizado_at){
     finishBtn.hidden=false;finishBtn.textContent='✓ Confirmar servicio recibido';
     $('#finishServiceTitle').textContent='El prestador indicó que terminó';
-    $('#finishServiceText').textContent='Revisa el trabajo. Al confirmar, el servicio se cerrará y comenzará el plazo de 10 días para liquidar al prestador.';
+    $('#finishServiceText').textContent='Revisa el trabajo. Al confirmar se registra el término del servicio y comienza el plazo de 10 días para la liquidación al prestador. El pago del cliente ya debe estar confirmado.';
   }else{
     finishBtn.hidden=true;
     $('#finishServiceTitle').textContent='Servicio en curso';
@@ -1250,160 +910,40 @@ $('#conversationForm').addEventListener('submit',async e=>{
   }
 });
 
-let mpCardForm=null,mpCardFormRequestId=null,mpCardFormInitPromise=null,mpSdkInstance=null,mpSdkPublicKey=null,mpSdkLoadPromise=null,mpPaymentUiActive=false;
-function mpErrorText(err){
-  if(!err)return 'Error desconocido al cargar Mercado Pago.';
-  if(typeof err==='string')return err;
-  if(err.message)return err.message;
-  try{return JSON.stringify(err);}catch(_){return String(err);}
-}
-function loadMercadoPagoSdk(){
-  if(typeof window.MercadoPago==='function')return Promise.resolve(window.MercadoPago);
-  if(mpSdkLoadPromise)return mpSdkLoadPromise;
-  mpSdkLoadPromise=new Promise((resolve,reject)=>{
-    let script=document.querySelector('script[src="https://sdk.mercadopago.com/js/v2"]');
-    const finish=()=>{
-      if(typeof window.MercadoPago==='function')resolve(window.MercadoPago);
-      else reject(new Error('No se pudo cargar Mercado Pago. Revisa tu conexión e inténtalo nuevamente.'));
-    };
-    if(!script){
-      script=document.createElement('script');
-      script.src='https://sdk.mercadopago.com/js/v2';
-      script.async=true;
-      document.head.appendChild(script);
-    }
-    if(typeof window.MercadoPago==='function'){resolve(window.MercadoPago);return;}
-    script.addEventListener('load',finish,{once:true});
-    script.addEventListener('error',()=>reject(new Error('No se pudo descargar Mercado Pago. Revisa tu conexión e inténtalo nuevamente.')),{once:true});
-    const started=Date.now();
-    const timer=setInterval(()=>{
-      if(typeof window.MercadoPago==='function'){clearInterval(timer);resolve(window.MercadoPago);}
-      else if(Date.now()-started>10000){clearInterval(timer);finish();}
-    },100);
-  }).catch(err=>{mpSdkLoadPromise=null;throw err;});
-  return mpSdkLoadPromise;
-}
-async function submitMercadoPagoAuthorization(data){
-  const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;if(!btn||!note||!c)return;
-  const original='Pagar con Mercado Pago';
-  btn.disabled=true;btn.textContent='Procesando pago…';note.style.display='block';note.className='notice';note.textContent='Mercado Pago está procesando el pago a Llama a Jaime…';
-  try{
-    const missing=[];
-    if(!data.token)missing.push('token de tarjeta');
-    if(!data.paymentMethodId)missing.push('medio de pago');
-    if(!data.installments)missing.push('cuotas');
-    if(!data.cardholderEmail)missing.push('correo');
-    if(!data.identificationType)missing.push('tipo de documento');
-    if(!data.identificationNumber)missing.push('documento');
-    if(missing.length)throw new Error('Datos incompletos: '+missing.join(', ')+'.');
-    note.textContent='Mercado Pago: tarjeta validada. Enviando pago…';
-    console.warn('MP FRONTEND AUTH SEND',{public_id:c.public_id,paymentMethodId:data.paymentMethodId,issuerId:data.issuerId||null,installments:Number(data.installments||1),hasToken:!!data.token,hasEmail:!!data.cardholderEmail,identificationType:data.identificationType,hasIdentification:!!data.identificationNumber});
-    const payload={token:c.token,card_token:data.token,payment_method_id:data.paymentMethodId,installments:Number(data.installments||1),payer:{email:data.cardholderEmail,identification:{type:data.identificationType,number:data.identificationNumber}}};
-    if(data.issuerId)payload.issuer_id=data.issuerId;
-    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago/autorizar`,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(payload)});
-    let d={};
-    try{d=await r.json();}catch(_){throw new Error(`El servidor respondió ${r.status} sin JSON válido.`);}
-    if(!r.ok||!d.ok)throw new Error(d.error||d.message||`Mercado Pago rechazó el pago (${r.status}).`);
-    note.className='notice success';note.textContent=d.message||'✓ Pago procesado correctamente por Llama a Jaime.';
-    mpPaymentUiActive=false;
-    await loadConversation(true);
-  }catch(err){
-    console.error('MP pago',err);
-    note.className='notice error';note.style.display='block';note.textContent='Mercado Pago: '+mpErrorText(err);
-    btn.disabled=false;btn.textContent=original;
-  }
-}
+let mpCardForm=null,mpCardFormRequestId=null;
 async function ensureMercadoPagoCardForm(){
   const c=conversationContext;if(!c)return;
-  if(mpCardForm&&mpCardFormRequestId===c.public_id)return mpCardForm;
-  if(mpCardFormInitPromise)return mpCardFormInitPromise;
-
-  mpCardFormInitPromise=(async()=>{
-    const MercadoPagoCtor=await loadMercadoPagoSdk();
-    const kr=await fetch('/app/api/mercadopago/public-key',{headers:{'Accept':'application/json'}});
-    let kd={};try{kd=await kr.json();}catch(_){throw new Error(`Public Key respondió ${kr.status} sin JSON válido.`);}
-    if(!kr.ok||!kd.public_key)throw new Error(kd.error||'Falta configurar la Public Key de Mercado Pago.');
-    if(!mpSdkInstance||mpSdkPublicKey!==kd.public_key){
-      mpSdkInstance=new MercadoPagoCtor(kd.public_key,{locale:'es-CL'});
-      mpSdkPublicKey=kd.public_key;
-    }
-    const amount=String(Number(window.__currentServicePrice||0));
-    const form=mpSdkInstance.cardForm({
-      amount,iframe:true,
-      form:{
-        id:'mpCardForm',
-        cardNumber:{id:'form-checkout__cardNumber',placeholder:'Número de tarjeta'},
-        expirationDate:{id:'form-checkout__expirationDate',placeholder:'MM/AA'},
-        securityCode:{id:'form-checkout__securityCode',placeholder:'CVV'},
-        cardholderName:{id:'form-checkout__cardholderName',placeholder:'Nombre del titular'},
-        issuer:{id:'form-checkout__issuer',placeholder:'Banco emisor'},
-        installments:{id:'form-checkout__installments',placeholder:'Cuotas'},
-        identificationType:{id:'form-checkout__identificationType',placeholder:'Tipo de documento'},
-        identificationNumber:{id:'form-checkout__identificationNumber',placeholder:'RUT / documento'},
-        cardholderEmail:{id:'form-checkout__cardholderEmail',placeholder:'Correo'}
-      },
-      callbacks:{
-        onFormMounted:error=>{
-          if(error){
-            console.error('MP form mounted',error);
-            const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent='Mercado Pago [montaje]: '+mpErrorText(error);}
-          }
-        },
-        onSubmit:event=>{
-          event.preventDefault();
-          try{
-            const data=form.getCardFormData();
-            console.log('MP CardForm submit',{paymentMethodId:data.paymentMethodId,issuerId:data.issuerId,installments:data.installments,hasToken:!!data.token,hasEmail:!!data.cardholderEmail,identificationType:data.identificationType,hasIdentification:!!data.identificationNumber});
-            Promise.resolve(submitMercadoPagoAuthorization(data)).catch(err=>{
-              console.error('MP pago no controlado',err);
-              const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent='Mercado Pago [envío]: '+mpErrorText(err);}
-            });
-          }catch(err){
-            console.error('MP tokenización/submit',err);
-            const n=$('#mercadoPagoNotice');if(n){n.className='notice error';n.style.display='block';n.textContent='Mercado Pago [tokenización]: '+mpErrorText(err);}
-            const b=$('#mercadoPagoBtn');if(b){b.disabled=false;b.textContent='Pagar con Mercado Pago';}
-          }
-        },
-        onFetching:resource=>{
-          console.log('Mercado Pago fetching:',resource);
-          return ()=>{};
-        }
-      }
-    });
-    mpCardForm=form;
-    mpCardFormRequestId=c.public_id;
-    return form;
-  })();
-
-  try{return await mpCardFormInitPromise;}
-  catch(err){mpCardForm=null;mpCardFormRequestId=null;throw err;}
-  finally{mpCardFormInitPromise=null;}
+  if(mpCardForm&&mpCardFormRequestId===c.public_id)return;
+  if(typeof MercadoPago==='undefined')throw new Error('No se pudo cargar Mercado Pago.');
+  const kr=await fetch('/app/api/mercadopago/public-key',{headers:{'Accept':'application/json'}}),kd=await kr.json();
+  if(!kr.ok||!kd.public_key)throw new Error(kd.error||'Falta configurar la Public Key de Mercado Pago.');
+  if(mpCardForm&&typeof mpCardForm.unmount==='function'){try{mpCardForm.unmount()}catch(_){}}
+  const amount=String(Number(window.__currentServicePrice||0));
+  const mp=new MercadoPago(kd.public_key,{locale:'es-CL'});
+  mpCardForm=mp.cardForm({amount,iframe:true,form:{id:'mpCardForm',cardNumber:{id:'form-checkout__cardNumber',placeholder:'Número de tarjeta'},expirationDate:{id:'form-checkout__expirationDate',placeholder:'MM/AA'},securityCode:{id:'form-checkout__securityCode',placeholder:'CVV'},cardholderName:{id:'form-checkout__cardholderName',placeholder:'Nombre del titular'},installments:{id:'form-checkout__installments',placeholder:'Cuotas'},identificationType:{id:'form-checkout__identificationType',placeholder:'Tipo de documento'},identificationNumber:{id:'form-checkout__identificationNumber',placeholder:'RUT / documento'},cardholderEmail:{id:'form-checkout__cardholderEmail',placeholder:'Correo'}},callbacks:{onFormMounted:error=>{if(error)console.error('MP form',error)}}});
+  mpCardFormRequestId=c.public_id;
 }
 async function startMercadoPagoAuthorization(){
-  const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice');if(!btn||!note)return;
+    const btn=$('#mercadoPagoBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;if(!btn||!note||!c)return;
+  const original=btn.textContent;btn.disabled=true;btn.textContent='Procesando…';note.style.display='block';note.textContent='Mercado Pago está procesando el pago a Llama a Jaime…';
   try{
     await ensureMercadoPagoCardForm();
-    // El token lo genera Mercado Pago en el submit real del formulario.
-    const formEl=$('#mpCardForm');
-    if(!formEl)throw new Error('No se encontró el formulario de Mercado Pago.');
-    if(typeof formEl.requestSubmit==='function')formEl.requestSubmit();
-    else formEl.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
-  }catch(err){
-    console.error('MP inicio pago',err);
-    note.className='notice error';note.style.display='block';note.textContent='Mercado Pago [inicio]: '+mpErrorText(err);
-    btn.disabled=false;btn.textContent='Pagar con Mercado Pago';
-  }
+    const data=mpCardForm.getCardFormData();
+    if(!data.token)throw new Error('Revisa los datos de la tarjeta.');
+    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago/autorizar`,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({token:c.token,card_token:data.token,payment_method_id:data.paymentMethodId,installments:Number(data.installments||1),payer:{email:data.cardholderEmail,identification:{type:data.identificationType,number:data.identificationNumber}}})});
+    const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'No fue posible procesar el pago.');
+    note.className='notice success';note.textContent=d.message||'✓ Pago confirmado a Llama a Jaime. La liquidación al prestador se procesa 10 días después de la confirmación final, si no existe una disputa.';
+    await loadConversation(true);
+  }catch(err){note.className='notice error';note.textContent=err.message||'No pude autorizar el pago.';btn.disabled=false;btn.textContent=original;}
 }
-// V7.90: el botón de Mercado Pago es submit nativo del formulario.
-// CardForm intercepta este submit mediante callbacks.onSubmit y genera el token.
-// No agregamos listeners de click ni requestSubmit para evitar interferir con el SDK.
+window.startMercadoPagoAuthorization=startMercadoPagoAuthorization;
 
 $('#finishServiceBtn').addEventListener('click',async()=>{
     const c=conversationContext,btn=$('#finishServiceBtn'),note=$('#finishServiceNotice');if(!c)return;
     const isProvider=c.actor==='prestador';
     const question=isProvider
       ?'¿Confirmas que terminaste el trabajo? El cliente deberá confirmar que recibió el servicio.'
-      :'¿Confirmas que recibiste correctamente el servicio? Al confirmar, comenzará el plazo de 10 días para la liquidación al prestador.';
+      :'¿Confirmas que recibiste correctamente el servicio? Se registrará la confirmación y comenzará el plazo de 10 días; esto no confirma una transferencia.';
     if(!confirm(question))return;
     const auth=c.actor==='cliente'?{actor:'cliente',token:c.token}:{actor:'prestador',codigo:c.codigo,token:c.token};
     const originalText=btn.textContent;
@@ -1423,25 +963,7 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
   });
 
   $('#reportToggle').addEventListener('click',()=>{$('#reportForm').hidden=!$('#reportForm').hidden;$('#reportNotice').style.display='none'});
-  $('#cancelRequestToggle').addEventListener('click',()=>{const form=$('#cancelRequestForm');form.hidden=!form.hidden;});
-  $('#cancelRequestForm').addEventListener('submit',async e=>{
-    e.preventDefault();
-    const c=conversationContext,button=e.submitter,note=$('#cancelRequestNotice'),motivo=$('#cancelRequestReason').value;
-    if(!c||c.actor!=='cliente'||!motivo)return;
-    if(!confirm('¿Cancelar esta solicitud? Si el pago ya fue procesado, la cancelación puede requerir revisión o devolución.'))return;
-    button.disabled=true;note.style.display='none';
-    try{
-      const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/cancelar`,{method:'POST',headers,body:JSON.stringify({token:c.token,motivo})});
-      const d=await r.json();
-      if(!r.ok)throw new Error(d.error||'No pude cancelar la solicitud');
-      note.textContent=d.reserva_liberada?'Solicitud cancelada y reserva de Mercado Pago liberada.':'Solicitud cancelada correctamente.';note.className='notice';note.style.display='block';
-      await loadConversation();
-      await loadSaved();
-      setTimeout(()=>{closeConversation();go('status');},700);
-    }catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false}
-  });
-
-  $('#reportForm').addEventListener('submit',async e=>{e.preventDefault();const c=conversationContext,note=$('#reportNotice'),button=e.submitter;if(!c)return;button.disabled=true;note.style.display='none';const auth=c.actor==='cliente'?{actor:'cliente',token:c.token}:{actor:'prestador',codigo:c.codigo,token:c.token};try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/reclamos`,{method:'POST',headers,body:JSON.stringify({...auth,categoria:$('#reportCategory').value,detalle:$('#reportDescription').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude enviar el reporte');e.target.reset();note.textContent='Reporte enviado de forma privada. El equipo podrá revisarlo y suspender cuentas si corresponde.';note.className='notice';note.style.display='block'}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false}});
+  $('#reportForm').addEventListener('submit',async e=>{e.preventDefault();const c=conversationContext,note=$('#reportNotice'),button=e.submitter;if(!c)return;button.disabled=true;note.style.display='none';const auth=c.actor==='cliente'?{actor:'cliente',token:c.token}:{actor:'prestador',codigo:c.codigo,token:c.token};try{const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/reclamos`,{method:'POST',headers,body:JSON.stringify({...auth,categoria:$('#reportCategory').value,descripcion:$('#reportDescription').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude enviar el reporte');e.target.reset();note.textContent='Reporte enviado de forma privada. El equipo podrá revisarlo y suspender cuentas si corresponde.';note.className='notice';note.style.display='block'}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false}});
 
   $('#shareConversationLocation').addEventListener('click',async()=>{const c=conversationContext,button=$('#shareConversationLocation');if(!c)return;const original=button.textContent;button.disabled=true;button.textContent='Obteniendo ubicación…';try{const location=await currentPosition(),body=c.actor==='cliente'?{actor:'cliente',token:c.token,...location}:{actor:'prestador',codigo:c.codigo,token:c.token,...location};const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/ubicacion`,{method:'POST',headers,body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude compartir la ubicación');await loadConversation()}catch(error){alert(error.message)}finally{button.disabled=false;button.textContent=original}});
 
@@ -1485,10 +1007,10 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     const price=money(amount);
     const platform=Math.round(amount*0.12);
     const vat=Math.round(platform*0.19);
-    const mpEstimate=Math.round(amount*0.0289*1.19);
+    const mpEstimate=Math.round(amount*0.038);
     const estimatedNet=Math.max(0,amount-platform-vat-mpEstimate);
     const description=escapeHtml(quote.detalle||'Servicio cotizado sin descripción adicional');
-    const economy=c&&c.actor==='prestador'?`<div class="quote-economy"><div><span>Valor del servicio</span><strong>${escapeHtml(price)}</strong></div><div><span>Comisión Llama a Jaime (12%)</span><strong>− ${escapeHtml(money(platform))}</strong></div><div><span>IVA sobre comisión (19%)</span><strong>− ${escapeHtml(money(vat))}</strong></div><div><span>Mercado Pago (2,89% + IVA · 10 días)</span><strong>− ${escapeHtml(money(mpEstimate))}</strong></div><div class="net"><span>Recibirías aprox.</span><strong>${escapeHtml(money(estimatedNet))}</strong></div><small class="quote-mp-note">El costo de Mercado Pago es aproximado y puede cambiar según el medio de pago, plazo de liberación y tarifas aplicables. Después del pago se mostrará el costo real informado por Mercado Pago.</small></div>`:'';
+    const economy=c&&c.actor==='prestador'?`<div class="quote-economy"><div><span>Valor del servicio</span><strong>${escapeHtml(price)}</strong></div><div><span>Comisión Llama a Jaime (12%)</span><strong>− ${escapeHtml(money(platform))}</strong></div><div><span>IVA sobre comisión (19%)</span><strong>− ${escapeHtml(money(vat))}</strong></div><div><span>Mercado Pago (aprox. 3,8%)</span><strong>− ${escapeHtml(money(mpEstimate))}</strong></div><div class="net"><span>Recibirías aprox.</span><strong>${escapeHtml(money(estimatedNet))}</strong></div><small class="quote-mp-note">El costo de Mercado Pago es aproximado y puede cambiar según el medio de pago, plazo de liberación y tarifas aplicables. Después del pago se mostrará el costo real informado por Mercado Pago.</small></div>`:'';
     const title=quote.estado==='aceptada'?`✓ Cotización aceptada · ${escapeHtml(price)}`:`Cotización · ${escapeHtml(price)}`;
     const actions=(c&&c.actor==='cliente'&&quote.estado==='pendiente')?`<div class="quote-actions"><button class="quote-accept" data-quote-action="aceptar">Aceptar cotización</button><button class="quote-reject" data-quote-action="rechazar">Rechazar</button></div>`:'';
     const status=(c&&c.actor==='prestador'&&quote.estado==='pendiente')?'<small>Esperando respuesta del cliente.</small>':'';
@@ -1516,9 +1038,9 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
   function showProviderAccess(mode='register'){const login=mode==='login';$('#providerRegister').hidden=login;$('#providerRegister').style.display=login?'none':'block';$('#providerLogin').hidden=!login;$('#providerLogin').style.display=login?'block':'none';$$('[data-provider-access]').forEach(button=>button.classList.toggle('active',button.dataset.providerAccess===mode))}
   $$('[data-provider-access]').forEach(button=>button.addEventListener('click',()=>showProviderAccess(button.dataset.providerAccess)));
 
-  $('#providerForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#providerSubmit'),note=$('#providerNotice');btn.disabled=true;btn.innerHTML=' Registrando';note.style.display='none';const payload={nombre:$('#providerNameInput').value,rut:$('#providerRut').value,pin:$('#providerPin').value,telefono:$('#providerPhone').value,email:$('#providerEmail').value,roles:providerRoles(),comunas:providerCommunes(),materiales:providerMaterials(),especialidades:providerSpecialties(),vehiculo:$('#providerVehicle').value,radio_km:null,acepta_terminos:$('#providerConsent').checked,acepta_privacidad:$('#providerConsent').checked};try{const r=await fetch('/app/api/prestadores',{method:'POST',headers,body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear el perfil');localStorage.providerAuth=JSON.stringify(d.prestador);e.target.reset();await loadProvider();}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{btn.disabled=false;btn.textContent='Crear perfil de prestador'}});
+  $('#providerForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#providerSubmit'),note=$('#providerNotice');btn.disabled=true;btn.innerHTML='<span class="spinner"></span> Registrando';note.style.display='none';const payload={nombre:$('#providerNameInput').value,rut:$('#providerRut').value,pin:$('#providerPin').value,telefono:$('#providerPhone').value,email:$('#providerEmail').value,roles:providerRoles(),comunas:providerCommunes(),materiales:providerMaterials(),especialidades:providerSpecialties(),vehiculo:$('#providerVehicle').value,radio_km:null,acepta_terminos:$('#providerConsent').checked,acepta_privacidad:$('#providerConsent').checked};try{const r=await fetch('/app/api/prestadores',{method:'POST',headers,body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude crear el perfil');localStorage.providerAuth=JSON.stringify(d.prestador);e.target.reset();await loadProvider();}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{btn.disabled=false;btn.textContent='Crear perfil de prestador'}});
 
-  $('#providerLoginForm').addEventListener('submit',async e=>{e.preventDefault();const button=$('#providerLoginSubmit'),note=$('#providerLoginNotice');button.disabled=true;button.innerHTML=' Ingresando';note.style.display='none';try{const r=await fetch('/app/api/prestadores/login',{method:'POST',headers,body:JSON.stringify({rut:$('#providerLoginRut').value,pin:$('#providerLoginPin').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude ingresar');localStorage.providerAuth=JSON.stringify(d.prestador);e.target.reset();await loadProvider()}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false;button.textContent='Ingresar'}});
+  $('#providerLoginForm').addEventListener('submit',async e=>{e.preventDefault();const button=$('#providerLoginSubmit'),note=$('#providerLoginNotice');button.disabled=true;button.innerHTML='<span class="spinner"></span> Ingresando';note.style.display='none';try{const r=await fetch('/app/api/prestadores/login',{method:'POST',headers,body:JSON.stringify({rut:$('#providerLoginRut').value,pin:$('#providerLoginPin').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude ingresar');localStorage.providerAuth=JSON.stringify(d.prestador);e.target.reset();await loadProvider()}catch(err){note.textContent=err.message;note.className='notice error';note.style.display='block'}finally{button.disabled=false;button.textContent='Ingresar'}});
 
   function showProviderForgot(){
     $('#providerRegister').hidden=true;$('#providerRegister').style.display='none';
@@ -1617,7 +1139,7 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
   function setProviderDocsOpen(open){const body=$('#providerDocsBody'),toggle=$('#providerDocsToggle');if(!body||!toggle)return;body.hidden=!open;toggle.setAttribute('aria-expanded',open?'true':'false');toggle.textContent=open?'Ocultar documentos ▴':'Ver documentos ▾'}
   $('#providerDocsToggle')?.addEventListener('click',()=>setProviderDocsOpen($('#providerDocsBody')?.hidden!==false));
   function renderProviderDocuments(rows=[]){const box=$('#providerDocuments'),by={};rows.forEach(x=>(by[x.tipo_documento]??=[]).push(x));const req=['cedula_frontal','cedula_reverso','antecedentes'];const present=req.filter(t=>(by[t]||[]).length).length,approved=req.filter(t=>(by[t]||[]).some(x=>x.estado_revision==='aprobado')).length,attention=req.some(t=>!(by[t]||[]).some(x=>x.estado_revision==='aprobado'))||rows.some(x=>['rechazado','vencido'].includes(x.estado_revision));$('#providerDocsProgress').textContent=`${approved}/3 aprobados`;const summary=$('#providerDocsSummary');if(summary)summary.textContent=approved===3?'Identidad verificada · Documentos básicos aprobados':present===3?'Documentos cargados · Revisión pendiente':'Completa tus documentos básicos para verificar tu identidad';setProviderDocsOpen(attention);box.innerHTML='';for(const [type,icon,label,multi] of PROVIDER_DOC_TYPES){const docs=by[type]||[],x=docs[0],el=document.createElement('div');el.className='doc-row';el.innerHTML=`<div class="doc-top"><span class="doc-icon">${icon}</span><div class="doc-copy"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(x?.archivo_nombre||x?.nombre_documento||'Sin archivo cargado')}</small></div>${x?`<span class="doc-status ${escapeHtml(x.estado_revision||'pendiente')}">${escapeHtml(DOC_STATUS_LABEL[x.estado_revision]||x.estado_revision||'Pendiente')}</span>`:''}</div><div class="doc-actions"><label class="doc-upload">${multi?'Agregar archivo':(x?'Reemplazar':'Subir archivo')}<input type="file" accept=".pdf,image/jpeg,image/png,image/webp" data-doc-upload="${type}"></label>${x?`<button type="button" class="doc-delete" data-doc-delete="${escapeHtml(x.id)}">Eliminar</button>`:''}</div>${x?.observacion_admin?`<div class="doc-note">${escapeHtml(x.observacion_admin)}</div>`:''}${multi&&docs.length>1?`<div class="doc-note">${docs.length} archivos cargados.</div>`:''}`;box.append(el)}$$('[data-doc-upload]').forEach(i=>i.addEventListener('change',()=>uploadProviderDocument(i.dataset.docUpload,i)));$$('[data-doc-delete]').forEach(b=>b.addEventListener('click',()=>deleteProviderDocument(b.dataset.docDelete,b)))}
-  async function loadProviderDocuments(){const a=providerAuth(),box=$('#providerDocuments');if(!a||!box)return;box.innerHTML='<div class="empty"> Cargando documentos…</div>';try{const q=new URLSearchParams({codigo:a.codigo,token:a.token});const r=await fetch(`/app/api/prestadores/documentos?${q}`,{headers,cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude cargar tus documentos');renderProviderDocuments(d.documentos||[])}catch(e){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(e.message)}</div>`}}
+  async function loadProviderDocuments(){const a=providerAuth(),box=$('#providerDocuments');if(!a||!box)return;box.innerHTML='<div class="empty"><span class="spinner"></span> Cargando documentos…</div>';try{const q=new URLSearchParams({codigo:a.codigo,token:a.token});const r=await fetch(`/app/api/prestadores/documentos?${q}`,{headers,cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude cargar tus documentos');renderProviderDocuments(d.documentos||[])}catch(e){box.innerHTML=`<div class="notice error" style="display:block">${escapeHtml(e.message)}</div>`}}
   async function uploadProviderDocument(type,input){const a=providerAuth(),n=$('#providerDocsNotice'),f=input.files?.[0];if(!a||!f)return;if(f.size>10485760){alert('El archivo supera 10 MB.');input.value='';return}const form=new FormData();form.append('codigo',a.codigo);form.append('token',a.token);form.append('tipo_documento',type);form.append('archivo',f);n.textContent='Subiendo documento…';n.className='notice';n.style.display='block';input.disabled=true;try{const r=await fetch('/app/api/prestadores/documentos',{method:'POST',body:form}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude subir el documento');n.textContent='Documento cargado. Quedó pendiente de revisión.';await loadProviderDocuments()}catch(e){n.textContent=e.message;n.className='notice error'}finally{input.disabled=false;input.value=''}}
   async function deleteProviderDocument(id,b){const a=providerAuth();if(!a||!confirm('¿Eliminar este documento?'))return;b.disabled=true;try{const q=new URLSearchParams({codigo:a.codigo,token:a.token});const r=await fetch(`/app/api/prestadores/documentos/${encodeURIComponent(id)}?${q}`,{method:'DELETE',headers}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude eliminar');await loadProviderDocuments()}catch(e){alert(e.message);b.disabled=false}}
 
@@ -1637,7 +1159,7 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     const panel=$('#providerProfilePanel'),btn=$('#providerProfileQuick');
     if(!panel||!btn)return;
     panel.hidden=!open;btn.textContent=open?'✕ Cerrar perfil':'👤 Perfil';
-    if(open){$('#providerPhotoCard').hidden=false;$('#providerDocumentsCard').hidden=false;loadProviderDocuments();panel.scrollIntoView({behavior:'smooth',block:'nearest'});}
+    if(open){$('#providerPhotoCard').hidden=false;$('#providerDocumentsCard').hidden=true;panel.scrollIntoView({behavior:'smooth',block:'nearest'});}
   }
   $('#providerProfileQuick').addEventListener('click',()=>setProviderProfileOpen($('#providerProfilePanel').hidden));
   $('#providerSummaryAvatar').addEventListener('click',()=>setProviderProfileOpen(true));
@@ -1749,7 +1271,7 @@ async function loadProvider(){
         estado_verificacion:p.estado_verificacion||auth.estado_verificacion||'pendiente',
         estado_cuenta:p.estado_cuenta||auth.estado_cuenta||'activa',
         verificado_at:p.verificado_at||auth.verificado_at||null,
-        disponible:typeof p.disponible==='boolean'?p.disponible:auth.disponible,
+        tipo_persona:p.tipo_persona,razon_social:p.razon_social,rut_tributario:p.rut_tributario,disponible:typeof p.disponible==='boolean'?p.disponible:auth.disponible,
         mercadopago_conectado:!!p.mercadopago_conectado,
         mp_user_id:p.mp_user_id||null
       };
@@ -1799,10 +1321,9 @@ async function loadProvider(){
     $('#providerProfilePanel').hidden=true;
     $('#providerMPQuick').textContent=auth.mercadopago_conectado?'💳 MP conectado · Desconectar':'💳 Conectar MP';
     $('#providerLogout').hidden=false;
-    const profileOpen=$('#providerProfilePanel')?.hidden===false;
-    $('#providerDocumentsCard').hidden=!profileOpen;
+    $('#providerDocumentsCard').hidden=true;
     await loadProviderPhoto();
-    $('#providerPhotoCard').hidden=!profileOpen;
+    $('#providerPhotoCard').hidden=true;
     await loadProviderDocuments();
     await loadOpportunities();
   }
@@ -1851,7 +1372,7 @@ async function loadProvider(){
 
   async function loadOpportunities(){
     const auth=providerAuth(),box=$('#opportunities');if(!auth)return;
-    box.innerHTML='<div class="empty"> Buscando oportunidades…</div>';
+    box.innerHTML='<div class="empty"><span class="spinner"></span> Buscando oportunidades…</div>';
     try{
       const url=`/app/api/oportunidades?codigo=${encodeURIComponent(auth.codigo)}&token=${encodeURIComponent(auth.token)}`;
       const r=await fetch(url,{headers});const d=await r.json();if(!r.ok)throw new Error(d.error||'No pude consultar');
@@ -1877,50 +1398,67 @@ async function loadProvider(){
 
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('#installCard').style.display='block'});
   $('#installBtn').addEventListener('click',async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null}else{alert('En iPhone: Compartir → Agregar a inicio. En Android: menú del navegador → Instalar aplicación.')}});
-  if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('/app/sw.js?v=794',{scope:'/app/'}).then(reg=>reg.update()).catch(()=>{});
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('/app/sw.js',{scope:'/app/'}).catch(()=>{});
+  fetch('/app/api/config').then(r=>r.json()).then(d=>{deferredPaymentModel=d.payment_model!=='legacy_capture';if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
+
+  let deferredPaymentModel=true, moneyActor='cliente';
+  function modeKey(){return 'jaimeModesV1:'+(clientProfile()?.telefono||providerAuth()?.codigo||session)}
+  function modes(){try{return {buscar:true,...JSON.parse(localStorage.getItem(modeKey())||'{}')}}catch{return {buscar:true}}}
+  function renderModes(){
+    const p=clientProfile()||{},a=providerAuth(),on=modes().buscar,company=p.tipo_persona==='empresa';
+    $('#accountKind').value=company?'empresa':'persona';$('#companyFields').hidden=!company;
+    $('#companyName').value=p.razon_social||'';$('#companyRut').value=p.rut_tributario||'';
+    $('#seekLabel').textContent=company?'Contratar servicios':'Necesito un servicio';
+    $('#offerLabel').textContent=company?'Ofrecer servicios':'Ofrezco servicios';
+    $('#seekMode').setAttribute('aria-checked',String(on));$('#seekMode').textContent=on?'ON':'OFF';
+    const offer=!!a&&a.disponible===true&&a.estado_verificacion==='verificado';
+    $('#offerMode').setAttribute('aria-checked',String(offer));$('#offerMode').textContent=offer?'ON':'OFF';
+    $$('#home .home-ai-hero,#home .home-services-head,#home .quick').forEach(e=>e.hidden=!on);
+    $('#modeNotice').textContent=!on&&!offer?'Participación pausada. Tus conversaciones, servicios y dinero siguen disponibles.':'';
   }
-  fetch('/app/api/config').then(r=>r.json()).then(d=>{if(!d.ai) $('.status-dot').style.background='#f2b544'}).catch(()=>$('.status-dot').style.background='#a6382f');
-  const initialParams=new URLSearchParams(location.search),initialView=initialParams.get('view'),resetToken=initialParams.get('reset_token');if(['provider','status'].includes(initialView))go(initialView);if(resetToken){go('provider');$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerForgot').hidden=true;$('#providerForgot').style.display='none';$('#providerReset').hidden=false;$('#providerReset').style.display='block';}
+  $('#seekMode').addEventListener('click',()=>{localStorage.setItem(modeKey(),JSON.stringify({buscar:!modes().buscar}));renderModes()});
+  $('#offerMode').addEventListener('click',async()=>{
+    const a=providerAuth();if(!a){go('provider');return}
+    const btn=$('#offerMode');btn.disabled=true;
+    try{const r=await fetch('/app/api/prestadores/me',{method:'PATCH',headers,body:JSON.stringify({codigo:a.codigo,token:a.token,disponible:btn.getAttribute('aria-checked')!=='true'})}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude cambiar tu disponibilidad');await loadProvider();renderModes();go('home')}
+    catch(e){$('#modeNotice').textContent=e.message}finally{btn.disabled=false}
+  });
+  $('#accountKind').addEventListener('change',()=>{const p=clientProfile()||{};saveClientProfile({...p,tipo_persona:$('#accountKind').value});renderModes()});
+  $('#saveCompany').addEventListener('click',async()=>{
+    const p=clientProfile()||{},company={tipo_persona:$('#accountKind').value,razon_social:$('#companyName').value.trim(),rut_tributario:$('#companyRut').value.trim()};
+    try{const a=providerAuth();if(a){const r=await fetch('/app/api/prestadores/me',{method:'PATCH',headers,body:JSON.stringify({...a,...company})}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude guardar')}
+    saveClientProfile({...p,...company});$('#modeNotice').textContent='Datos guardados.'}catch(e){$('#modeNotice').textContent=e.message}
+  });
+  async function loadInbox(){
+    const box=$('#inboxList');box.innerHTML='';
+    for(const s of JSON.parse(localStorage.requests||'[]')){const b=document.createElement('button');b.className='saved';b.textContent='Cliente · '+s.codigo;b.onclick=()=>openConversation('cliente',{public_id:s.codigo,token:s.token});box.append(b)}
+    const a=providerAuth();if(a){const r=await fetch('/app/api/oportunidades?'+new URLSearchParams({codigo:a.codigo,token:a.token}),{headers});const d=await r.json();if(r.ok)for(const item of d.oportunidades||[]){if(item.match_estado!=='tomada')continue;const b=document.createElement('button');b.className='saved';b.textContent='Prestador · '+item.solicitud.public_id;b.onclick=()=>openConversation('prestador',{public_id:item.solicitud.public_id,codigo:a.codigo,token:a.token});box.append(b)}}
+    if(!box.children.length)box.textContent='Aún no tienes conversaciones de servicios.';
+  }
+  const financialLabels={por_cobrar:'Por cobrar',pendiente:'Pendiente de plazo',en_disputa:'En revisión',por_transferir:'Por transferir',pagado:'Transferido'};
+  const moneyFormat=n=>n==null?'Pendiente de determinar':new Intl.NumberFormat('es-CL',{style:'currency',currency:'CLP',maximumFractionDigits:0}).format(n);
+  async function loadMoney(){
+    const box=$('#moneyList');box.textContent='Consultando movimientos…';$('#moneySummary').innerHTML='';
+    $('#moneyClient').classList.toggle('active',moneyActor==='cliente');$('#moneyProvider').classList.toggle('active',moneyActor==='prestador');
+    const a=providerAuth();if(moneyActor==='prestador'&&!a){box.textContent='Ingresa como prestador desde Perfil para consultar tus ganancias.';return}
+    try{const body=moneyActor==='prestador'?{actor:'prestador',codigo:a.codigo,token:a.token}:{actor:'cliente',solicitudes:JSON.parse(localStorage.requests||'[]')};
+      const r=await fetch('/app/api/dinero',{method:'POST',headers,body:JSON.stringify(body)}),d=await r.json();if(!r.ok)throw new Error(d.error||'No pude consultar');
+      box.innerHTML='';$('#moneyScope').textContent=d.alcance;
+      const rows=d.movimientos||[];
+      for(const [key,label] of Object.entries(financialLabels)){const values=rows.filter(x=>x.estado===key);const known=values.filter(x=>(moneyActor==='prestador'?x.neto:x.bruto)!=null);const total=known.reduce((s,x)=>s+(moneyActor==='prestador'?x.neto:x.bruto),0);const card=document.createElement('div');card.className='form-card';card.textContent=label+' · '+values.length+' · '+moneyFormat(total)+(known.length<values.length?' + montos pendientes':'');$('#moneySummary').append(card)}
+      for(const x of rows){const card=document.createElement('details'),title=document.createElement('summary');title.textContent=x.codigo+' · '+(financialLabels[x.estado]||x.estado);card.append(title);
+        for(const [label,value] of [['Valor del servicio',moneyFormat(x.bruto)],['Comisión',moneyFormat(x.comision)],['IVA sobre comisión',moneyFormat(x.iva_comision)],['Procesamiento',moneyFormat(x.procesamiento)],['Retención tributaria',moneyFormat(x.retencion)],['Neto registrado',moneyFormat(x.neto)],['Fecha estimada',x.fecha_estimada?new Date(x.fecha_estimada).toLocaleString('es-CL',{timeZone:'America/Santiago'}):'Esperando ambas confirmaciones'],['Comprobante de transferencia',x.comprobante_transferencia||'Sin transferencia confirmada']]){const line=document.createElement('p');line.textContent=label+': '+value;card.append(line)}
+        const docs=document.createElement('p');docs.textContent='Documentos tributarios: '+(x.documentos.length?x.documentos.map(v=>[v.tipo,v.folio,v.emisor_rut].filter(Boolean).join(' · ')).join('; '):'Sin documentos registrados.');card.append(docs);box.append(card)}
+      if(!rows.length)box.textContent='Aún no hay movimientos.';
+    }catch(e){box.textContent=e.message}
+  }
+  $('#moneyClient').onclick=()=>{moneyActor='cliente';loadMoney()};$('#moneyProvider').onclick=()=>{moneyActor='prestador';loadMoney()};$('#refreshMoney').onclick=loadMoney;
+  renderModes();
+  const initialParams=new URLSearchParams(location.search),initialView=initialParams.get('view'),resetToken=initialParams.get('reset_token');if(['provider','status','money','inbox','activity','home','profile'].includes(initialView))go(initialView);if(resetToken){go('provider');$('#providerAccessSwitch').hidden=true;$('#providerRegister').hidden=true;$('#providerRegister').style.display='none';$('#providerLogin').hidden=true;$('#providerLogin').style.display='none';$('#providerForgot').hidden=true;$('#providerForgot').style.display='none';$('#providerReset').hidden=false;$('#providerReset').style.display='block';}
 })();
-
-
-  // V7.76: respaldo global de interacción. Captura clics aunque un listener previo falle.
-  document.addEventListener('click',e=>{
-    const serviceBtn=e.target.closest?.('[data-start]');
-    if(serviceBtn){
-      e.preventDefault();
-      const value=serviceBtn.dataset.start||'otro';
-      setService(value);
-      go('request');
-      return;
-    }
-    const photoLabel=e.target.closest?.('.photo-picker');
-    if(photoLabel){
-      const input=photoLabel.querySelector('input[type="file"]');
-      if(input && e.target!==input){e.preventDefault();input.click()}
-      return;
-    }
-  },true);
-
-  // Al volver a Inicio no debe quedar ninguna capa de búsqueda sobre las categorías.
-  document.querySelectorAll('[data-go="home"]').forEach(btn=>btn.addEventListener('click',()=>{
-    const overlay=$('#jaimeReadyOverlay');
-    if(overlay){overlay.style.display='none';overlay.style.pointerEvents='none'}
-  },true));
 
   // V7.33.1: Documentación queda compacta en la barra superior; la tarjeta se abre solo al tocar el botón.
 </script>
-<div id="jaimeReadyOverlay" style="display:none;pointer-events:none;position:fixed;inset:0;z-index:9999;background:#f6f8f7;overflow:auto">
-  <div style="max-width:620px;margin:0 auto;padding:20px 16px 90px">
-    <div style="background:#fff;border:1px solid #e4e9e6;border-radius:18px;padding:16px;margin-bottom:12px">
-      <strong style="font-size:18px">Buscando profesionales…</strong>
-      <div style="margin-top:5px;color:#66736b;font-size:13px">Te mostraremos profesionales disponibles para contactar.</div>
-    </div>
-    <div id="jaimeReadyProviders"></div>
-    <button type="button" id="jaimeWaitMoreBtn" class="secondary" style="width:100%;margin-top:12px">Esperar otro profesional</button>
-  </div>
-</div>
 </body>
 </html>
 
