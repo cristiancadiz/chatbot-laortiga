@@ -407,9 +407,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         headers["X-Idempotency-Key"] = str(uuid.uuid4())
         test_mode = str(os.getenv("MERCADOPAGO_PAYOUT_TEST_MODE") or "false").strip().lower() in {"1","true","yes","si"}
         if test_mode:
-            headers["X-test-token"] = "true"
-            headers["X-enforce-signature"] = "false"
-            return headers
+            raise RuntimeError("No se admite modo de prueba en el procesador productivo")
         private_pem = str(os.getenv("MERCADOPAGO_PAYOUT_PRIVATE_KEY_PEM") or "").strip()
         if not private_pem:
             raise RuntimeError("Falta MERCADOPAGO_PAYOUT_PRIVATE_KEY_PEM para firmar Payouts productivos.")
@@ -496,7 +494,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         due=[]
         for row in (response.json() if response.content else []):
             captured=str(row.get("pago_capturado_at") or "")
-            try: release_at=datetime.fromisoformat(captured.replace("Z","+00:00"))+timedelta(days=10)
+            try: release_at=datetime.fromisoformat(captured.replace("Z","+00:00"))+timedelta(days=1)
             except Exception: continue
             if release_at>datetime.now(timezone.utc): continue
             claims=requests.get(f"{settings['supabase_url']}/rest/v1/nexi_app_reclamos",headers=_db_headers(),params={"select":"id","solicitud_id":f"eq.{row['id']}","estado":"in.(abierto,en_revision)","limit":"1"},timeout=settings["supabase_timeout"]); claims.raise_for_status()
@@ -504,62 +502,146 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             due.append(row)
         return due
 
+    @app.get(f"{api_base}/payouts/pendientes")
+    def mobile_pending_payouts():
+        """Reporte de conciliacion, sin ejecutar transferencias de dinero."""
+        secret = str(os.getenv("LLAMA_JAIME_PAYOUT_CRON_SECRET") or "").strip()
+        auth = str(request.headers.get("Authorization") or "").strip()
+        if not secret or not hmac.compare_digest(auth, f"Bearer {secret}"):
+            return _json(app, {"ok": False, "error": "No autorizado."}, 401)
+        try:
+            rows = _payout_due_rows()
+            summary = []
+            for row in rows:
+                summary.append({
+                    "solicitud_id": row.get("id"),
+                    "prestador_id": row.get("prestador_id"),
+                    "neto_prestador": row.get("neto_prestador"),
+                    "pago_capturado_at": row.get("pago_capturado_at"),
+                    "cliente_confirmo_finalizado_at": row.get("cliente_confirmo_finalizado_at"),
+                    "prestador_declaro_finalizado_at": row.get("prestador_declaro_finalizado_at"),
+                    "advertencia": "Elegibilidad preliminar: conciliar saldo disponible, reembolsos, contracargos y pago real antes de transferir.",
+                })
+            return _json(app, {"ok": True, "transferencias_ejecutadas": 0, "candidatos": summary})
+        except Exception:
+            app.logger.exception("PAYOUT RECONCILIATION REPORT ERROR")
+            return _json(app, {"ok": False, "error": "No se pudo generar el reporte."}, 500)
+
+    @app.get(f"{api_base}/payouts/verificar-acceso")
+    def mobile_verify_payout_access():
+        """Diagnóstico no transaccional: nunca crea una transferencia."""
+        secret = str(os.getenv("LLAMA_JAIME_PAYOUT_CRON_SECRET") or "").strip()
+        auth = str(request.headers.get("Authorization") or "").strip()
+        if not secret or not hmac.compare_digest(auth, f"Bearer {secret}"):
+            return _json(app, {"ok": False, "error": "No autorizado."}, 401)
+        if not _mp_access_token():
+            return _json(app, {"ok": False, "estado": "sin_credenciales", "error": "Falta token central de Mercado Pago."}, 503)
+        # Solo GET: esta verificación no envía dinero ni garantiza acceso a POST.
+        try:
+            response = requests.get(
+                "https://api.mercadopago.com/v1/payouts",
+                headers=_mp_headers(),
+                params={"limit": 1},
+                timeout=15,
+            )
+            status = response.status_code
+            if status in (401, 403):
+                estado = "acceso_no_autorizado"
+            elif status in (200, 204):
+                estado = "consulta_disponible_no_confirma_transferencias"
+            else:
+                estado = "no_concluyente"
+            return _json(app, {
+                "ok": status in (200, 204),
+                "estado": estado,
+                "http_status": status,
+                "transferencias_ejecutadas": 0,
+                "advertencia": "La consulta GET no certifica que la cuenta pueda crear Payouts, ni que los fondos estén disponibles. No activar pagos automáticos solo con este resultado."
+            })
+        except requests.RequestException:
+            app.logger.exception("PAYOUT ACCESS CHECK ERROR")
+            return _json(app, {"ok": False, "estado": "error_red", "transferencias_ejecutadas": 0}, 502)
+
     @app.post(f"{api_base}/payouts/procesar-vencidos")
     def mobile_process_due_payouts():
-        """Dispersa saldos 10 días después de la confirmación de ambas partes. Diseñado para un cron diario."""
-        secret=str(os.getenv("LLAMA_JAIME_PAYOUT_CRON_SECRET") or "").strip()
-        auth=str(request.headers.get("Authorization") or "").strip()
+        """Procesa liquidaciones reclamadas atómicamente por Supabase.
+
+        Requiere la migración SQL adjunta y acceso Payouts productivo. Los estados
+        inciertos NO se reenvían automáticamente: deben conciliarse con MP.
+        """
+        secret = str(os.getenv("LLAMA_JAIME_PAYOUT_CRON_SECRET") or "").strip()
+        auth = str(request.headers.get("Authorization") or "").strip()
         if not secret or not hmac.compare_digest(auth, f"Bearer {secret}"):
-            return _json(app,{"ok":False,"error":"No autorizado."},401)
-        # No ejecutar dispersiones hasta implementar una reserva atomica en BD,
-        # idempotencia persistente y verificar Payouts API para esta cuenta chilena.
-        return _json(app,{"ok":False,"error":"Transferencias automaticas bloqueadas por seguridad; liquidar mediante conciliacion autorizada."},503)
+            return _json(app, {"ok": False, "error": "No autorizado"}, 401)
+        if str(os.getenv("LLAMA_JAIME_PAYOUTS_ENABLED", "true")).strip().lower() not in {"true", "1", "yes", "si"}:
+            return _json(app, {"ok": False, "error": "Transferencias desactivadas por LLAMA_JAIME_PAYOUTS_ENABLED"}, 503)
+        if not _mp_access_token() or not os.getenv("MERCADOPAGO_PAYOUT_PRIVATE_KEY_PEM"):
+            return _json(app, {"ok": False, "error": "Faltan credenciales Payouts"}, 503)
+        results = []
         try:
-            rows=_payout_due_rows()
-            grouped={}
-            for row in rows:
-                provider_id=str(row.get("prestador_id") or "")
-                net=int(row.get("neto_prestador") or 0)
-                if not provider_id or net<=0: continue
-                email=_provider_payout_email(provider_id)
-                if not email: continue
-                item=grouped.setdefault(provider_id,{"email":email,"amount":0,"rows":[]})
-                item["amount"]+=net; item["rows"].append(row)
-            providers=list(grouped.items()); results=[]
-            for offset in range(0,len(providers),1000):
-                chunk=providers[offset:offset+1000]
-                transactions=[]
-                for provider_id,item in chunk:
-                    transactions.append({"type":"account","description":"Liquidacion Llama a Jaime","account":{"email":item["email"]},"amount":{"currency":"CLP","value":item["amount"]},"external_reference":f"LJ-PROV-{provider_id}-{datetime.now(timezone.utc).date().isoformat()}"})
-                if not transactions: continue
-                payload={"external_reference":f"LJ-PAYOUT-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{offset//1000+1}","description":"Liquidaciones Llama a Jaime - 10 dias","transactions":transactions}
-                notification=_mp_notification_url()
-                if notification: payload["config"]={"notification_url":notification}
-                body_bytes=json.dumps(payload,separators=(",",":"),ensure_ascii=False).encode("utf-8")
-                headers=_mp_payout_headers(body_bytes)
-                response=requests.post("https://api.mercadopago.com/v1/payouts",headers=headers,data=body_bytes,timeout=30)
-                data=response.json() if response.content else {}
-                if not response.ok:
-                    app.logger.warning("MP PAYOUT REJECTED status=%s response=%s",response.status_code,data)
-                    results.append({"ok":False,"status":response.status_code,"error":data}); continue
-                payout_id=str(data.get("id") or "")
-                txs=data.get("transactions") if isinstance(data.get("transactions"),list) else []
-                for idx,(provider_id,item) in enumerate(chunk):
-                    tx=txs[idx] if idx<len(txs) and isinstance(txs[idx],dict) else {}
-                    tx_id=str(tx.get("id") or payout_id)
-                    tx_status=str(tx.get("status") or data.get("status") or "pending").lower()
-                    # Reservamos la referencia apenas MP acepta el lote para impedir dobles dispersiones
-                    # si el cron vuelve a ejecutarse mientras la transferencia sigue pendiente.
-                    for row in item["rows"]:
-                        patch_data={"transferencia_prestador_referencia":f"{payout_id}:{tx_id}"}
-                        if tx_status in {"success","approved","processed","completed"}:
-                            patch_data["transferencia_prestador_at"]=datetime.now(timezone.utc).isoformat()
-                        patch=requests.patch(f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",headers=_db_headers("return=minimal"),params={"id":f"eq.{row['id']}","transferencia_prestador_at":"is.null","transferencia_prestador_referencia":"is.null"},json=patch_data,timeout=settings["supabase_timeout"]); patch.raise_for_status()
-                results.append({"ok":True,"payout_id":payout_id,"prestadores":len(chunk)})
-            return _json(app,{"ok":True,"prestadores_elegibles":len(providers),"lotes":results})
-        except Exception as exc:
-            app.logger.exception("PAYOUT PROCESS ERROR: %r",exc)
-            return _json(app,{"ok":False,"error":"No pude procesar las liquidaciones."},500)
+            # RPC usa FOR UPDATE SKIP LOCKED: dos crons no reclaman la misma solicitud.
+            claim = requests.post(
+                f"{settings['supabase_url']}/rest/v1/rpc/jaime_reclamar_liquidaciones",
+                headers=_db_headers(), json={"p_empresa_id": str(settings["empresa_id"]), "p_limite": 20},
+                timeout=settings["supabase_timeout"])
+            claim.raise_for_status()
+            claimed = claim.json() or []
+            for job in claimed:
+                ledger_id = str(job["liquidacion_id"])
+                solicitud_id = str(job["solicitud_id"])
+                key = str(job["idempotency_key"])
+                amount = int(job["monto_clp"])
+                email = _provider_payout_email(job["prestador_id"])
+                if not email or amount <= 0:
+                    _jaime_payout_ledger_update(ledger_id, "bloqueado", None, "Prestador sin email o monto inválido")
+                    results.append({"solicitud_id": solicitud_id, "estado": "bloqueado"})
+                    continue
+                # Reconciliar el pago central con MP inmediatamente antes de enviar.
+                pay_id = str(job.get("mercadopago_payment_id") or "")
+                if not pay_id:
+                    _jaime_payout_ledger_update(ledger_id, "bloqueado", None, "Sin identificador de pago")
+                    continue
+                payment = _mp_payment(pay_id)
+                if str(payment.get("status") or "").lower() != "approved" or float(payment.get("transaction_amount") or 0) <= 0:
+                    _jaime_payout_ledger_update(ledger_id, "bloqueado", None, "Pago no aprobado en Mercado Pago")
+                    continue
+                payload = {"external_reference": key, "description": "Liquidación Llama a Jaime", "transactions": [{
+                    "type": "account", "description": f"Servicio {solicitud_id}",
+                    "account": {"email": email}, "amount": {"currency": "CLP", "value": amount},
+                    "external_reference": key
+                }]}
+                body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+                headers = _mp_payout_headers(body)
+                headers["X-Idempotency-Key"] = key  # Estable, no UUID aleatorio.
+                # Marcar intento ANTES de la llamada; timeout significa estado incierto.
+                _jaime_payout_ledger_update(ledger_id, "enviado", None, None)
+                try:
+                    r = requests.post("https://api.mercadopago.com/v1/payouts", headers=headers, data=body, timeout=30)
+                    data = r.json() if r.content else {}
+                    payout_id = str(data.get("id") or "")
+                    if r.ok and payout_id:
+                        _jaime_payout_ledger_update(ledger_id, "pendiente_conciliacion", payout_id, None)
+                        results.append({"solicitud_id": solicitud_id, "estado": "pendiente_conciliacion", "payout_id": payout_id})
+                    else:
+                        _jaime_payout_ledger_update(ledger_id, "revision_manual", payout_id or None, f"HTTP {r.status_code}")
+                        results.append({"solicitud_id": solicitud_id, "estado": "revision_manual", "http_status": r.status_code})
+                except requests.RequestException:
+                    app.logger.exception("PAYOUT RESULTADO INCIERTO solicitud=%s", solicitud_id)
+                    _jaime_payout_ledger_update(ledger_id, "revision_manual", None, "Resultado incierto: consultar Mercado Pago antes de reintentar")
+                    results.append({"solicitud_id": solicitud_id, "estado": "revision_manual"})
+            return _json(app, {"ok": True, "liquidaciones": results, "advertencia": "Los pagos aceptados requieren conciliación del estado final."})
+        except Exception:
+            app.logger.exception("PAYOUT PROCESS ERROR")
+            return _json(app, {"ok": False, "error": "No se pudieron procesar las liquidaciones; verificar migración y logs"}, 500)
+
+    def _jaime_payout_ledger_update(ledger_id, status, payout_id, error):
+        patch = {"estado": status, "actualizado_at": datetime.now(timezone.utc).isoformat()}
+        if payout_id: patch["mp_payout_id"] = payout_id
+        if error: patch["ultimo_error"] = error[:500]
+        resp = requests.patch(f"{settings['supabase_url']}/rest/v1/jaime_liquidaciones",
+            headers=_db_headers("return=minimal"), params={"id": f"eq.{ledger_id}", "empresa_id": f"eq.{settings['empresa_id']}"},
+            json=patch, timeout=settings["supabase_timeout"])
+        resp.raise_for_status()
 
     def _admin_auth():
         """Valida el JWT de Supabase Auth y confirma que pertenezca a un admin activo."""
@@ -1103,7 +1185,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         due = None
         credited = row.get("pago_capturado_at")
         if confirmed and row.get("prestador_declaro_finalizado_at") and credited:
-            due = (datetime.fromisoformat(str(credited).replace("Z", "+00:00")) + timedelta(days=10)).isoformat()
+            due = (datetime.fromisoformat(str(credited).replace("Z", "+00:00")) + timedelta(days=1)).isoformat()
         claims = requests.get(f"{settings['supabase_url']}/rest/v1/nexi_app_reclamos", headers=_db_headers(),
             params={"select":"id", "solicitud_id":f"eq.{row['id']}", "estado":"in.(abierto,en_revision)", "limit":"1"},
             timeout=settings["supabase_timeout"])
@@ -1161,10 +1243,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 {"id": key, "name": SERVICE_LABELS[key]}
                 for key in ("hogar", "limpieza", "flete", "jardineria", "belleza", "reciclaje", "otro")
             ],
-            "payment_model": "deferred_10_days" if deferred_payments else "legacy_capture",
+            "payment_model": "checkout_pro_1_dia_prueba" if deferred_payments else "legacy_capture",
             "automatic_payouts": False,
-            "provider_release_days_after_payment_accredited": 10,
-            "mercadopago_availability_plan": "10_dias",
+            "provider_release_days_after_payment_accredited": 1,
+            "mercadopago_availability_plan": "1_dia_prueba",
             "mercadopago_reference_fee_pct": 2.89,
             "mercadopago_reference_fee_vat_pct": 19,
             "ai": bool(settings["ai_enabled"]),
@@ -3214,7 +3296,7 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     timeout=settings["supabase_timeout"],
                 )
                 payment_state_response.raise_for_status()
-                # El plazo de 10 días comienza con el cobro real, no con el cierre del trabajo.
+                # El plazo de 1 día (SOLO PRUEBAS) comienza con el cobro real, no con el cierre del trabajo.
                 # En reintentos del webhook no cambiamos la fecha original.
                 capture_stamp = requests.patch(
                     f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
