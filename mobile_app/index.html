@@ -497,7 +497,7 @@
         <div class="payment-client-action" id="paymentClientAction" hidden>
           <div class="mp-pay-intro" id="mpPayIntro">
 <p><strong>Pago protegido por Llama a Jaime</strong><br><small>El cliente autorizará una reserva con tarjeta. El cobro a Nexia se realizará al confirmar ambas partes. La transferencia al prestador se programará 10 días después de la acreditación efectiva en Nexia, salvo disputas o bloqueos. Función pendiente de habilitación.</small></p>
-            <button type="button" class="primary" id="showMercadoPagoFormBtn">Reserva con tarjeta: próximamente</button>
+            <button type="button" class="primary" id="showMercadoPagoFormBtn">Pagar con Mercado Pago</button>
           </div>
           <div id="mpCardFields" class="mp-card-fields" hidden></div>
           <div class="notice" id="mercadoPagoNotice"></div>
@@ -917,14 +917,14 @@ if(hasProvider){
   const mercadoPagoNotice=$('#mercadoPagoNotice');
   const servicePriceForClient=Number(sol.precio_servicio);
   window.__currentServicePrice=Number.isFinite(servicePriceForClient)?servicePriceForClient:0;
-  const canStartPayment=false && c.actor==='cliente'
+  const canStartPayment=c.actor==='cliente'
     && Number.isFinite(servicePriceForClient)
     && servicePriceForClient>0
     && !['autorizado','pagado','liberado','reembolsado','disputado'].includes(paymentState);
   clientPaymentAction.hidden=!canStartPayment;
   if(canStartPayment){
     mercadoPagoNotice.textContent='';
-    const mpFields=$('#mpCardFields'),showPay=$('#showMercadoPagoFormBtn'); if(mpFields)mpFields.hidden=true; if(showPay){showPay.hidden=false;showPay.disabled=false;showPay.textContent='Reserva con tarjeta: próximamente';showPay.disabled=true;showPay.title='Aún falta habilitar la autorización sin captura en el backend';}
+    const mpFields=$('#mpCardFields'),showPay=$('#showMercadoPagoFormBtn'); if(mpFields)mpFields.hidden=true; if(showPay){showPay.hidden=false;showPay.disabled=false;showPay.textContent='Pagar con Mercado Pago';showPay.disabled=false;showPay.title='El pago se cobra ahora a Nexia mediante Checkout Pro';}
   }
 
   const breakdown=$('#paymentBreakdown');
@@ -1012,15 +1012,21 @@ $('#conversationForm').addEventListener('submit',async e=>{
 });
 
 async function startMercadoPagoCheckout(){
-  // BLOQUEO INTENCIONAL: Checkout Pro cobra inmediatamente y el backend actual
-  // devuelve HTTP 410 para la ruta /autorizar. No activar cobros hasta implementar
-  // tokenización segura MP, capture=false, webhooks, expiración y conciliación.
-  const note=document.querySelector('#mercadoPagoNotice');
-  if(note){
-    note.className='notice error';
-    note.style.display='block';
-    note.textContent='La reserva con tarjeta aún no está habilitada. No se ha realizado ningún cobro. Contacta a soporte para coordinar el pago.';
-  }
+  const c=conversationContext,button=$('#showMercadoPagoFormBtn'),note=$('#mercadoPagoNotice');
+  if(!c||c.actor!=='cliente'){alert('Solo el cliente puede pagar.');return;}
+  if(!confirm('Se cobrará ahora el precio aceptado mediante Mercado Pago. Nexia administrará la liquidación al prestador después de las confirmaciones y del plazo acordado. ¿Continuar?'))return;
+  const original=button?.textContent||'Pagar con Mercado Pago';
+  if(button){button.disabled=true;button.textContent='Preparando pago…';}
+  try{
+    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago`,{
+      method:'POST',headers,body:JSON.stringify({token:c.token})
+    });
+    const d=await r.json();
+    if(!r.ok||!d.ok||!d.checkout_url)throw new Error(d.error||'No fue posible iniciar el pago.');
+    window.location.assign(d.checkout_url);
+  }catch(err){
+    if(note){note.className='notice error';note.style.display='block';note.textContent=err.message||'No fue posible iniciar el pago.';}
+  }finally{if(button){button.disabled=false;button.textContent=original;}}
 }
 window.startMercadoPagoCheckout=startMercadoPagoCheckout;
 
@@ -1029,7 +1035,7 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     const isProvider=c.actor==='prestador';
     const question=isProvider
       ?'¿Confirmas que terminaste el trabajo? El cliente deberá confirmar que recibió el servicio.'
-      :'¿Confirmas que recibiste correctamente el servicio? Se registrará la confirmación y comenzará el plazo de 10 días; esto no confirma una transferencia.';
+      :'¿Confirmas que recibiste correctamente el servicio? La liquidación se evalúa a los 10 días de la acreditación del pago y requiere ambas confirmaciones; esto no confirma una transferencia.';
     if(!confirm(question))return;
     const auth=c.actor==='cliente'?{actor:'cliente',token:c.token}:{actor:'prestador',codigo:c.codigo,token:c.token};
     const originalText=btn.textContent;
