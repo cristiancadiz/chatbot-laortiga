@@ -496,7 +496,7 @@
         <div class="payment-status-copy"><span id="paymentStatusDetail">Primero acepta la cotización.</span></div>
         <div class="payment-client-action" id="paymentClientAction" hidden>
           <div class="mp-pay-intro" id="mpPayIntro">
-<p><strong>Pago protegido por Llama a Jaime</strong><br><small>El cliente autorizará una reserva con tarjeta. El cobro a Nexia se realizará al confirmar ambas partes. La transferencia al prestador se programará 10 días después de la acreditación efectiva en Nexia, salvo disputas o bloqueos. Función pendiente de habilitación.</small></p>
+<p><strong>Pago protegido por Llama a Jaime</strong><br><small>El cliente autorizará una reserva con tarjeta. El cobro a Nexia se realizará al confirmar ambas partes. La transferencia al prestador se programará 1 día (solo pruebas) después de la acreditación efectiva en Nexia, salvo disputas o bloqueos. Función pendiente de habilitación.</small></p>
             <button type="button" class="primary" id="showMercadoPagoFormBtn">Pagar con Mercado Pago</button>
           </div>
           <div id="mpCardFields" class="mp-card-fields" hidden></div>
@@ -901,7 +901,7 @@ const paymentLabels={pendiente:'Pendiente',autorizado:'Autorizado',pagado:'Pagad
 const paymentDetails={
   pendiente:'El pago del servicio aún está pendiente.',
   autorizado:'Fondos autorizados; pendientes de captura. La autorización puede vencer y no equivale a dinero recibido por Nexia.',
-  pagado:'Cobro confirmado por Mercado Pago. La transferencia al prestador se programa 10 días después de la acreditación efectiva en Nexia, salvo disputas o bloqueos.',
+  pagado:'Cobro confirmado por Mercado Pago. La transferencia al prestador se programa 1 día (solo pruebas) después de la acreditación efectiva en Nexia, salvo disputas o bloqueos.',
   liberado:'Estado de la pasarela: liberado. Consulta el comprobante de transferencia en Dinero.',
   reembolsado:'El pago fue reembolsado.',
   disputado:'El pago se encuentra en revisión por una disputa.'
@@ -947,7 +947,7 @@ if(hasProvider){
     mpNote.hidden=false;
     mpNote.textContent=realMpFee>0
       ?'Costo Mercado Pago actualizado con el valor informado para esta transacción.'
-      :'Estimación referencial para disponibilidad en 10 días: 2,89% + IVA. El monto definitivo se reemplaza por el costo real informado por Mercado Pago para la transacción.';
+      :'Estimación referencial para disponibilidad en 1 día (solo pruebas): 2,89% + IVA. El monto definitivo se reemplaza por el costo real informado por Mercado Pago para la transacción.';
   }
 }
 const finishCard=$('#finishServiceCard'),finishBtn=$('#finishServiceBtn'),finishNote=$('#finishServiceNotice');
@@ -974,7 +974,7 @@ if(hasProvider&&paymentReady&&sol.servicio_finalizado_at){
   if(sol.prestador_declaro_finalizado_at){
     finishBtn.hidden=false;finishBtn.textContent='✓ Confirmar servicio recibido';
     $('#finishServiceTitle').textContent='El prestador indicó que terminó';
-    $('#finishServiceText').textContent='Revisa el trabajo. Al confirmar se registra el término del servicio y comienza el plazo de 10 días para la liquidación al prestador. El pago del cliente ya debe estar confirmado.';
+    $('#finishServiceText').textContent='Revisa el trabajo. Al confirmar se registra el término del servicio y comienza el plazo de 1 día (solo pruebas) para la liquidación al prestador. El pago del cliente ya debe estar confirmado.';
   }else{
     finishBtn.hidden=true;
     $('#finishServiceTitle').textContent='Servicio en curso';
@@ -1035,7 +1035,7 @@ $('#finishServiceBtn').addEventListener('click',async()=>{
     const isProvider=c.actor==='prestador';
     const question=isProvider
       ?'¿Confirmas que terminaste el trabajo? El cliente deberá confirmar que recibió el servicio.'
-      :'¿Confirmas que recibiste correctamente el servicio? La liquidación se evalúa a los 10 días de la acreditación del pago y requiere ambas confirmaciones; esto no confirma una transferencia.';
+      :'¿Confirmas que recibiste correctamente el servicio? La liquidación se evalúa a los 1 día (solo pruebas) de la acreditación del pago y requiere ambas confirmaciones; esto no confirma una transferencia.';
     if(!confirm(question))return;
     const auth=c.actor==='cliente'?{actor:'cliente',token:c.token}:{actor:'prestador',codigo:c.codigo,token:c.token};
     const originalText=btn.textContent;
