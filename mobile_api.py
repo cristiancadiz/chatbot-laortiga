@@ -511,6 +511,9 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         auth=str(request.headers.get("Authorization") or "").strip()
         if not secret or not hmac.compare_digest(auth, f"Bearer {secret}"):
             return _json(app,{"ok":False,"error":"No autorizado."},401)
+        # No ejecutar dispersiones hasta implementar una reserva atomica en BD,
+        # idempotencia persistente y verificar Payouts API para esta cuenta chilena.
+        return _json(app,{"ok":False,"error":"Transferencias automaticas bloqueadas por seguridad; liquidar mediante conciliacion autorizada."},503)
         try:
             rows=_payout_due_rows()
             grouped={}
@@ -1098,8 +1101,9 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
             return None if value is None else int(value)
         confirmed = row.get("cliente_confirmo_finalizado_at")
         due = None
-        if confirmed and row.get("prestador_declaro_finalizado_at"):
-            due = (datetime.fromisoformat(confirmed.replace("Z", "+00:00")) + timedelta(days=10)).isoformat()
+        credited = row.get("pago_capturado_at")
+        if confirmed and row.get("prestador_declaro_finalizado_at") and credited:
+            due = (datetime.fromisoformat(str(credited).replace("Z", "+00:00")) + timedelta(days=10)).isoformat()
         claims = requests.get(f"{settings['supabase_url']}/rest/v1/nexi_app_reclamos", headers=_db_headers(),
             params={"select":"id", "solicitud_id":f"eq.{row['id']}", "estado":"in.(abierto,en_revision)", "limit":"1"},
             timeout=settings["supabase_timeout"])
@@ -1158,8 +1162,8 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                 for key in ("hogar", "limpieza", "flete", "jardineria", "belleza", "reciclaje", "otro")
             ],
             "payment_model": "deferred_10_days" if deferred_payments else "legacy_capture",
-            "automatic_payouts": True,
-            "provider_release_days_after_both_confirm": 10,
+            "automatic_payouts": False,
+            "provider_release_days_after_payment_accredited": 10,
             "mercadopago_availability_plan": "10_dias",
             "mercadopago_reference_fee_pct": 2.89,
             "mercadopago_reference_fee_vat_pct": 19,
@@ -3131,10 +3135,10 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     except requests.RequestException:
                         continue
             else:
-                seller = _mp_provider_credentials(request_row.get("prestador_id"))
+                # Checkout Pro central: el cobro pertenece a Nexia, no al prestador.
                 payment = requests.get(
                     f"https://api.mercadopago.com/v1/payments/{payment_id}",
-                    headers=_mp_headers_with_token((seller or {}).get("mp_access_token")),
+                    headers=_mp_headers(),
                     timeout=20,
                 )
                 payment.raise_for_status()
