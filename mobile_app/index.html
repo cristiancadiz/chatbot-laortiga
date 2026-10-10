@@ -9,7 +9,7 @@
   <link rel="manifest" href="/app/manifest.webmanifest">
   <link rel="icon" type="image/png" href="/app/assets/icon-192.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/app/assets/apple-touch-icon.png">
-  <!-- LLAMA A JAIME FRONT V19.8 · JAIME + CHECKOUT PRO FIX -->
+  <!-- LLAMA A JAIME FRONT V19.9 · RESERVA SEGURA PENDIENTE DE INTEGRACION -->
 <title>Llama a Jaime · Servicios cuando los necesitas</title>
   <style>
     :root{--forest:#073b66;--green:#08a6a6;--leaf:#ff9f1c;--cream:#f7f6f1;--gold:#ffb627;--ink:#102f49;--muted:#667783;--line:#d8e1e7;--white:#fff;--danger:#a6382f;--shadow:0 14px 38px rgba(7,59,102,.12)}
@@ -496,8 +496,8 @@
         <div class="payment-status-copy"><span id="paymentStatusDetail">Primero acepta la cotización.</span></div>
         <div class="payment-client-action" id="paymentClientAction" hidden>
           <div class="mp-pay-intro" id="mpPayIntro">
-<p><strong>Pago protegido por Llama a Jaime</strong><br><small>El cliente paga a Llama a Jaime. El prestador recibe su liquidación 10 días después de la confirmación final del servicio, siempre que no exista una disputa o bloqueo.</small></p>
-            <button type="button" class="primary" id="showMercadoPagoFormBtn">Pagar con Mercado Pago</button>
+<p><strong>Pago protegido por Llama a Jaime</strong><br><small>El cliente autorizará una reserva con tarjeta. El cobro a Nexia se realizará al confirmar ambas partes. La transferencia al prestador se programará 10 días después de la acreditación efectiva en Nexia, salvo disputas o bloqueos. Función pendiente de habilitación.</small></p>
+            <button type="button" class="primary" id="showMercadoPagoFormBtn">Reserva con tarjeta: próximamente</button>
           </div>
           <div id="mpCardFields" class="mp-card-fields" hidden></div>
           <div class="notice" id="mercadoPagoNotice"></div>
@@ -900,8 +900,8 @@ const paymentState=String(sol.pago_estado||'pendiente').toLowerCase();
 const paymentLabels={pendiente:'Pendiente',autorizado:'Autorizado',pagado:'Pagado',liberado:'Liberado',reembolsado:'Reembolsado',disputado:'Disputado'};
 const paymentDetails={
   pendiente:'El pago del servicio aún está pendiente.',
-  autorizado:'Pago en procesamiento por Mercado Pago.',
-  pagado:'Pago recibido por Llama a Jaime. La liquidación al prestador se gestiona por separado en Dinero.',
+  autorizado:'Fondos autorizados; pendientes de captura. La autorización puede vencer y no equivale a dinero recibido por Nexia.',
+  pagado:'Cobro confirmado por Mercado Pago. La transferencia al prestador se programa 10 días después de la acreditación efectiva en Nexia, salvo disputas o bloqueos.',
   liberado:'Estado de la pasarela: liberado. Consulta el comprobante de transferencia en Dinero.',
   reembolsado:'El pago fue reembolsado.',
   disputado:'El pago se encuentra en revisión por una disputa.'
@@ -917,14 +917,14 @@ if(hasProvider){
   const mercadoPagoNotice=$('#mercadoPagoNotice');
   const servicePriceForClient=Number(sol.precio_servicio);
   window.__currentServicePrice=Number.isFinite(servicePriceForClient)?servicePriceForClient:0;
-  const canStartPayment=c.actor==='cliente'
+  const canStartPayment=false && c.actor==='cliente'
     && Number.isFinite(servicePriceForClient)
     && servicePriceForClient>0
     && !['autorizado','pagado','liberado','reembolsado','disputado'].includes(paymentState);
   clientPaymentAction.hidden=!canStartPayment;
   if(canStartPayment){
     mercadoPagoNotice.textContent='';
-    const mpFields=$('#mpCardFields'),showPay=$('#showMercadoPagoFormBtn'); if(mpFields)mpFields.hidden=true; if(showPay){showPay.hidden=false;showPay.disabled=false;showPay.textContent='Pagar con Mercado Pago';}
+    const mpFields=$('#mpCardFields'),showPay=$('#showMercadoPagoFormBtn'); if(mpFields)mpFields.hidden=true; if(showPay){showPay.hidden=false;showPay.disabled=false;showPay.textContent='Reserva con tarjeta: próximamente';showPay.disabled=true;showPay.title='Aún falta habilitar la autorización sin captura en el backend';}
   }
 
   const breakdown=$('#paymentBreakdown');
@@ -1012,30 +1012,14 @@ $('#conversationForm').addEventListener('submit',async e=>{
 });
 
 async function startMercadoPagoCheckout(){
-  const btn=$('#showMercadoPagoFormBtn'),note=$('#mercadoPagoNotice'),c=conversationContext;
-  if(!btn||!note||!c||c.actor!=='cliente')return;
-  const original=btn.textContent;
-  btn.disabled=true;
-  btn.textContent='Abriendo Mercado Pago…';
-  note.className='notice';
-  note.style.display='block';
-  note.textContent='Preparando el pago seguro…';
-  try{
-    const r=await fetch(`/app/api/solicitudes/${encodeURIComponent(c.public_id)}/pago/mercadopago`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Accept':'application/json'},
-      body:JSON.stringify({token:c.token})
-    });
-    const d=await r.json().catch(()=>({}));
-    if(!r.ok||!d.ok||!d.checkout_url)throw new Error(d.error||'No pude iniciar el pago con Mercado Pago.');
-    note.className='notice success';
-    note.textContent='Abriendo Mercado Pago…';
-    window.location.assign(d.checkout_url);
-  }catch(err){
+  // BLOQUEO INTENCIONAL: Checkout Pro cobra inmediatamente y el backend actual
+  // devuelve HTTP 410 para la ruta /autorizar. No activar cobros hasta implementar
+  // tokenización segura MP, capture=false, webhooks, expiración y conciliación.
+  const note=document.querySelector('#mercadoPagoNotice');
+  if(note){
     note.className='notice error';
-    note.textContent=err.message||'No pude iniciar el pago con Mercado Pago.';
-    btn.disabled=false;
-    btn.textContent=original;
+    note.style.display='block';
+    note.textContent='La reserva con tarjeta aún no está habilitada. No se ha realizado ningún cobro. Contacta a soporte para coordinar el pago.';
   }
 }
 window.startMercadoPagoCheckout=startMercadoPagoCheckout;
@@ -1651,5 +1635,3 @@ $('#jaimeWaitMoreBtn')?.addEventListener('click',()=>{providerSearchCount=-1;con
 </div>
 </body>
 </html>
-
-
