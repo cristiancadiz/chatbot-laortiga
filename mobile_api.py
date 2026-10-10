@@ -492,11 +492,11 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
     def _payout_due_rows():
         now_iso=datetime.now(timezone.utc).isoformat()
         response=requests.get(f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",headers=_db_headers(),
-            params={"select":"*","empresa_id":f"eq.{settings['empresa_id']}","pago_estado":"in.(pagado,liberado)","cliente_confirmo_finalizado_at":"not.is.null","prestador_declaro_finalizado_at":"not.is.null","transferencia_prestador_at":"is.null","transferencia_prestador_referencia":"is.null","order":"cliente_confirmo_finalizado_at.asc","limit":"5000"},timeout=settings["supabase_timeout"]); response.raise_for_status()
+            params={"select":"*","empresa_id":f"eq.{settings['empresa_id']}","pago_estado":"in.(pagado,liberado)","pago_capturado_at":"not.is.null","cliente_confirmo_finalizado_at":"not.is.null","prestador_declaro_finalizado_at":"not.is.null","transferencia_prestador_at":"is.null","transferencia_prestador_referencia":"is.null","order":"pago_capturado_at.asc","limit":"5000"},timeout=settings["supabase_timeout"]); response.raise_for_status()
         due=[]
         for row in (response.json() if response.content else []):
-            confirmed=str(row.get("cliente_confirmo_finalizado_at") or "")
-            try: release_at=datetime.fromisoformat(confirmed.replace("Z","+00:00"))+timedelta(days=10)
+            captured=str(row.get("pago_capturado_at") or "")
+            try: release_at=datetime.fromisoformat(captured.replace("Z","+00:00"))+timedelta(days=10)
             except Exception: continue
             if release_at>datetime.now(timezone.utc): continue
             claims=requests.get(f"{settings['supabase_url']}/rest/v1/nexi_app_reclamos",headers=_db_headers(),params={"select":"id","solicitud_id":f"eq.{row['id']}","estado":"in.(abierto,en_revision)","limit":"1"},timeout=settings["supabase_timeout"]); claims.raise_for_status()
@@ -3210,6 +3210,16 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
                     timeout=settings["supabase_timeout"],
                 )
                 payment_state_response.raise_for_status()
+                # El plazo de 10 días comienza con el cobro real, no con el cierre del trabajo.
+                # En reintentos del webhook no cambiamos la fecha original.
+                capture_stamp = requests.patch(
+                    f"{settings['supabase_url']}/rest/v1/nexi_app_solicitudes",
+                    headers=_db_headers("return=minimal"),
+                    params={"id": f"eq.{request_row['id']}", "pago_capturado_at": "is.null"},
+                    json={"pago_capturado_at": str(payment.get("date_approved") or datetime.now(timezone.utc).isoformat())},
+                    timeout=settings["supabase_timeout"],
+                )
+                capture_stamp.raise_for_status()
                 payment_state = payment_state_response.json() if payment_state_response.content else {}
                 if isinstance(payment_state, list):
                     payment_state = payment_state[0] if payment_state else {}
@@ -4964,5 +4974,3 @@ def register_mobile_app(app, settings, supabase_headers, ai_generate, legacy_dis
         except requests.RequestException as exc:
             app.logger.exception("CLIENT PUSH SUBSCRIBE ERROR: %r", exc)
             return _json(app, {"ok": False, "error": "No pude activar las notificaciones."}, 502)
-
-
